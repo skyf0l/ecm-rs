@@ -116,3 +116,114 @@ impl PartialEq for Point {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rug::Integer;
+
+    #[test]
+    fn test_point_add() {
+        let p1 = Point::new(11.into(), 16.into(), 7.into(), 29.into());
+        let p2 = Point::new(13.into(), 10.into(), 7.into(), 29.into());
+        let p3 = p2.add(&p1, &p1);
+
+        assert_eq!(p3.x_cord, Integer::from(23));
+        assert_eq!(p3.z_cord, Integer::from(17));
+    }
+
+    #[test]
+    fn test_point_double() {
+        let p1 = Point::new(11.into(), 16.into(), 7.into(), 29.into());
+        let p2 = p1.double();
+
+        assert_eq!(p2.x_cord, Integer::from(13));
+        assert_eq!(p2.z_cord, Integer::from(10));
+    }
+
+    #[test]
+    fn test_point_mont_ladder() {
+        let p1 = Point::new(11.into(), 16.into(), 7.into(), 29.into());
+        let p3 = p1.mont_ladder(3.into());
+
+        assert_eq!(p3.x_cord, Integer::from(23));
+        assert_eq!(p3.z_cord, Integer::from(17));
+    }
+
+    #[test]
+    fn test_point() {
+        let modulus = 101.into();
+        let a: Integer = 10.into();
+        let a_24: Integer = (a + Integer::from(2)) * Integer::from(4).invert(&modulus).unwrap();
+
+        let p1 = Point::new(10.into(), 17.into(), a_24.clone(), modulus.clone());
+        let p2 = p1.double();
+        assert_eq!(
+            p2,
+            Point::new(68.into(), 56.into(), a_24.clone(), modulus.clone())
+        );
+        let p4 = p2.double();
+        assert_eq!(
+            p4,
+            Point::new(22.into(), 64.into(), a_24.clone(), modulus.clone())
+        );
+        let p8 = p4.double();
+        assert_eq!(
+            p8,
+            Point::new(71.into(), 95.into(), a_24.clone(), modulus.clone())
+        );
+        let p16 = p8.double();
+        assert_eq!(
+            p16,
+            Point::new(5.into(), 16.into(), a_24.clone(), modulus.clone())
+        );
+        let p32 = p16.double();
+        assert_eq!(
+            p32,
+            Point::new(33.into(), 96.into(), a_24.clone(), modulus.clone())
+        );
+
+        // p3 = p2 + p1
+        let p3 = p2.add(&p1, &p1);
+        assert_eq!(
+            p3,
+            Point::new(1.into(), 61.into(), a_24.clone(), modulus.clone())
+        );
+        // p5 = p3 + p2 or p4 + p1
+        let p5 = p3.add(&p2, &p1);
+        assert_eq!(
+            p5,
+            Point::new(49.into(), 90.into(), a_24.clone(), modulus.clone())
+        );
+        assert_eq!(p5, p4.add(&p1, &p3));
+        // # p6 = 2*p3
+        let p6 = p3.double();
+        assert_eq!(
+            p6,
+            Point::new(87.into(), 43.into(), a_24.clone(), modulus.clone())
+        );
+        assert_eq!(p6, p4.add(&p2, &p2));
+        // # p7 = p5 + p2
+        let p7 = p5.add(&p2, &p3);
+        assert_eq!(
+            p7,
+            Point::new(69.into(), 23.into(), a_24.clone(), modulus.clone())
+        );
+        assert_eq!(p7, p4.add(&p3, &p1));
+        assert_eq!(p7, p6.add(&p1, &p5));
+        // # p9 = p5 + p4
+        let p9 = p5.add(&p4, &p1);
+        assert_eq!(
+            p9,
+            Point::new(56.into(), 99.into(), a_24.clone(), modulus.clone())
+        );
+        assert_eq!(p9, p6.add(&p3, &p3));
+        assert_eq!(p9, p7.add(&p2, &p5));
+        assert_eq!(p9, p8.add(&p1, &p7));
+
+        assert_eq!(p5, p1.mont_ladder(5.into()));
+        assert_eq!(p9, p1.mont_ladder(9.into()));
+        assert_eq!(p16, p1.mont_ladder(16.into()));
+        assert_eq!(p9, p3.mont_ladder(3.into()));
+    }
+}

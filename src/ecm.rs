@@ -202,3 +202,92 @@ pub fn ecm_with_params(
 
     final_factors
 }
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+    use rug::Integer;
+
+    #[test]
+    fn test_ecm() {
+        // WARNING: This test is very slow
+        // assert_eq!(
+        //     ecm(&Integer::from_str("3146531246531241245132451321").unwrap()),
+        //     HashSet::from_iter(vec![
+        //         Integer::from_str("3").unwrap(),
+        //         Integer::from_str("100327907731").unwrap(),
+        //         Integer::from_str("10454157497791297").unwrap()
+        //     ])
+        // );
+        assert_eq!(
+            ecm(&Integer::from_str("46167045131415113").unwrap()),
+            HashSet::from_iter(vec![
+                Integer::from_str("43").unwrap(),
+                Integer::from_str("2634823").unwrap(),
+                Integer::from_str("407485517").unwrap()
+            ])
+        );
+        assert_eq!(
+            ecm(&Integer::from_str("631211032315670776841").unwrap()),
+            HashSet::from_iter(vec![
+                Integer::from_str("9312934919").unwrap(),
+                Integer::from_str("67777885039").unwrap()
+            ])
+        );
+        assert_eq!(
+            ecm(&Integer::from_str("398883434337287").unwrap()),
+            HashSet::from_iter(vec![
+                Integer::from_str("99476569").unwrap(),
+                Integer::from_str("4009823").unwrap()
+            ])
+        );
+        assert_eq!(
+            ecm(&Integer::from_str("64211816600515193").unwrap()),
+            HashSet::from_iter(vec![
+                Integer::from_str("281719").unwrap(),
+                Integer::from_str("359641").unwrap(),
+                Integer::from_str("633767").unwrap()
+            ])
+        );
+        assert_eq!(
+            ecm(&Integer::from_str("4269021180054189416198169786894227").unwrap()),
+            HashSet::from_iter(vec![
+                Integer::from_str("184039").unwrap(),
+                Integer::from_str("241603").unwrap(),
+                Integer::from_str("333331").unwrap(),
+                Integer::from_str("477973").unwrap(),
+                Integer::from_str("618619").unwrap(),
+                Integer::from_str("974123").unwrap()
+            ])
+        );
+        assert_eq!(
+            ecm(&Integer::from_str("4516511326451341281684513").unwrap()),
+            HashSet::from_iter(vec![
+                Integer::from_str("3").unwrap(),
+                Integer::from_str("39869").unwrap(),
+                Integer::from_str("131743543").unwrap(),
+                Integer::from_str("95542348571").unwrap()
+            ])
+        );
+        assert_eq!(
+            ecm(&Integer::from_str("4132846513818654136451").unwrap()),
+            HashSet::from_iter(vec![
+                Integer::from_str("47").unwrap(),
+                Integer::from_str("160343").unwrap(),
+                Integer::from_str("2802377").unwrap(),
+                Integer::from_str("195692803").unwrap()
+            ])
+        );
+        assert_eq!(
+            ecm(&Integer::from_str("168541512131094651323").unwrap()),
+            HashSet::from_iter(vec![
+                Integer::from_str("79").unwrap(),
+                Integer::from_str("113").unwrap(),
+                Integer::from_str("11011069").unwrap(),
+                Integer::from_str("1714635721").unwrap()
+            ])
+        );
+    }
+}
