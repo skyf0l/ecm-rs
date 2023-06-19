@@ -3,7 +3,7 @@
 [![Build](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml)
 [![Crate.io](https://img.shields.io/crates/v/ecm.svg)](https://crates.io/crates/ecm)
 
-Lenstra's Elliptic Curve Factorization Implementation.
+Lenstra's Elliptic Curve Factorization Implementation with Big Integers.
 
 The code is based on the [sympy](https://github.com/sympy/sympy) implementation and translated to Rust.
 

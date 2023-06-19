@@ -1,13 +1,13 @@
 [package]
 name = "ecm"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["skyf0l <skyf0lmails@proton.me>"]
-description = "Lenstra's Elliptic Curve Factorization Implementation"
+description = "Lenstra's Elliptic Curve Factorization Implementation with Big Integers"
 repository = "https://github.com/skyf0l/ecm-rs"
 license = "MIT OR Apache-2.0"
 categories = ["mathematics"]
-keywords = ["factorization", "elliptic-curves", "lenstra", "ECM"]
+keywords = ["number-theory", "primes", "lenstra", "ECM", "bignum"]
 include = [
   "benches/**/*",
   "src/**/*",
