@@ -58,23 +58,23 @@ impl Point {
     /// - `Q`: Point on the curve in Montgomery form.
     /// - `diff`: `self - Q`
     pub fn add(&self, q: &Point, diff: &Point) -> Point {
-        let u = (self.x_cord.clone() - self.z_cord.clone()) * (q.x_cord.clone() + q.z_cord.clone());
-        let v = (self.x_cord.clone() + self.z_cord.clone()) * (q.x_cord.clone() - q.z_cord.clone());
-        let add = u.clone() + v.clone();
+        let u = (self.x_cord.clone() - &self.z_cord) * (q.x_cord.clone() + &q.z_cord);
+        let v = (self.x_cord.clone() + &self.z_cord) * (q.x_cord.clone() - &q.z_cord);
+        let add = u.clone() + &v;
         let subt = u - v;
-        let x_cord = (diff.z_cord.clone() * add.clone() * add) % self.modulus.clone();
-        let z_cord = (diff.x_cord.clone() * subt.clone() * subt) % self.modulus.clone();
+        let x_cord = (diff.z_cord.clone() * &add * add) % &self.modulus;
+        let z_cord = (diff.x_cord.clone() * &subt * subt) % &self.modulus;
 
         Point::new(x_cord, z_cord, self.a_24.clone(), self.modulus.clone())
     }
 
     /// Doubles a point in an elliptic curve in Montgomery form.
     pub fn double(&self) -> Point {
-        let u = (self.x_cord.clone() + self.z_cord.clone()).square();
-        let v = (self.x_cord.clone() - self.z_cord.clone()).square();
-        let diff = u.clone() - v.clone();
-        let x_cord = (u * v.clone()) % self.modulus.clone();
-        let z_cord = (diff.clone() * (v + self.a_24.clone() * diff)) % &self.modulus;
+        let u = (self.x_cord.clone() + &self.z_cord).square();
+        let v = (self.x_cord.clone() - &self.z_cord).square();
+        let diff = u.clone() - &v;
+        let x_cord = (u * &v) % &self.modulus;
+        let z_cord = ((v + &self.a_24 * &diff) * diff) % &self.modulus;
 
         Point::new(x_cord, z_cord, self.a_24.clone(), self.modulus.clone())
     }
@@ -110,8 +110,8 @@ impl PartialEq for Point {
         if self.a_24 != other.a_24 || self.modulus != other.modulus {
             false
         } else {
-            self.x_cord.clone() * self.z_cord.clone().invert(&self.modulus).unwrap() % &self.modulus
-                == other.x_cord.clone() * other.z_cord.clone().invert(&self.modulus).unwrap()
+            self.z_cord.clone().invert(&self.modulus).unwrap() * &self.x_cord % &self.modulus
+                == other.z_cord.clone().invert(&self.modulus).unwrap() * &other.x_cord
                     % &self.modulus
         }
     }
@@ -215,7 +215,7 @@ mod tests {
         let p9 = p5.add(&p4, &p1);
         assert_eq!(
             p9,
-            Point::new(56.into(), 99.into(), a_24.clone(), modulus.clone())
+            Point::new(56.into(), 99.into(), a_24, modulus)
         );
         assert_eq!(p9, p6.add(&p3, &p3));
         assert_eq!(p9, p7.add(&p2, &p5));
