@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 categories = ["mathematics"]
 keywords = ["factorization", "elliptic-curves", "lenstra", "ECM"]
 include = [
+  "benches/**/*",
   "src/**/*",
   "Cargo.toml",
   "LICENSE*",
