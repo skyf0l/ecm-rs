@@ -51,13 +51,12 @@ pub fn ecm_one_factor(
     let mut curve = 0;
     let d = (b2 as f64).sqrt() as usize;
     let mut beta: Vec<Integer> =
-        vec![Integer::default(); (d.clone() + Integer::from(1)).to_usize().unwrap()];
-    let mut s: Vec<Point> =
-        vec![Point::default(); (d.clone() + Integer::from(1)).to_usize().unwrap()];
+        vec![Integer::default(); (d + Integer::from(1)).to_usize().unwrap()];
+    let mut s: Vec<Point> = vec![Point::default(); (d + Integer::from(1)).to_usize().unwrap()];
     let mut k = Integer::from(1);
 
-    for p in Primes::all().take_while(|&p| Integer::from(p) <= b1) {
-        k *= p.pow(b1.ilog(p as usize));
+    for p in Primes::all().take_while(|&p| p <= b1) {
+        k *= p.pow(b1.ilog(p));
     }
 
     while curve <= max_curve {
@@ -108,11 +107,8 @@ pub fn ecm_one_factor(
 
         for rr in (b..b2).step_by(2 * d) {
             let alpha = (r.x_cord.clone() * r.z_cord.clone()) % n;
-            for q in Primes::all()
-                .skip(rr as usize + 2)
-                .take_while(|&q| q <= rr + 2 * d)
-            {
-                let delta = (q - rr as usize) / 2;
+            for q in Primes::all().skip(rr + 2).take_while(|&q| q <= rr + 2 * d) {
+                let delta = (q - rr) / 2;
                 let f = (r.x_cord.clone() - s[d].x_cord.clone())
                     * (r.z_cord.clone() + s[d].z_cord.clone())
                     - alpha.clone()
@@ -184,7 +180,7 @@ pub fn ecm_with_params(
     let mut rand_state = RandState::new();
     rand_state.seed(&seed.into());
 
-    while n != Integer::from(1) {
+    while n != 1 {
         let factor =
             ecm_one_factor(&n, b1, b2, max_curve, &mut rand_state).expect("Increase the bounds");
         factors.insert(factor.clone());
