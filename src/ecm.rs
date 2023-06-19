@@ -50,9 +50,8 @@ pub fn ecm_one_factor(
 
     let mut curve = 0;
     let d = (b2 as f64).sqrt() as usize;
-    let mut beta: Vec<Integer> =
-        vec![Integer::default(); (d + Integer::from(1)).to_usize().unwrap()];
-    let mut s: Vec<Point> = vec![Point::default(); (d + Integer::from(1)).to_usize().unwrap()];
+    let mut beta: Vec<Integer> = vec![Integer::default(); d + 1];
+    let mut s: Vec<Point> = vec![Point::default(); d + 1];
     let mut k = Integer::from(1);
 
     for p in Primes::all().take_while(|&p| p <= b1) {
@@ -63,20 +62,24 @@ pub fn ecm_one_factor(
         curve += 1;
 
         // Suyama's Parametrization
-        // let sigma = random.randint(6, n - 1);
-        let sigma = (n.clone() - Integer::from(1)).random_below(rgen);
-        let u = (sigma.clone().pow(2) - Integer::from(5)) % n;
+        let sigma = (n - Integer::from(1)).random_below(rgen);
+        let u = (&sigma * &sigma - Integer::from(5)) % n;
         let v = (Integer::from(4) * sigma) % n;
         let diff = v.clone() - u.clone();
         let u_3 = u.clone().pow(3) % n;
 
-        let c = (diff.pow(3) * (3 * u + v.clone()) * u_3.clone() * v.clone().invert(n).unwrap()
-            - 2)
-            % n;
+        let c = match (Integer::from(4) * &u_3 * &v).invert(n) {
+            Ok(c) => {
+                (diff.pow_mod(&Integer::from(3), n).unwrap() * (Integer::from(4) * &u + &v) * c
+                    - Integer::from(2))
+                    % n
+            }
+            _ => return Ok((Integer::from(4) * u_3 * v).gcd(n)),
+        };
+
         let a24 = (c + 2) * Integer::from(4).invert(n).unwrap() % n;
         let q = Point::new(u_3, v.pow(3) % n, a24, n.clone());
-        let q = q.mont_ladder(k.clone());
-
+        let q = q.mont_ladder(&k);
         let g = q.z_cord.clone().gcd(n);
 
         // Stage 1 factor
@@ -85,34 +88,34 @@ pub fn ecm_one_factor(
         }
 
         // Stage 1 failure. Q.z = 0, Try another curve
-        if g == n.clone() {
+        if &g == n {
             continue;
         }
 
         // Stage 2 - Improved Standard Continuation
         s[1] = q.double();
         s[2] = s[1].double();
-        beta[1] = (s[1].x_cord.clone() * s[1].z_cord.clone()) % n.clone();
-        beta[2] = (s[2].x_cord.clone() * s[2].z_cord.clone()) % n.clone();
+        beta[1] = Integer::from(&s[1].x_cord * &s[1].z_cord) % n;
+        beta[2] = Integer::from(&s[2].x_cord * &s[2].z_cord) % n;
 
         for d in 3..=(d) {
             s[d] = s[d - 1].add(&s[1], &s[d - 2]);
-            beta[d] = (s[d].x_cord.clone() * s[d].z_cord.clone()) % n.clone();
+            beta[d] = Integer::from(&s[d].x_cord * &s[d].z_cord) % n;
         }
 
         let mut g = Integer::from(1);
         let b = b1 - 1;
-        let mut t = q.mont_ladder(Integer::from(b - 2 * d));
-        let mut r = q.mont_ladder(Integer::from(b));
+        let mut t = q.mont_ladder(&Integer::from(b - 2 * d));
+        let mut r = q.mont_ladder(&Integer::from(b));
 
         for rr in (b..b2).step_by(2 * d) {
-            let alpha = (r.x_cord.clone() * r.z_cord.clone()) % n;
+            let alpha = Integer::from(&r.x_cord * &r.z_cord) % n;
             for q in Primes::all().skip(rr + 2).take_while(|&q| q <= rr + 2 * d) {
                 let delta = (q - rr) / 2;
-                let f = (r.x_cord.clone() - s[d].x_cord.clone())
-                    * (r.z_cord.clone() + s[d].z_cord.clone())
-                    - alpha.clone()
-                    + beta[delta].clone();
+                let f = Integer::from(&r.x_cord - &s[d].x_cord)
+                    * Integer::from(&r.z_cord + &s[d].z_cord)
+                    - &alpha
+                    + &beta[delta];
                 g = (g * f) % n;
             }
             // Swap
@@ -166,13 +169,13 @@ pub fn ecm_with_params(
 ) -> HashSet<Integer> {
     let mut factors: HashSet<Integer> = HashSet::new();
 
-    let mut n = n.clone();
+    let mut n: Integer = n.clone();
     for prime in Primes::all().take(100_000) {
         let prime = Integer::from(prime);
         if n.clone().div_rem(prime.clone()).1 == 0 {
             factors.insert(prime.clone());
             while n.clone().div_rem(prime.clone()).1 == 0 {
-                n /= prime.clone();
+                n /= &prime;
             }
         }
     }
@@ -183,13 +186,13 @@ pub fn ecm_with_params(
     while n != 1 {
         let factor =
             ecm_one_factor(&n, b1, b2, max_curve, &mut rand_state).expect("Increase the bounds");
-        factors.insert(factor.clone());
         n /= &factor;
+        factors.insert(factor);
     }
 
     let mut final_factors: HashSet<Integer> = HashSet::new();
     for factor in factors {
-        if factor.is_probably_prime(25) == IsPrime::Yes {
+        if factor.is_probably_prime(25) != IsPrime::No {
             final_factors.insert(factor);
         } else {
             final_factors.extend(ecm_with_params(&factor, b1, b2, max_curve, seed));

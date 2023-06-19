@@ -58,21 +58,21 @@ impl Point {
     /// - `Q`: Point on the curve in Montgomery form.
     /// - `diff`: `self - Q`
     pub fn add(&self, q: &Point, diff: &Point) -> Point {
-        let u = (self.x_cord.clone() - &self.z_cord) * (q.x_cord.clone() + &q.z_cord);
-        let v = (self.x_cord.clone() + &self.z_cord) * (q.x_cord.clone() - &q.z_cord);
-        let add = u.clone() + &v;
+        let u = Integer::from(&self.x_cord - &self.z_cord) * Integer::from(&q.x_cord + &q.z_cord);
+        let v = Integer::from(&self.x_cord + &self.z_cord) * Integer::from(&q.x_cord - &q.z_cord);
+        let add = Integer::from(&u + &v);
         let subt = u - v;
-        let x_cord = (diff.z_cord.clone() * &add * add) % &self.modulus;
-        let z_cord = (diff.x_cord.clone() * &subt * subt) % &self.modulus;
+        let x_cord = Integer::from(&diff.z_cord * &add) * &add % &self.modulus;
+        let z_cord = Integer::from(&diff.x_cord * &subt) * &subt % &self.modulus;
 
         Point::new(x_cord, z_cord, self.a_24.clone(), self.modulus.clone())
     }
 
     /// Doubles a point in an elliptic curve in Montgomery form.
     pub fn double(&self) -> Point {
-        let u = (self.x_cord.clone() + &self.z_cord).square();
-        let v = (self.x_cord.clone() - &self.z_cord).square();
-        let diff = u.clone() - &v;
+        let u = Integer::from(&self.x_cord + &self.z_cord).square();
+        let v = Integer::from(&self.x_cord - &self.z_cord).square();
+        let diff = Integer::from(&u - &v);
         let x_cord = (u * &v) % &self.modulus;
         let z_cord = ((v + &self.a_24 * &diff) * diff) % &self.modulus;
 
@@ -87,7 +87,7 @@ impl Point {
     /// # Parameters
     ///
     /// - `k`: The positive integer multiplier
-    pub fn mont_ladder(&self, k: Integer) -> Point {
+    pub fn mont_ladder(&self, k: &Integer) -> Point {
         let mut q = self.clone();
         let mut r = self.double();
 
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn test_point_mont_ladder() {
         let p1 = Point::new(11.into(), 16.into(), 7.into(), 29.into());
-        let p3 = p1.mont_ladder(3.into());
+        let p3 = p1.mont_ladder(&3.into());
 
         assert_eq!(p3.x_cord, Integer::from(23));
         assert_eq!(p3.z_cord, Integer::from(17));
@@ -213,17 +213,14 @@ mod tests {
         assert_eq!(p7, p6.add(&p1, &p5));
         // # p9 = p5 + p4
         let p9 = p5.add(&p4, &p1);
-        assert_eq!(
-            p9,
-            Point::new(56.into(), 99.into(), a_24, modulus)
-        );
+        assert_eq!(p9, Point::new(56.into(), 99.into(), a_24, modulus));
         assert_eq!(p9, p6.add(&p3, &p3));
         assert_eq!(p9, p7.add(&p2, &p5));
         assert_eq!(p9, p8.add(&p1, &p7));
 
-        assert_eq!(p5, p1.mont_ladder(5.into()));
-        assert_eq!(p9, p1.mont_ladder(9.into()));
-        assert_eq!(p16, p1.mont_ladder(16.into()));
-        assert_eq!(p9, p3.mont_ladder(3.into()));
+        assert_eq!(p5, p1.mont_ladder(&5.into()));
+        assert_eq!(p9, p1.mont_ladder(&9.into()));
+        assert_eq!(p16, p1.mont_ladder(&16.into()));
+        assert_eq!(p9, p3.mont_ladder(&3.into()));
     }
 }
