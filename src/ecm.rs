@@ -4,6 +4,17 @@ use std::collections::HashSet;
 
 use crate::point::Point;
 
+/// Error occured during ecm factorization.
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    /// Bounds should be an even integer.
+    #[error("Bounds should be an even integer")]
+    BoundsNotEven,
+    /// The factorization failed.
+    #[error("The factorization failed")]
+    ECMFailed,
+}
+
 /// Returns one factor of n using Lenstra's 2 Stage Elliptic curve Factorization
 /// with Suyama's Parameterization. Here Montgomery arithmetic is used for fast
 /// computation of addition and doubling of points in elliptic curve.
@@ -39,9 +50,9 @@ pub fn ecm_one_factor(
     b2: usize,
     max_curve: usize,
     rgen: &mut RandState<'_>,
-) -> Result<Integer, String> {
+) -> Result<Integer, Error> {
     if b1 % 2 != 0 || b2 % 2 != 0 {
-        return Err("The Bounds should be an even integer".to_string());
+        return Err(Error::BoundsNotEven);
     }
 
     if n.is_probably_prime(25) != IsPrime::No {
@@ -132,7 +143,7 @@ pub fn ecm_one_factor(
     }
 
     // ECM failed, Increase the bounds
-    Err("Increase the bounds".to_string())
+    Err(Error::ECMFailed)
 }
 
 /// Performs factorization using Lenstra's Elliptic curve method.

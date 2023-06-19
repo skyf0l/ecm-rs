@@ -28,6 +28,7 @@ debug = true
 
 [dependencies]
 primal = "0.3"
+thiserror = "1"
 
 [dependencies.rug]
 version = "1"
