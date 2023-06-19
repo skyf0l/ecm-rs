@@ -108,9 +108,10 @@ pub fn ecm_one_factor(
         let mut t = q.mont_ladder(&Integer::from(b - 2 * d));
         let mut r = q.mont_ladder(&Integer::from(b));
 
+        let mut primes = Primes::all().skip_while(|&q| q < b);
         for rr in (b..b2).step_by(2 * d) {
             let alpha = Integer::from(&r.x_cord * &r.z_cord) % n;
-            for q in Primes::all().skip(rr + 2).take_while(|&q| q <= rr + 2 * d) {
+            for q in primes.by_ref().take_while(|&q| q <= rr + 2 * d) {
                 let delta = (q - rr) / 2;
                 let f = Integer::from(&r.x_cord - &s[d].x_cord)
                     * Integer::from(&r.z_cord + &s[d].z_cord)
@@ -211,15 +212,14 @@ mod tests {
 
     #[test]
     fn test_ecm() {
-        // WARNING: This test is very slow
-        // assert_eq!(
-        //     ecm(&Integer::from_str("3146531246531241245132451321").unwrap()),
-        //     HashSet::from_iter(vec![
-        //         Integer::from_str("3").unwrap(),
-        //         Integer::from_str("100327907731").unwrap(),
-        //         Integer::from_str("10454157497791297").unwrap()
-        //     ])
-        // );
+        assert_eq!(
+            ecm(&Integer::from_str("3146531246531241245132451321").unwrap()),
+            HashSet::from_iter(vec![
+                Integer::from_str("3").unwrap(),
+                Integer::from_str("100327907731").unwrap(),
+                Integer::from_str("10454157497791297").unwrap()
+            ])
+        );
         assert_eq!(
             ecm(&Integer::from_str("46167045131415113").unwrap()),
             HashSet::from_iter(vec![
