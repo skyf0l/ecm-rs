@@ -10,6 +10,9 @@ pub enum Error {
     /// Bounds should be an even integer.
     #[error("Bounds should be an even integer")]
     BoundsNotEven,
+    /// Too small bounds.
+    #[error("Too small bounds")]
+    BoundsTooSmall,
     /// The factorization failed.
     #[error("The factorization failed")]
     ECMFailed,
@@ -155,7 +158,7 @@ pub fn ecm_one_factor(
 /// # Parameters
 ///
 /// - `n`: Number to be factored.
-pub fn ecm(n: &Integer) -> HashSet<Integer> {
+pub fn ecm(n: &Integer) -> Result<HashSet<Integer>, Error> {
     ecm_with_params(n, 10000, 100000, 200, 1234)
 }
 
@@ -178,7 +181,7 @@ pub fn ecm_with_params(
     b2: usize,
     max_curve: usize,
     seed: usize,
-) -> HashSet<Integer> {
+) -> Result<HashSet<Integer>, Error> {
     let mut factors: HashSet<Integer> = HashSet::new();
 
     let mut n: Integer = n.clone();
@@ -196,8 +199,8 @@ pub fn ecm_with_params(
     rand_state.seed(&seed.into());
 
     while n != 1 {
-        let factor =
-            ecm_one_factor(&n, b1, b2, max_curve, &mut rand_state).expect("Increase the bounds");
+        let factor = ecm_one_factor(&n, b1, b2, max_curve, &mut rand_state)
+            .or(Err(Error::BoundsTooSmall))?;
         n /= &factor;
         factors.insert(factor);
     }
@@ -207,11 +210,11 @@ pub fn ecm_with_params(
         if factor.is_probably_prime(25) != IsPrime::No {
             final_factors.insert(factor);
         } else {
-            final_factors.extend(ecm_with_params(&factor, b1, b2, max_curve, seed));
+            final_factors.extend(ecm_with_params(&factor, b1, b2, max_curve, seed)?);
         }
     }
 
-    final_factors
+    Ok(final_factors)
 }
 
 #[cfg(test)]
@@ -224,7 +227,7 @@ mod tests {
     #[test]
     fn test_ecm() {
         assert_eq!(
-            ecm(&Integer::from_str("3146531246531241245132451321").unwrap()),
+            ecm(&Integer::from_str("3146531246531241245132451321").unwrap()).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("3").unwrap(),
                 Integer::from_str("100327907731").unwrap(),
@@ -232,7 +235,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            ecm(&Integer::from_str("46167045131415113").unwrap()),
+            ecm(&Integer::from_str("46167045131415113").unwrap()).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("43").unwrap(),
                 Integer::from_str("2634823").unwrap(),
@@ -240,21 +243,21 @@ mod tests {
             ])
         );
         assert_eq!(
-            ecm(&Integer::from_str("631211032315670776841").unwrap()),
+            ecm(&Integer::from_str("631211032315670776841").unwrap()).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("9312934919").unwrap(),
                 Integer::from_str("67777885039").unwrap()
             ])
         );
         assert_eq!(
-            ecm(&Integer::from_str("398883434337287").unwrap()),
+            ecm(&Integer::from_str("398883434337287").unwrap()).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("99476569").unwrap(),
                 Integer::from_str("4009823").unwrap()
             ])
         );
         assert_eq!(
-            ecm(&Integer::from_str("64211816600515193").unwrap()),
+            ecm(&Integer::from_str("64211816600515193").unwrap()).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("281719").unwrap(),
                 Integer::from_str("359641").unwrap(),
@@ -262,7 +265,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            ecm(&Integer::from_str("4269021180054189416198169786894227").unwrap()),
+            ecm(&Integer::from_str("4269021180054189416198169786894227").unwrap()).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("184039").unwrap(),
                 Integer::from_str("241603").unwrap(),
@@ -273,7 +276,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            ecm(&Integer::from_str("4516511326451341281684513").unwrap()),
+            ecm(&Integer::from_str("4516511326451341281684513").unwrap()).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("3").unwrap(),
                 Integer::from_str("39869").unwrap(),
@@ -282,7 +285,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            ecm(&Integer::from_str("4132846513818654136451").unwrap()),
+            ecm(&Integer::from_str("4132846513818654136451").unwrap()).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("47").unwrap(),
                 Integer::from_str("160343").unwrap(),
@@ -291,7 +294,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            ecm(&Integer::from_str("168541512131094651323").unwrap()),
+            ecm(&Integer::from_str("168541512131094651323").unwrap()).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("79").unwrap(),
                 Integer::from_str("113").unwrap(),
