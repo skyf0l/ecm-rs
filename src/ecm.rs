@@ -1,8 +1,9 @@
+use crate::point::Point;
+#[cfg(feature = "progress-bar")]
+use indicatif::ProgressBar;
 use primal::Primes;
 use rug::{integer::IsPrime, ops::Pow, rand::RandState, Integer};
 use std::collections::HashSet;
-
-use crate::point::Point;
 
 /// Error occured during ecm factorization.
 #[derive(thiserror::Error, Debug)]
@@ -53,6 +54,7 @@ pub fn ecm_one_factor(
     b2: usize,
     max_curve: usize,
     rgen: &mut RandState<'_>,
+    #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<Integer, Error> {
     if b1 % 2 != 0 || b2 % 2 != 0 {
         return Err(Error::BoundsNotEven);
@@ -60,6 +62,12 @@ pub fn ecm_one_factor(
 
     if n.is_probably_prime(25) != IsPrime::No {
         return Ok(n.clone());
+    }
+
+    #[cfg(feature = "progress-bar")]
+    if let Some(pb) = pb {
+        pb.set_length(max_curve as u64);
+        pb.set_position(0);
     }
 
     let mut curve = 0;
@@ -74,6 +82,11 @@ pub fn ecm_one_factor(
 
     while curve <= max_curve {
         curve += 1;
+
+        #[cfg(feature = "progress-bar")]
+        if let Some(pb) = pb {
+            pb.inc(1);
+        }
 
         // Suyama's Parametrization
         let sigma = (n - Integer::from(1)).random_below(rgen);
@@ -158,8 +171,19 @@ pub fn ecm_one_factor(
 /// # Parameters
 ///
 /// - `n`: Number to be factored.
-pub fn ecm(n: &Integer) -> Result<HashSet<Integer>, Error> {
-    ecm_with_params(n, 10000, 100000, 200, 1234)
+pub fn ecm(
+    n: &Integer,
+    #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
+) -> Result<HashSet<Integer>, Error> {
+    ecm_with_params(
+        n,
+        10000,
+        100000,
+        200,
+        1234,
+        #[cfg(feature = "progress-bar")]
+        pb,
+    )
 }
 
 /// Performs factorization using Lenstra's Elliptic curve method.
@@ -181,6 +205,7 @@ pub fn ecm_with_params(
     b2: usize,
     max_curve: usize,
     seed: usize,
+    #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<HashSet<Integer>, Error> {
     let mut factors: HashSet<Integer> = HashSet::new();
 
@@ -199,8 +224,16 @@ pub fn ecm_with_params(
     rand_state.seed(&seed.into());
 
     while n != 1 {
-        let factor = ecm_one_factor(&n, b1, b2, max_curve, &mut rand_state)
-            .or(Err(Error::BoundsTooSmall))?;
+        let factor = ecm_one_factor(
+            &n,
+            b1,
+            b2,
+            max_curve,
+            &mut rand_state,
+            #[cfg(feature = "progress-bar")]
+            pb,
+        )
+        .or(Err(Error::BoundsTooSmall))?;
         n /= &factor;
         factors.insert(factor);
     }
@@ -210,7 +243,15 @@ pub fn ecm_with_params(
         if factor.is_probably_prime(25) != IsPrime::No {
             final_factors.insert(factor);
         } else {
-            final_factors.extend(ecm_with_params(&factor, b1, b2, max_curve, seed)?);
+            final_factors.extend(ecm_with_params(
+                &factor,
+                b1,
+                b2,
+                max_curve,
+                seed,
+                #[cfg(feature = "progress-bar")]
+                pb,
+            )?);
         }
     }
 
@@ -219,15 +260,24 @@ pub fn ecm_with_params(
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::{collections::HashSet, str::FromStr};
 
-    use super::*;
     use rug::Integer;
+
+    use crate::Error;
+
+    fn ecm(n: &Integer) -> Result<HashSet<Integer>, Error> {
+        super::ecm(
+            n,
+            #[cfg(feature = "progress-bar")]
+            None,
+        )
+    }
 
     #[test]
     fn test_ecm() {
         assert_eq!(
-            ecm(&Integer::from_str("3146531246531241245132451321").unwrap()).unwrap(),
+            ecm(&Integer::from_str("3146531246531241245132451321").unwrap(),).unwrap(),
             HashSet::from_iter(vec![
                 Integer::from_str("3").unwrap(),
                 Integer::from_str("100327907731").unwrap(),

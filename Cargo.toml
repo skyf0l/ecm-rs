@@ -27,7 +27,12 @@ opt-level = 3
 opt-level = 3
 debug = true
 
+[features]
+default = []
+progress-bar = ["indicatif"]
+
 [dependencies]
+indicatif = { version = "0.17", optional = true }
 primal = "0.3"
 thiserror = "1"
 

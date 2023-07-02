@@ -1,11 +1,17 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
+use ecm::Error;
 use rug::Integer;
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
-extern crate ecm;
-use ecm::ecm;
+fn ecm(n: &Integer) -> Result<HashSet<Integer>, Error> {
+    ecm::ecm(
+        n,
+        #[cfg(feature = "progress-bar")]
+        None,
+    )
+}
 
 fn bench_factorization(c: &mut Criterion) {
     let mut group = c.benchmark_group("ecm");
