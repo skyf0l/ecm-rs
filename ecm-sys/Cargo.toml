@@ -1,0 +1,18 @@
+[package]
+name = "ecm-sys"
+version = "0.1.0"
+build = "build.rs"
+edition = "2021"
+authors = ["skyf0l <skyf0lmails@proton.me>"]
+description = "Low-level bindings for the GMP-ECM library"
+repository = "https://github.com/skyf0l/ecm-rs"
+license = "MIT OR Apache-2.0"
+categories = ["mathematics"]
+keywords = ["number-theory", "primes", "lenstra", "ECM", "bignum"]
+include = [
+  "src/**/*",
+  "Cargo.toml",
+  "LICENSE*",
+  "README.md",
+]
+readme = "README.md"
