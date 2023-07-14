@@ -1,5 +1,8 @@
 # ecm-sys
 
+[![CI](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml)
+[![Crate.io](https://img.shields.io/crates/v/ecm-sys.svg)](https://crates.io/crates/ecm-sys)
+
 Low-level bindings to the GMP-ECM library.
 
 ## License
