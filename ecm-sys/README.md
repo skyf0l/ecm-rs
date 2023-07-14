@@ -1,9 +1,9 @@
-# ecm-rs
+# ecm-sys
 
 [![CI](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml)
-[![Crate.io](https://img.shields.io/crates/v/ecm.svg)](https://crates.io/crates/ecm)
+[![Crate.io](https://img.shields.io/crates/v/ecm-sys.svg)](https://crates.io/crates/ecm-sys)
 
-High-level rust bindings to the GMP-ECM library.
+Low-level bindings to the GMP-ECM library.
 
 ## License
 

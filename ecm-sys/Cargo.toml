@@ -1,9 +1,10 @@
 [package]
-name = "ecm"
-version = "0.3.0"
+name = "ecm-sys"
+version = "0.1.0"
+build = "build.rs"
 edition = "2021"
 authors = ["skyf0l <skyf0lmails@proton.me>"]
-description = "High-level rust bindings to the GMP-ECM library"
+description = "Low-level bindings for the GMP-ECM library"
 repository = "https://github.com/skyf0l/ecm-rs"
 license = "MIT OR Apache-2.0"
 categories = ["mathematics"]
@@ -15,18 +16,3 @@ include = [
   "README.md",
 ]
 readme = "README.md"
-
-[workspace]
-members = ["ecm-sys"]
-
-[dependencies]
-gmp-mpfr-sys = "1.5"
-
-[dependencies.rug]
-version = "1"
-default-features = false
-features = ["integer", "rand"]
-
-[dependencies.ecm-sys]
-path = "ecm-sys"
-version = "0.1.0"
