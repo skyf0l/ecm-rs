@@ -3,13 +3,12 @@ name = "ecm"
 version = "0.3.0"
 edition = "2021"
 authors = ["skyf0l <skyf0lmails@proton.me>"]
-description = "Lenstra's Elliptic Curve Factorization Implementation with Big Integers"
+description = "High-level rust bindings to the GMP-ECM library"
 repository = "https://github.com/skyf0l/ecm-rs"
 license = "MIT OR Apache-2.0"
 categories = ["mathematics"]
 keywords = ["number-theory", "primes", "lenstra", "ECM", "bignum"]
 include = [
-  "benches/**/*",
   "src/**/*",
   "Cargo.toml",
   "LICENSE*",
@@ -17,33 +16,17 @@ include = [
 ]
 readme = "README.md"
 
-[profile.dev]
-opt-level = 3
-
-[profile.test]
-opt-level = 3
-
-[profile.bench]
-opt-level = 3
-debug = true
-
-[features]
-default = []
-progress-bar = ["indicatif"]
+[workspace]
+members = ["ecm-sys"]
 
 [dependencies]
-indicatif = { version = "0.17", optional = true }
-primal = "0.3"
-thiserror = "1"
+gmp-mpfr-sys = "1.5"
 
 [dependencies.rug]
 version = "1"
 default-features = false
 features = ["integer", "rand"]
 
-[dev-dependencies]
-criterion = "0.5.1"
-
-[[bench]]
-name = "bench"
-harness = false
+[dependencies.ecm-sys]
+path = "ecm-sys"
+version = "0.1.0"
