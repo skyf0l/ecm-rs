@@ -7,6 +7,10 @@ pub struct EcmParams {
 
 impl EcmParams {
     /// Wraps a raw `__ecm_param_struct`.
+    ///
+    /// # Safety
+    ///
+    /// The `__ecm_param_struct` must be initialized.
     pub unsafe fn wrap(raw: ecm_sys::__ecm_param_struct) -> Self {
         Self { raw }
     }
