@@ -3,7 +3,7 @@ use crate::point::Point;
 use indicatif::ProgressBar;
 use primal::Primes;
 use rug::{integer::IsPrime, ops::Pow, rand::RandState, Integer};
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// Error occured during ecm factorization.
 #[derive(thiserror::Error, Debug)]
@@ -174,7 +174,7 @@ pub fn ecm_one_factor(
 pub fn ecm(
     n: &Integer,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
-) -> Result<HashSet<Integer>, Error> {
+) -> Result<HashMap<Integer, usize>, Error> {
     ecm_with_params(
         n,
         10000,
@@ -206,16 +206,17 @@ pub fn ecm_with_params(
     max_curve: usize,
     seed: usize,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
-) -> Result<HashSet<Integer>, Error> {
-    let mut factors: HashSet<Integer> = HashSet::new();
+) -> Result<HashMap<Integer, usize>, Error> {
+    let mut factors: HashMap<Integer, usize> = HashMap::new();
 
     let mut n: Integer = n.clone();
     for prime in Primes::all().take(100_000) {
         let prime = Integer::from(prime);
         if n.clone().div_rem(prime.clone()).1 == 0 {
-            factors.insert(prime.clone());
+            // factors.insert(prime.clone(), 1);
             while n.clone().div_rem(prime.clone()).1 == 0 {
                 n /= &prime;
+                *factors.entry(prime.clone()).or_insert(0) += 1;
             }
         }
     }
@@ -235,15 +236,15 @@ pub fn ecm_with_params(
         )
         .or(Err(Error::BoundsTooSmall))?;
         n /= &factor;
-        factors.insert(factor);
+        *factors.entry(factor).or_insert(0) += 1;
     }
 
-    let mut final_factors: HashSet<Integer> = HashSet::new();
-    for factor in factors {
+    let mut final_factors: HashMap<Integer, usize> = HashMap::new();
+    for (factor, count) in factors {
         if factor.is_probably_prime(25) != IsPrime::No {
-            final_factors.insert(factor);
+            final_factors.insert(factor, count);
         } else {
-            final_factors.extend(ecm_with_params(
+            let sub_factors = ecm_with_params(
                 &factor,
                 b1,
                 b2,
@@ -251,7 +252,10 @@ pub fn ecm_with_params(
                 seed,
                 #[cfg(feature = "progress-bar")]
                 pb,
-            )?);
+            )?;
+            for (sub_factor, sub_count) in sub_factors {
+                *final_factors.entry(sub_factor).or_insert(0) += sub_count * count;
+            }
         }
     }
 
@@ -260,13 +264,11 @@ pub fn ecm_with_params(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, str::FromStr};
+    use std::str::FromStr;
 
-    use rug::Integer;
+    use super::*;
 
-    use crate::Error;
-
-    fn ecm(n: &Integer) -> Result<HashSet<Integer>, Error> {
+    fn ecm(n: &Integer) -> Result<HashMap<Integer, usize>, Error> {
         super::ecm(
             n,
             #[cfg(feature = "progress-bar")]
@@ -278,78 +280,78 @@ mod tests {
     fn test_ecm() {
         assert_eq!(
             ecm(&Integer::from_str("3146531246531241245132451321").unwrap(),).unwrap(),
-            HashSet::from_iter(vec![
-                Integer::from_str("3").unwrap(),
-                Integer::from_str("100327907731").unwrap(),
-                Integer::from_str("10454157497791297").unwrap()
+            HashMap::from([
+                (Integer::from_str("3").unwrap(), 1),
+                (Integer::from_str("100327907731").unwrap(), 1),
+                (Integer::from_str("10454157497791297").unwrap(), 1),
             ])
         );
         assert_eq!(
             ecm(&Integer::from_str("46167045131415113").unwrap()).unwrap(),
-            HashSet::from_iter(vec![
-                Integer::from_str("43").unwrap(),
-                Integer::from_str("2634823").unwrap(),
-                Integer::from_str("407485517").unwrap()
+            HashMap::from([
+                (Integer::from_str("43").unwrap(), 1),
+                (Integer::from_str("2634823").unwrap(), 1),
+                (Integer::from_str("407485517").unwrap(), 1),
             ])
         );
         assert_eq!(
             ecm(&Integer::from_str("631211032315670776841").unwrap()).unwrap(),
-            HashSet::from_iter(vec![
-                Integer::from_str("9312934919").unwrap(),
-                Integer::from_str("67777885039").unwrap()
+            HashMap::from([
+                (Integer::from_str("9312934919").unwrap(), 1),
+                (Integer::from_str("67777885039").unwrap(), 1),
             ])
         );
         assert_eq!(
             ecm(&Integer::from_str("398883434337287").unwrap()).unwrap(),
-            HashSet::from_iter(vec![
-                Integer::from_str("99476569").unwrap(),
-                Integer::from_str("4009823").unwrap()
+            HashMap::from([
+                (Integer::from_str("99476569").unwrap(), 1),
+                (Integer::from_str("4009823").unwrap(), 1),
             ])
         );
         assert_eq!(
             ecm(&Integer::from_str("64211816600515193").unwrap()).unwrap(),
-            HashSet::from_iter(vec![
-                Integer::from_str("281719").unwrap(),
-                Integer::from_str("359641").unwrap(),
-                Integer::from_str("633767").unwrap()
+            HashMap::from([
+                (Integer::from_str("281719").unwrap(), 1),
+                (Integer::from_str("359641").unwrap(), 1),
+                (Integer::from_str("633767").unwrap(), 1),
             ])
         );
         assert_eq!(
             ecm(&Integer::from_str("4269021180054189416198169786894227").unwrap()).unwrap(),
-            HashSet::from_iter(vec![
-                Integer::from_str("184039").unwrap(),
-                Integer::from_str("241603").unwrap(),
-                Integer::from_str("333331").unwrap(),
-                Integer::from_str("477973").unwrap(),
-                Integer::from_str("618619").unwrap(),
-                Integer::from_str("974123").unwrap()
+            HashMap::from([
+                (Integer::from_str("184039").unwrap(), 1),
+                (Integer::from_str("241603").unwrap(), 1),
+                (Integer::from_str("333331").unwrap(), 1),
+                (Integer::from_str("477973").unwrap(), 1),
+                (Integer::from_str("618619").unwrap(), 1),
+                (Integer::from_str("974123").unwrap(), 1),
             ])
         );
         assert_eq!(
             ecm(&Integer::from_str("4516511326451341281684513").unwrap()).unwrap(),
-            HashSet::from_iter(vec![
-                Integer::from_str("3").unwrap(),
-                Integer::from_str("39869").unwrap(),
-                Integer::from_str("131743543").unwrap(),
-                Integer::from_str("95542348571").unwrap()
+            HashMap::from([
+                (Integer::from_str("3").unwrap(), 2),
+                (Integer::from_str("39869").unwrap(), 1),
+                (Integer::from_str("131743543").unwrap(), 1),
+                (Integer::from_str("95542348571").unwrap(), 1),
             ])
         );
         assert_eq!(
             ecm(&Integer::from_str("4132846513818654136451").unwrap()).unwrap(),
-            HashSet::from_iter(vec![
-                Integer::from_str("47").unwrap(),
-                Integer::from_str("160343").unwrap(),
-                Integer::from_str("2802377").unwrap(),
-                Integer::from_str("195692803").unwrap()
+            HashMap::from([
+                (Integer::from_str("47").unwrap(), 1),
+                (Integer::from_str("160343").unwrap(), 1),
+                (Integer::from_str("2802377").unwrap(), 1),
+                (Integer::from_str("195692803").unwrap(), 1),
             ])
         );
         assert_eq!(
             ecm(&Integer::from_str("168541512131094651323").unwrap()).unwrap(),
-            HashSet::from_iter(vec![
-                Integer::from_str("79").unwrap(),
-                Integer::from_str("113").unwrap(),
-                Integer::from_str("11011069").unwrap(),
-                Integer::from_str("1714635721").unwrap()
+            HashMap::from([
+                (Integer::from_str("79").unwrap(), 1),
+                (Integer::from_str("113").unwrap(), 1),
+                (Integer::from_str("11011069").unwrap(), 1),
+                (Integer::from_str("1714635721").unwrap(), 1),
             ])
         );
     }

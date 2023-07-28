@@ -3,9 +3,9 @@ extern crate criterion;
 use criterion::Criterion;
 use ecm::Error;
 use rug::Integer;
-use std::{collections::HashSet, str::FromStr};
+use std::{collections::HashMap, str::FromStr};
 
-fn ecm(n: &Integer) -> Result<HashSet<Integer>, Error> {
+fn ecm(n: &Integer) -> Result<HashMap<Integer, usize>, Error> {
     ecm::ecm(
         n,
         #[cfg(feature = "progress-bar")]
