@@ -72,6 +72,7 @@ pub fn ecm_one_factor(
 
     let mut curve = 0;
     let d = (b2 as f64).sqrt() as usize;
+    let two_d = 2 * d;
     let mut beta: Vec<Integer> = vec![Integer::default(); d + 1];
     let mut s: Vec<Point> = vec![Point::default(); d + 1];
     let mut k = Integer::from(1);
@@ -132,13 +133,13 @@ pub fn ecm_one_factor(
 
         let mut g = Integer::from(1);
         let b = b1 - 1;
-        let mut t = q.mont_ladder(&Integer::from(b - 2 * d));
+        let mut t = q.mont_ladder(&Integer::from(b - two_d));
         let mut r = q.mont_ladder(&Integer::from(b));
 
         let mut primes = Primes::all().skip_while(|&q| q < b);
-        for rr in (b..b2).step_by(2 * d) {
+        for rr in (b..b2).step_by(two_d) {
             let alpha = Integer::from(&r.x_cord * &r.z_cord) % n;
-            for q in primes.by_ref().take_while(|&q| q <= rr + 2 * d) {
+            for q in primes.by_ref().take_while(|&q| q <= rr + two_d) {
                 let delta = (q - rr) / 2;
                 let f = Integer::from(&r.x_cord - &s[d].x_cord)
                     * Integer::from(&r.z_cord + &s[d].z_cord)
@@ -162,6 +163,24 @@ pub fn ecm_one_factor(
     Err(Error::ECMFailed)
 }
 
+fn optimal_b1(digits: usize) -> usize {
+    match digits {
+        1..=15 => 2000,
+        16..=20 => 11000,
+        21..=25 => 50000,
+        26..=30 => 250000,
+        31..=35 => 1000000,
+        36..=40 => 3000000,
+        41..=45 => 11000000,
+        46..=50 => 44000000,
+        51..=55 => 110000000,
+        56..=60 => 260000000,
+        61..=65 => 850000000,
+        66..=70 => 2900000000,
+        _ => 2900000000,
+    }
+}
+
 /// Performs factorization using Lenstra's Elliptic curve method.
 ///
 /// This function repeatedly calls `ecm_one_factor` to compute the factors
@@ -177,7 +196,7 @@ pub fn ecm(
 ) -> Result<HashMap<Integer, usize>, Error> {
     ecm_with_params(
         n,
-        10000,
+        optimal_b1(n.to_string().len()),
         100000,
         200,
         1234,
@@ -213,7 +232,6 @@ pub fn ecm_with_params(
     for prime in Primes::all().take(100_000) {
         let prime = Integer::from(prime);
         if n.clone().div_rem(prime.clone()).1 == 0 {
-            // factors.insert(prime.clone(), 1);
             while n.clone().div_rem(prime.clone()).1 == 0 {
                 n /= &prime;
                 *factors.entry(prime.clone()).or_insert(0) += 1;
@@ -234,32 +252,13 @@ pub fn ecm_with_params(
             #[cfg(feature = "progress-bar")]
             pb,
         )
-        .or(Err(Error::BoundsTooSmall))?;
+        .unwrap_or(n.clone());
+
         n /= &factor;
         *factors.entry(factor).or_insert(0) += 1;
     }
 
-    let mut final_factors: HashMap<Integer, usize> = HashMap::new();
-    for (factor, count) in factors {
-        if factor.is_probably_prime(25) != IsPrime::No {
-            final_factors.insert(factor, count);
-        } else {
-            let sub_factors = ecm_with_params(
-                &factor,
-                b1,
-                b2,
-                max_curve,
-                seed,
-                #[cfg(feature = "progress-bar")]
-                pb,
-            )?;
-            for (sub_factor, sub_count) in sub_factors {
-                *final_factors.entry(sub_factor).or_insert(0) += sub_count * count;
-            }
-        }
-    }
-
-    Ok(final_factors)
+    Ok(factors)
 }
 
 #[cfg(test)]
@@ -353,6 +352,17 @@ mod tests {
                 (Integer::from_str("11011069").unwrap(), 1),
                 (Integer::from_str("1714635721").unwrap(), 1),
             ])
+        );
+    }
+
+    #[test]
+    fn prime() {
+        assert_eq!(
+            ecm(&Integer::from_str(" 21472883178031195225853317139").unwrap()).unwrap(),
+            HashMap::from([(
+                Integer::from_str(" 21472883178031195225853317139").unwrap(),
+                1
+            )])
         );
     }
 }
