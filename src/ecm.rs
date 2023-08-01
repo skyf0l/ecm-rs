@@ -358,9 +358,9 @@ mod tests {
     #[test]
     fn prime() {
         assert_eq!(
-            ecm(&Integer::from_str(" 21472883178031195225853317139").unwrap()).unwrap(),
+            ecm(&Integer::from_str("21472883178031195225853317139").unwrap()).unwrap(),
             HashMap::from([(
-                Integer::from_str(" 21472883178031195225853317139").unwrap(),
+                Integer::from_str("21472883178031195225853317139").unwrap(),
                 1
             )])
         );
