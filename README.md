@@ -1,7 +1,8 @@
 # ecm-rs
 
-[![Build](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml)
+[![CI](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml)
 [![Crate.io](https://img.shields.io/crates/v/ecm.svg)](https://crates.io/crates/ecm)
+[![Codecov](https://codecov.io/gh/skyf0l/ecm-rs/branch/master/graph/badge.svg)](https://codecov.io/gh/skyf0l/ecm-rs)
 
 Lenstra's Elliptic Curve Factorization Implementation with Big Integers.
 
