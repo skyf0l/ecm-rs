@@ -17,6 +17,9 @@ pub enum Error {
     /// The factorization failed.
     #[error("The factorization failed")]
     ECMFailed,
+    /// The number is prime.
+    #[error("The number is prime")]
+    NumberIsPrime,
 }
 
 /// Returns one factor of n using Lenstra's 2 Stage Elliptic curve Factorization
@@ -60,8 +63,8 @@ pub fn ecm_one_factor(
         return Err(Error::BoundsNotEven);
     }
 
-    if n.is_probably_prime(25) != IsPrime::No {
-        return Ok(n.clone());
+    if n.is_probably_prime(1000) != IsPrime::No {
+        return Err(Error::NumberIsPrime);
     }
 
     #[cfg(feature = "progress-bar")]
@@ -278,15 +281,18 @@ mod tests {
     }
 
     #[test]
-    fn test_ecm() {
+    fn sympy_1() {
         assert_eq!(
-            ecm(&Integer::from_str("3146531246531241245132451321").unwrap(),).unwrap(),
+            ecm(&Integer::from_str("398883434337287").unwrap()).unwrap(),
             HashMap::from([
-                (Integer::from_str("3").unwrap(), 1),
-                (Integer::from_str("100327907731").unwrap(), 1),
-                (Integer::from_str("10454157497791297").unwrap(), 1),
+                (Integer::from_str("99476569").unwrap(), 1),
+                (Integer::from_str("4009823").unwrap(), 1),
             ])
         );
+    }
+
+    #[test]
+    fn sympy_2() {
         assert_eq!(
             ecm(&Integer::from_str("46167045131415113").unwrap()).unwrap(),
             HashMap::from([
@@ -295,20 +301,10 @@ mod tests {
                 (Integer::from_str("407485517").unwrap(), 1),
             ])
         );
-        assert_eq!(
-            ecm(&Integer::from_str("631211032315670776841").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("9312934919").unwrap(), 1),
-                (Integer::from_str("67777885039").unwrap(), 1),
-            ])
-        );
-        assert_eq!(
-            ecm(&Integer::from_str("398883434337287").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("99476569").unwrap(), 1),
-                (Integer::from_str("4009823").unwrap(), 1),
-            ])
-        );
+    }
+
+    #[test]
+    fn sympy_3() {
         assert_eq!(
             ecm(&Integer::from_str("64211816600515193").unwrap()).unwrap(),
             HashMap::from([
@@ -317,6 +313,72 @@ mod tests {
                 (Integer::from_str("633767").unwrap(), 1),
             ])
         );
+    }
+
+    #[test]
+    fn sympy_4() {
+        assert_eq!(
+            ecm(&Integer::from_str("168541512131094651323").unwrap()).unwrap(),
+            HashMap::from([
+                (Integer::from_str("79").unwrap(), 1),
+                (Integer::from_str("113").unwrap(), 1),
+                (Integer::from_str("11011069").unwrap(), 1),
+                (Integer::from_str("1714635721").unwrap(), 1),
+            ])
+        );
+    }
+
+    #[test]
+    fn sympy_5() {
+        assert_eq!(
+            ecm(&Integer::from_str("631211032315670776841").unwrap()).unwrap(),
+            HashMap::from([
+                (Integer::from_str("9312934919").unwrap(), 1),
+                (Integer::from_str("67777885039").unwrap(), 1),
+            ])
+        );
+    }
+
+    #[test]
+    fn sympy_6() {
+        assert_eq!(
+            ecm(&Integer::from_str("4132846513818654136451").unwrap()).unwrap(),
+            HashMap::from([
+                (Integer::from_str("47").unwrap(), 1),
+                (Integer::from_str("160343").unwrap(), 1),
+                (Integer::from_str("2802377").unwrap(), 1),
+                (Integer::from_str("195692803").unwrap(), 1),
+            ])
+        );
+    }
+
+    #[test]
+    fn sympy_7() {
+        assert_eq!(
+            ecm(&Integer::from_str("4516511326451341281684513").unwrap()).unwrap(),
+            HashMap::from([
+                (Integer::from_str("3").unwrap(), 2),
+                (Integer::from_str("39869").unwrap(), 1),
+                (Integer::from_str("131743543").unwrap(), 1),
+                (Integer::from_str("95542348571").unwrap(), 1),
+            ])
+        );
+    }
+
+    #[test]
+    fn sympy_8() {
+        assert_eq!(
+            ecm(&Integer::from_str("3146531246531241245132451321").unwrap(),).unwrap(),
+            HashMap::from([
+                (Integer::from_str("3").unwrap(), 1),
+                (Integer::from_str("100327907731").unwrap(), 1),
+                (Integer::from_str("10454157497791297").unwrap(), 1),
+            ])
+        );
+    }
+
+    #[test]
+    fn sympy_9() {
         assert_eq!(
             ecm(&Integer::from_str("4269021180054189416198169786894227").unwrap()).unwrap(),
             HashMap::from([
@@ -328,33 +390,10 @@ mod tests {
                 (Integer::from_str("974123").unwrap(), 1),
             ])
         );
-        assert_eq!(
-            ecm(&Integer::from_str("4516511326451341281684513").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("3").unwrap(), 2),
-                (Integer::from_str("39869").unwrap(), 1),
-                (Integer::from_str("131743543").unwrap(), 1),
-                (Integer::from_str("95542348571").unwrap(), 1),
-            ])
-        );
-        assert_eq!(
-            ecm(&Integer::from_str("4132846513818654136451").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("47").unwrap(), 1),
-                (Integer::from_str("160343").unwrap(), 1),
-                (Integer::from_str("2802377").unwrap(), 1),
-                (Integer::from_str("195692803").unwrap(), 1),
-            ])
-        );
-        assert_eq!(
-            ecm(&Integer::from_str("168541512131094651323").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("79").unwrap(), 1),
-                (Integer::from_str("113").unwrap(), 1),
-                (Integer::from_str("11011069").unwrap(), 1),
-                (Integer::from_str("1714635721").unwrap(), 1),
-            ])
-        );
+    }
+
+    #[test]
+    fn same_factors() {
         assert_eq!(
             ecm(&Integer::from_str("7853316850129").unwrap()).unwrap(),
             HashMap::from([(Integer::from_str("2802377").unwrap(), 2)])
@@ -362,7 +401,15 @@ mod tests {
     }
 
     #[test]
-    fn prime() {
+    fn small_prime() {
+        assert_eq!(
+            ecm(&Integer::from(17)).unwrap(),
+            HashMap::from([(Integer::from(17), 1)])
+        );
+    }
+
+    #[test]
+    fn big_prime() {
         assert_eq!(
             ecm(&Integer::from_str("21472883178031195225853317139").unwrap()).unwrap(),
             HashMap::from([(
