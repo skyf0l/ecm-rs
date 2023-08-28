@@ -226,13 +226,13 @@ pub fn ecm_with_params(
     seed: usize,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<HashMap<Integer, usize>, Error> {
-    let mut factors: HashMap<Integer, usize> = HashMap::new();
+    let mut factors = HashMap::new();
 
     let mut n: Integer = n.clone();
     for prime in Primes::all().take(100_000) {
-        let prime = Integer::from(prime);
-        if n.clone().div_rem(prime.clone()).1 == 0 {
-            while n.clone().div_rem(prime.clone()).1 == 0 {
+        if n.is_divisible_u(prime as u32) {
+            let prime = Integer::from(prime);
+            while n.is_divisible(&prime) {
                 n /= &prime;
                 *factors.entry(prime.clone()).or_insert(0) += 1;
             }
@@ -254,8 +254,10 @@ pub fn ecm_with_params(
         )
         .unwrap_or(n.clone());
 
-        n /= &factor;
-        *factors.entry(factor).or_insert(0) += 1;
+        while n.is_divisible(&factor) {
+            n /= &factor;
+            *factors.entry(factor.clone()).or_insert(0) += 1;
+        }
     }
 
     Ok(factors)
@@ -352,6 +354,10 @@ mod tests {
                 (Integer::from_str("11011069").unwrap(), 1),
                 (Integer::from_str("1714635721").unwrap(), 1),
             ])
+        );
+        assert_eq!(
+            ecm(&Integer::from_str("7853316850129").unwrap()).unwrap(),
+            HashMap::from([(Integer::from_str("2802377").unwrap(), 2)])
         );
     }
 
