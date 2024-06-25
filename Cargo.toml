@@ -1,6 +1,6 @@
 [package]
 name = "ecm"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["skyf0l <skyf0lmails@proton.me>"]
 description = "Lenstra's Elliptic Curve Factorization Implementation with Big Integers"
