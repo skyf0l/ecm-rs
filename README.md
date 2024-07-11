@@ -8,6 +8,8 @@ Lenstra's Elliptic Curve Factorization Implementation with Big Integers.
 
 The code is based on the [sympy](https://github.com/sympy/sympy) implementation and translated to Rust.
 
+Based on [rug](https://crates.io/crates/rug), it can use [arbitrary-precision numbers (aka BigNum)](https://en.wikipedia.org/wiki/Arbitrary-precision_arithmetic).
+
 ## Performance
 
 Using a `Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz` CPU, the following results were obtained:
