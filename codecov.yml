@@ -1,0 +1,4 @@
+comment: false
+coverage:
+  precision: 2
+  round: up
