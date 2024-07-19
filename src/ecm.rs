@@ -2,7 +2,7 @@ use crate::point::Point;
 #[cfg(feature = "progress-bar")]
 use indicatif::ProgressBar;
 use primal::Primes;
-use rug::{integer::IsPrime, ops::Pow, rand::RandState, Integer};
+use rug::{integer::IsPrime, rand::RandState, Integer};
 use std::collections::HashMap;
 
 /// Error occured during ecm factorization.
@@ -79,6 +79,7 @@ pub fn ecm_one_factor(
     let mut beta: Vec<Integer> = vec![Integer::default(); d + 1];
     let mut s: Vec<Point> = vec![Point::default(); d + 1];
     let mut k = Integer::from(1);
+    let three = Integer::from(3);
 
     for p in Primes::all().take_while(|&p| p <= b1) {
         k *= p.pow(b1.ilog(p));
@@ -95,13 +96,14 @@ pub fn ecm_one_factor(
         // Suyama's Parametrization
         let sigma = (n - Integer::from(1)).random_below(rgen);
         let u = (&sigma * &sigma - Integer::from(5)) % n;
-        let v = (Integer::from(4) * sigma) % n;
-        let diff = v.clone() - u.clone();
-        let u_3 = u.clone().pow(3) % n;
+        let v: Integer = (4 * sigma) % n;
+        let diff = Integer::from(&v - &u);
+        let u_3 = u.clone().pow_mod(&three, n).unwrap();
+        let v_3 = v.clone().pow_mod(&three, n).unwrap();
 
         let c = match (Integer::from(4) * &u_3 * &v).invert(n) {
             Ok(c) => {
-                (diff.pow_mod(&Integer::from(3), n).unwrap() * (Integer::from(4) * &u + &v) * c
+                (diff.pow_mod(&three, n).unwrap() * (Integer::from(4) * &u + &v) * c
                     - Integer::from(2))
                     % n
             }
@@ -109,7 +111,7 @@ pub fn ecm_one_factor(
         };
 
         let a24 = (c + 2) * Integer::from(4).invert(n).unwrap() % n;
-        let q = Point::new(u_3, v.pow(3) % n, a24, n.clone());
+        let q = Point::new(u_3, v_3, a24, n.clone());
         let q = q.mont_ladder(&k);
         let g = q.z_cord.clone().gcd(n);
 
@@ -166,21 +168,21 @@ pub fn ecm_one_factor(
     Err(Error::ECMFailed)
 }
 
-fn optimal_b1(digits: usize) -> usize {
+/// Optimal params retrieved from <https://gitlab.inria.fr/zimmerma/ecm>
+fn optimal_params(digits: usize) -> (usize, usize, usize) {
     match digits {
-        1..=15 => 2000,
-        16..=20 => 11000,
-        21..=25 => 50000,
-        26..=30 => 250000,
-        31..=35 => 1000000,
-        36..=40 => 3000000,
-        41..=45 => 11000000,
-        46..=50 => 44000000,
-        51..=55 => 110000000,
-        56..=60 => 260000000,
-        61..=65 => 850000000,
-        66..=70 => 2900000000,
-        _ => 2900000000,
+        1..=10 => (2_000, 160_000, 35),
+        11..=15 => (5_000, 500_000, 500),
+        16..=20 => (11_000, 1_900_000, 74),
+        21..=25 => (50_000, 13_000_000, 214),
+        26..=30 => (250_000, 130_000_000, 430),
+        31..=35 => (1_000_000, 1_000_000_000, 904),
+        36..=40 => (3_000_000, 5_700_000_000, 2350),
+        41..=45 => (11_000_000, 35_000_000_000, 4480),
+        46..=50 => (44_000_000, 240_000_000_000, 7553),
+        51..=55 => (110_000_000, 780_000_000_000, 17769),
+        56..=60 => (260_000_000, 3_200_000_000_000, 42017),
+        _ => (850_000_000, 16_000_000_000_000, 69408),
     }
 }
 
@@ -197,11 +199,13 @@ pub fn ecm(
     n: &Integer,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<HashMap<Integer, usize>, Error> {
+    let optimal_params = optimal_params(n.to_string().len());
+
     ecm_with_params(
         n,
-        optimal_b1(n.to_string().len()),
-        100000,
-        200,
+        optimal_params.0,
+        optimal_params.1,
+        optimal_params.2,
         1234,
         #[cfg(feature = "progress-bar")]
         pb,
