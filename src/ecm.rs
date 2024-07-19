@@ -96,7 +96,7 @@ pub fn ecm_one_factor(
         // Suyama's Parametrization
         let sigma = (n - Integer::from(1)).random_below(rgen);
         let u = (&sigma * &sigma - Integer::from(5)) % n;
-        let v = Integer::from(4 * sigma) % n;
+        let v: Integer = (4 * sigma) % n;
         let diff = Integer::from(&v - &u);
         let u_3 = u.clone().pow_mod(&three, n).unwrap();
         let v_3 = v.clone().pow_mod(&three, n).unwrap();
