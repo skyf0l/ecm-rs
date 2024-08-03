@@ -66,7 +66,7 @@ jobs:
     - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - uses: dtolnay/rust-toolchain@stable
     - uses: swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
-    - uses: taiki-e/install-action@7277a40b4d8760cc11399bd3f8314c3294e270f5 # v2.42.9
+    - uses: taiki-e/install-action@f01eb80f09bf29765801ebe1894eabfe8b47d967 # v2.42.16
       with:
         tool: cargo-nextest
 
@@ -82,7 +82,7 @@ jobs:
     - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - uses: dtolnay/rust-toolchain@nightly
     - uses: swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
-    - uses: taiki-e/install-action@7277a40b4d8760cc11399bd3f8314c3294e270f5 # v2.42.9
+    - uses: taiki-e/install-action@f01eb80f09bf29765801ebe1894eabfe8b47d967 # v2.42.16
       with:
         tool: cargo-nextest,cargo-llvm-cov
 
@@ -113,7 +113,7 @@ jobs:
 
     # msys2 required by rug on windows
     - name: Setup msys2 (windows)
-      uses: msys2/setup-msys2@d0e80f58dffbc64f6a3a1f43527d469b4fc7b6c8 # v2.23.0
+      uses: msys2/setup-msys2@5df0ca6cbf14efcd08f8d5bd5e049a3cc8e07fd2 # v2.24.0
       if: matrix.os == 'windows-latest'
       with:
         install: base-devel pacman-mirrors diffutils m4 make openssl openssl-devel
