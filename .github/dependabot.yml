@@ -10,10 +10,7 @@ updates:
   reviewers:
   - skyf0l
   schedule:
-    interval: "weekly"
-    day: saturday
-    time: "08:00"
-    timezone: Europe/Paris
+    interval: monthly
   groups:
     github-actions:
       patterns:
@@ -24,12 +21,9 @@ updates:
   reviewers:
   - skyf0l
   schedule:
-    interval: weekly
-    day: saturday
-    time: "08:00"
-    timezone: Europe/Paris
+    interval: monthly
   groups:
-    dependencies:
+    cargo:
       dependency-type: production
     dev-dependencies:
       dependency-type: development
