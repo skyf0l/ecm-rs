@@ -34,10 +34,10 @@ progress-bar = ["indicatif"]
 [dependencies]
 indicatif = { version = "0.17", optional = true }
 primal = "0.3"
-thiserror = "1"
+thiserror = "1.0"
 
 [dependencies.rug]
-version = "1"
+version = "1.26"
 default-features = false
 features = ["integer", "rand"]
 
