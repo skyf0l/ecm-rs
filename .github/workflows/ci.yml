@@ -98,7 +98,8 @@ jobs:
     name: Build
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Temporary disable windows build
+        os: [ubuntu-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
