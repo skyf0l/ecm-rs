@@ -59,7 +59,7 @@ pub fn ecm_one_factor(
     rgen: &mut RandState<'_>,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<Integer, Error> {
-    if b1 % 2 != 0 || b2 % 2 != 0 {
+    if !b1.is_multiple_of(2) || !b2.is_multiple_of(2) {
         return Err(Error::BoundsNotEven);
     }
 
