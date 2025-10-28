@@ -1,6 +1,7 @@
 # ecm-rs
 
 [![CI](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml)
+[![Benchmark](https://github.com/skyf0l/ecm-rs/actions/workflows/benchmark.yml/badge.svg)](https://github.com/skyf0l/ecm-rs/actions/workflows/benchmark.yml)
 [![Crate.io](https://img.shields.io/crates/v/ecm.svg)](https://crates.io/crates/ecm)
 [![Codecov](https://codecov.io/gh/skyf0l/ecm-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/skyf0l/ecm-rs)
 
@@ -11,6 +12,8 @@ The code is based on the [sympy](https://github.com/sympy/sympy) implementation 
 Based on [rug](https://crates.io/crates/rug), it can use [arbitrary-precision numbers (aka BigNum)](https://en.wikipedia.org/wiki/Arbitrary-precision_arithmetic).
 
 ## Performance
+
+[View continuous benchmark results](https://skyf0l.github.io/ecm-rs/dev/bench/)
 
 Using a `Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz` CPU, the following results were obtained:
 
