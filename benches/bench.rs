@@ -62,10 +62,11 @@ fn bench_factorization(c: &mut Criterion) {
         b.iter(|| ecm(&n))
     });
 
-    group.bench_function("sympy_10", |b| {
-        let n = Integer::from_str("7060005655815754299976961394452809").unwrap();
-        b.iter(|| ecm(&n))
-    });
+    // This one takes too long to be included in regular benchmarks
+    // group.bench_function("sympy_10", |b| {
+    //     let n = Integer::from_str("7060005655815754299976961394452809").unwrap();
+    //     b.iter(|| ecm(&n))
+    // });
 
     group.finish();
 }
