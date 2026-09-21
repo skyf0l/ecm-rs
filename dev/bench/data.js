@@ -1,0 +1,172 @@
+window.BENCHMARK_DATA = {
+  "lastUpdate": 1790018554335,
+  "repoUrl": "https://github.com/skyf0l/ecm-rs",
+  "entries": {
+    "Instruction counts": [
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "4ca354a1e392eeaaad0fabc0c824f9ab098658cb",
+          "message": "fix(ci): reuse fetched gh-pages in second benchmark report",
+          "timestamp": "2026-09-21T23:19:01+04:00",
+          "tree_id": "28d92d801111bfcb28165b0c35c0b4929fe6cfc6",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/4ca354a1e392eeaaad0fabc0c824f9ab098658cb"
+        },
+        "date": 1790018553813,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "e2e::e2e::factorize::digits_15",
+            "value": 700131545,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_17",
+            "value": 1587181410,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_25",
+            "value": 3738164158,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_128_b1_11k",
+            "value": 181033252,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_11k",
+            "value": 283772628,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_2k",
+            "value": 51434732,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_512_b1_11k",
+            "value": 554066317,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_64_b1_11k",
+            "value": 131171924,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_128_b2_1_9m",
+            "value": 312278916,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_147k",
+            "value": 50631200,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_1_9m",
+            "value": 461875438,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_512_b2_1_9m",
+            "value": 804560406,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_64_b2_1_9m",
+            "value": 216499475,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_128",
+            "value": 7376,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_256",
+            "value": 9353,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_512",
+            "value": 12407,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_64",
+            "value": 6161,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_128",
+            "value": 5832,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_256",
+            "value": 6382,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_512",
+            "value": 6372,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_64",
+            "value": 4140,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_128",
+            "value": 20322789,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_256",
+            "value": 113824360,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_512",
+            "value": 582283115,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_11k",
+            "value": 2138343,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_2k",
+            "value": 1368325,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_50k",
+            "value": 13120000,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_trial_division::bits_256",
+            "value": 16980362,
+            "unit": "instructions"
+          }
+        ]
+      }
+    ]
+  }
+}
