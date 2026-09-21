@@ -4,7 +4,7 @@ name: Benchmarks
 #   - the base branch and the PR are measured in the same job, the comparison is written to
 #     the job summary, and the job fails on an instruction count regression (exact);
 #   - github-action-benchmark compares with the last main results stored on gh-pages and
-#     comments the table on the PR's commit.
+#     comments the table on the PR (one comment per benchmark set, updated on each push).
 # - Pushes to main: github-action-benchmark stores the results on the gh-pages branch, draws
 #   the history charts, and comments on the commit on regressions.
 
@@ -155,8 +155,10 @@ jobs:
       github.event_name == 'push' ||
       github.event.pull_request.head.repo.full_name == github.repository
     permissions:
-      # Push to gh-pages (main), commit comments (PRs and alerts).
+      # Push to gh-pages and commit comments (main).
       contents: write
+      # Comparison comment on PRs (a PR review, updated in place on each push).
+      pull-requests: write
 
     steps:
     - uses: actions/checkout@v7
@@ -171,7 +173,7 @@ jobs:
         # Only results from main are stored (pushed), PRs are only compared. The action always
         # commits to a local gh-pages branch, only the push depends on this.
         auto-push: ${{ github.event_name == 'push' }}
-        # Full comparison table on every PR, only alerts on main.
+        # Full comparison table on every PR (a PR review comment), only alerts on main.
         comment-always: ${{ github.event_name == 'pull_request' }}
         # Instruction counts are deterministic: any significant increase is real.
         alert-threshold: '102%'
