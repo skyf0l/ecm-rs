@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790019265462,
+  "lastUpdate": 1790019267048,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -353,6 +353,42 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/4ca354a1e392eeaaad0fabc0c824f9ab098658cb"
         },
         "date": 1790018555572,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 250,
+            "unit": "curves",
+            "extra": "found 4/1000 curves (stage 1: 4, stage 2: 0, setup: 0)\n95% CI: 98..642 curves\nGMP-ECM reference: ~25 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 500,
+            "unit": "curves",
+            "extra": "found 2/1000 curves (stage 1: 2, stage 2: 0, setup: 0)\n95% CI: 138..1823 curves\nGMP-ECM reference: ~90 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "8a8bb275db20bc6e8d4fabc6adc12b7293da6b5e",
+          "message": "fix(ci): allow benchmark report to comment on PRs",
+          "timestamp": "2026-09-21T23:31:56+04:00",
+          "tree_id": "c2be4c8b4a04b1ad5f532585ebab8900b1e1f29a",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/8a8bb275db20bc6e8d4fabc6adc12b7293da6b5e"
+        },
+        "date": 1790019267039,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
