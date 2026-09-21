@@ -6,4 +6,10 @@
     ":label(dependencies)",
     ":automergeMajor",
   ],
+  // Cargo.lock is committed: refresh it regularly, so dependency updates within the
+  // Cargo.toml ranges also go through CI (tests and benchmarks) instead of drifting silently.
+  lockFileMaintenance: {
+    enabled: true,
+    automerge: true,
+  },
 }

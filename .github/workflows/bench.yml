@@ -1,10 +1,12 @@
 name: Benchmarks
 
-# - Pull requests: the base branch and the PR are measured in the same job, and the
-#   comparison is written to the job summary. The job fails on an instruction count
-#   regression.
-# - Pushes to main: results are stored on the gh-pages branch by github-action-benchmark,
-#   which draws the history charts and comments on the commit on regressions.
+# - Pull requests:
+#   - the base branch and the PR are measured in the same job, the comparison is written to
+#     the job summary, and the job fails on an instruction count regression (exact);
+#   - github-action-benchmark compares with the last main results stored on gh-pages and
+#     comments the table on the PR's commit.
+# - Pushes to main: github-action-benchmark stores the results on the gh-pages branch, draws
+#   the history charts, and comments on the commit on regressions.
 
 # Only when the measured code can change.
 on:
@@ -15,8 +17,9 @@ on:
     - 'benches/**'
     - 'examples/**'
     - 'Cargo.toml'
-    - '.github/workflows/bench.yml'
-    - '.github/scripts/gungraun-to-benchmark.sh'
+    - 'Cargo.lock'
+    # Renovate updates (GitHub Actions, config) are benchmarked like dependency updates.
+    - '.github/**'
   pull_request:
     branches: [main]
     paths: *paths
@@ -49,7 +52,7 @@ jobs:
     - name: Get gungraun version
       id: gungraun
       run: |
-        version=$(cargo metadata --format-version 1 \
+        version=$(cargo metadata --locked --format-version 1 \
           | jq -r '.packages[] | select(.name == "gungraun") | .version')
         echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -66,11 +69,14 @@ jobs:
       run: |
         git checkout ${{ github.event.pull_request.base.sha }}
         if [ -f benches/ops.rs ]; then
-          cargo bench --features bench --bench ops --bench e2e -- --save-baseline=base
+          .github/scripts/install-gungraun-runner.sh
+          cargo bench --locked --features bench --bench ops --bench e2e -- --save-baseline=base
         else
           echo "No benchmarks on the base branch: nothing to compare with."
         fi
         git checkout ${{ github.sha }}
+        # Back to the runner version of the PR, if the base branch used another one.
+        .github/scripts/install-gungraun-runner.sh
 
     - name: Benchmark
       run: |
@@ -84,7 +90,7 @@ jobs:
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
         status=0
-        cargo bench --features bench --bench ops --bench e2e -- "${args[@]}" \
+        cargo bench --locked --features bench --bench ops --bench e2e -- "${args[@]}" \
           | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
         echo '```' >> "$GITHUB_STEP_SUMMARY"
         exit $status
@@ -114,7 +120,7 @@ jobs:
       run: |
         git checkout ${{ github.event.pull_request.base.sha }}
         if [ -f examples/success_rate.rs ]; then
-          cargo run --release --features bench --example success_rate -- \
+          cargo run --locked --release --features bench --example success_rate -- \
             --json "$RUNNER_TEMP/base.json"
         else
           echo "No success rate example on the base branch: nothing to compare with."
@@ -129,7 +135,7 @@ jobs:
           args+=(--compare "$RUNNER_TEMP/base.json")
         fi
         echo '## Curve success rate' >> "$GITHUB_STEP_SUMMARY"
-        cargo run --release --features bench --example success_rate -- "${args[@]}" \
+        cargo run --locked --release --features bench --example success_rate -- "${args[@]}" \
           | tee -a "$GITHUB_STEP_SUMMARY"
 
     - uses: actions/upload-artifact@v7
@@ -137,14 +143,19 @@ jobs:
         name: success-rate
         path: success_rate.json
 
-  # Pushes to gh-pages from a single job, to avoid concurrent pushes.
-  publish:
-    name: Publish results
+  # Compares with the last results stored on gh-pages (from main) and, on main, stores the new
+  # results there. A single job, to avoid concurrent pushes to gh-pages.
+  report:
+    name: Report results
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [instructions, success-rate]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Fork PRs get a read-only token: they can't comment, the job summaries above still work.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     permissions:
+      # Push to gh-pages (main), commit comments (PRs and alerts).
       contents: write
 
     steps:
@@ -157,7 +168,11 @@ jobs:
         tool: customSmallerIsBetter
         output-file-path: instructions/instructions.json
         github-token: ${{ secrets.GITHUB_TOKEN }}
-        auto-push: true
+        # Only results from main are stored, PRs are only compared.
+        auto-push: ${{ github.event_name == 'push' }}
+        save-data-file: ${{ github.event_name == 'push' }}
+        # Full comparison table on every PR, only alerts on main.
+        comment-always: ${{ github.event_name == 'pull_request' }}
         # Instruction counts are deterministic: any significant increase is real.
         alert-threshold: '102%'
         comment-on-alert: true
@@ -169,7 +184,9 @@ jobs:
         tool: customSmallerIsBetter
         output-file-path: success-rate/success_rate.json
         github-token: ${{ secrets.GITHUB_TOKEN }}
-        auto-push: true
+        auto-push: ${{ github.event_name == 'push' }}
+        save-data-file: ${{ github.event_name == 'push' }}
+        comment-always: ${{ github.event_name == 'pull_request' }}
         # Statistical measure over a limited number of curves: only large changes matter.
         alert-threshold: '150%'
         comment-on-alert: true
