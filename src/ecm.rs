@@ -74,16 +74,7 @@ pub fn ecm_one_factor(
     }
 
     let mut curve = 0;
-    let d = (b2 as f64).sqrt() as usize;
-    let two_d = 2 * d;
-    let mut beta: Vec<Integer> = vec![Integer::default(); d + 1];
-    let mut s: Vec<Point> = vec![Point::default(); d + 1];
-    let mut k = Integer::from(1);
-    let three = Integer::from(3);
-
-    for p in Primes::all().take_while(|&p| p <= b1) {
-        k *= p.pow(b1.ilog(p));
-    }
+    let k = stage1_multiplier(b1);
 
     while curve <= max_curve {
         curve += 1;
@@ -93,74 +84,12 @@ pub fn ecm_one_factor(
             pb.inc(1);
         }
 
-        // Suyama's Parametrization
         let sigma = (n - Integer::from(1)).random_below(rgen);
-        let u = (&sigma * &sigma - Integer::from(5)) % n;
-        let v: Integer = (4 * sigma) % n;
-        let diff = Integer::from(&v - &u);
-        let u_3 = u.clone().pow_mod(&three, n).unwrap();
-        let v_3 = v.clone().pow_mod(&three, n).unwrap();
-
-        let c = match (Integer::from(4) * &u_3 * &v).invert(n) {
-            Ok(c) => {
-                (diff.pow_mod(&three, n).unwrap() * (Integer::from(4) * &u + &v) * c
-                    - Integer::from(2))
-                    % n
+        match run_curve(n, &sigma, &k, b1, b2) {
+            CurveOutcome::Setup(g) | CurveOutcome::Stage1(g) | CurveOutcome::Stage2(g) => {
+                return Ok(g)
             }
-            _ => return Ok((Integer::from(4) * u_3 * v).gcd(n)),
-        };
-
-        let a24 = (c + 2) * Integer::from(4).invert(n).unwrap() % n;
-        let q = Point::new(u_3, v_3, a24, n.clone());
-        let q = q.mont_ladder(&k);
-        let g = q.z_cord.clone().gcd(n);
-
-        // Stage 1 factor
-        if &g != n && g != 1 {
-            return Ok(g);
-        }
-
-        // Stage 1 failure. Q.z = 0, Try another curve
-        if &g == n {
-            continue;
-        }
-
-        // Stage 2 - Improved Standard Continuation
-        s[1] = q.double();
-        s[2] = s[1].double();
-        beta[1] = Integer::from(&s[1].x_cord * &s[1].z_cord) % n;
-        beta[2] = Integer::from(&s[2].x_cord * &s[2].z_cord) % n;
-
-        for d in 3..=(d) {
-            s[d] = s[d - 1].add(&s[1], &s[d - 2]);
-            beta[d] = Integer::from(&s[d].x_cord * &s[d].z_cord) % n;
-        }
-
-        let mut g = Integer::from(1);
-        let b = b1 - 1;
-        let mut t = q.mont_ladder(&Integer::from(b - two_d));
-        let mut r = q.mont_ladder(&Integer::from(b));
-
-        let mut primes = Primes::all().skip_while(|&q| q < b);
-        for rr in (b..b2).step_by(two_d) {
-            let alpha = Integer::from(&r.x_cord * &r.z_cord) % n;
-            for q in primes.by_ref().take_while(|&q| q <= rr + two_d) {
-                let delta = (q - rr) / 2;
-                let f = Integer::from(&r.x_cord - &s[d].x_cord)
-                    * Integer::from(&r.z_cord + &s[d].z_cord)
-                    - &alpha
-                    + &beta[delta];
-                g = (g * f) % n;
-            }
-            // Swap
-            std::mem::swap(&mut t, &mut r);
-            r = r.add(&s[d], &t);
-        }
-        g = g.gcd(n);
-
-        // Stage 2 Factor found
-        if &g != n && g != 1 {
-            return Ok(g);
+            CurveOutcome::Failed => {}
         }
     }
 
@@ -168,8 +97,153 @@ pub fn ecm_one_factor(
     Err(Error::ECMFailed)
 }
 
+/// Result of running a single ECM curve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CurveOutcome {
+    /// The curve could not be built, and the gcd found while building it is returned.
+    Setup(Integer),
+    /// Stage 1 found a non-trivial factor.
+    Stage1(Integer),
+    /// Stage 2 found a non-trivial factor.
+    Stage2(Integer),
+    /// No factor was found with this curve.
+    Failed,
+}
+
+/// Runs one ECM curve (curve setup, stage 1 and stage 2) with the given `sigma`.
+///
+/// `k` must be the stage 1 multiplier returned by [`stage1_multiplier`] for `b1`.
+pub fn run_curve(n: &Integer, sigma: &Integer, k: &Integer, b1: usize, b2: usize) -> CurveOutcome {
+    let q = match suyama_curve(n, sigma) {
+        Ok(q) => q,
+        Err(g) => return CurveOutcome::Setup(g),
+    };
+
+    let q = stage1(&q, k);
+    let g = q.z_cord.clone().gcd(n);
+
+    // Stage 1 factor
+    if &g != n && g != 1 {
+        return CurveOutcome::Stage1(g);
+    }
+
+    // Stage 1 failure. Q.z = 0, Try another curve
+    if &g == n {
+        return CurveOutcome::Failed;
+    }
+
+    let g = stage2(&q, b1, b2);
+
+    // Stage 2 Factor found
+    if &g != n && g != 1 {
+        return CurveOutcome::Stage2(g);
+    }
+
+    CurveOutcome::Failed
+}
+
+/// Stage 1 multiplier: product of the largest powers of all primes `p <= b1` that are `<= b1`.
+pub fn stage1_multiplier(b1: usize) -> Integer {
+    let mut k = Integer::from(1);
+    for p in Primes::all().take_while(|&p| p <= b1) {
+        k *= p.pow(b1.ilog(p));
+    }
+    k
+}
+
+/// Builds the starting point of a curve using Suyama's parametrization.
+///
+/// Returns `Err(g)` with `g = gcd(4*u^3*v, n)` when the curve cannot be built.
+pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
+    let three = Integer::from(3);
+    let u = (Integer::from(sigma * sigma) - Integer::from(5)) % n;
+    let v: Integer = (4 * sigma.clone()) % n;
+    let diff = Integer::from(&v - &u);
+    let u_3 = u.clone().pow_mod(&three, n).unwrap();
+    let v_3 = v.clone().pow_mod(&three, n).unwrap();
+
+    let c = match (Integer::from(4) * &u_3 * &v).invert(n) {
+        Ok(c) => {
+            (diff.pow_mod(&three, n).unwrap() * (Integer::from(4) * &u + &v) * c - Integer::from(2))
+                % n
+        }
+        _ => return Err((Integer::from(4) * u_3 * v).gcd(n)),
+    };
+
+    let a24 = (c + 2) * Integer::from(4).invert(n).unwrap() % n;
+    Ok(Point::new(u_3, v_3, a24, n.clone()))
+}
+
+/// Stage 1: computes `k*P`.
+pub fn stage1(p: &Point, k: &Integer) -> Point {
+    p.mont_ladder(k)
+}
+
+/// Stage 2 - Improved Standard Continuation.
+///
+/// Returns `gcd(g, n)` where `g` is the accumulated product over the primes in `(b1, b2]`.
+pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
+    let n = &q.modulus;
+    let d = (b2 as f64).sqrt() as usize;
+    let two_d = 2 * d;
+    let mut beta: Vec<Integer> = vec![Integer::default(); d + 1];
+    let mut s: Vec<Point> = vec![Point::default(); d + 1];
+
+    s[1] = q.double();
+    s[2] = s[1].double();
+    beta[1] = Integer::from(&s[1].x_cord * &s[1].z_cord) % n;
+    beta[2] = Integer::from(&s[2].x_cord * &s[2].z_cord) % n;
+
+    for d in 3..=(d) {
+        s[d] = s[d - 1].add(&s[1], &s[d - 2]);
+        beta[d] = Integer::from(&s[d].x_cord * &s[d].z_cord) % n;
+    }
+
+    let mut g = Integer::from(1);
+    let b = b1 - 1;
+    let mut t = q.mont_ladder(&Integer::from(b - two_d));
+    let mut r = q.mont_ladder(&Integer::from(b));
+
+    let mut primes = Primes::all().skip_while(|&q| q < b);
+    for rr in (b..b2).step_by(two_d) {
+        let alpha = Integer::from(&r.x_cord * &r.z_cord) % n;
+        for q in primes.by_ref().take_while(|&q| q <= rr + two_d) {
+            let delta = (q - rr) / 2;
+            let f = Integer::from(&r.x_cord - &s[d].x_cord)
+                * Integer::from(&r.z_cord + &s[d].z_cord)
+                - &alpha
+                + &beta[delta];
+            g = (g * f) % n;
+        }
+        // Swap
+        std::mem::swap(&mut t, &mut r);
+        r = r.add(&s[d], &t);
+    }
+    g.gcd(n)
+}
+
+/// Removes the factors of `n` among the first 100 000 primes.
+///
+/// Returns the found factors with their multiplicity, and the remaining cofactor.
+pub fn trial_division(n: &Integer) -> (HashMap<Integer, usize>, Integer) {
+    let mut factors = HashMap::new();
+    let mut n: Integer = n.clone();
+    for prime in Primes::all().take(100_000) {
+        if n.is_divisible_u(prime as u32) {
+            let prime = Integer::from(prime);
+            while n.is_divisible(&prime) {
+                n /= &prime;
+                *factors.entry(prime.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    (factors, n)
+}
+
+/// Default `(B1, B2, max_curve)` for a number of `digits` decimal digits.
+///
 /// Optimal params retrieved from <https://gitlab.inria.fr/zimmerma/ecm>
-fn optimal_params(digits: usize) -> (usize, usize, usize) {
+pub fn optimal_params(digits: usize) -> (usize, usize, usize) {
     match digits {
         1..=10 => (2_000, 160_000, 35),
         11..=15 => (5_000, 500_000, 500),
@@ -233,18 +307,7 @@ pub fn ecm_with_params(
     seed: usize,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<HashMap<Integer, usize>, Error> {
-    let mut factors = HashMap::new();
-
-    let mut n: Integer = n.clone();
-    for prime in Primes::all().take(100_000) {
-        if n.is_divisible_u(prime as u32) {
-            let prime = Integer::from(prime);
-            while n.is_divisible(&prime) {
-                n /= &prime;
-                *factors.entry(prime.clone()).or_insert(0) += 1;
-            }
-        }
-    }
+    let (mut factors, mut n) = trial_division(n);
 
     let mut rand_state = RandState::new();
     rand_state.seed(&seed.into());

@@ -1,0 +1,176 @@
+name: Benchmarks
+
+# - Pull requests: the base branch and the PR are measured in the same job, and the
+#   comparison is written to the job summary. The job fails on an instruction count
+#   regression.
+# - Pushes to main: results are stored on the gh-pages branch by github-action-benchmark,
+#   which draws the history charts and comments on the commit on regressions.
+
+# Only when the measured code can change.
+on:
+  push:
+    branches: [main]
+    paths: &paths
+    - 'src/**'
+    - 'benches/**'
+    - 'examples/**'
+    - 'Cargo.toml'
+    - '.github/workflows/bench.yml'
+    - '.github/scripts/gungraun-to-benchmark.sh'
+  pull_request:
+    branches: [main]
+    paths: *paths
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  # Instruction counts do not depend on parallelism.
+  GUNGRAUN_PARALLEL: auto
+
+jobs:
+  instructions:
+    name: Instruction counts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: swatinem/rust-cache@v2
+
+    - name: Install Valgrind
+      run: sudo apt-get update && sudo apt-get install -y valgrind
+
+    - name: Get gungraun version
+      id: gungraun
+      run: |
+        version=$(cargo metadata --format-version 1 \
+          | jq -r '.packages[] | select(.name == "gungraun") | .version')
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: gungraun-runner@${{ steps.gungraun.outputs.version }}
+
+    # Never compare against results restored from the cache.
+    - name: Clean previous results
+      run: rm -rf target/gungraun
+
+    - name: Benchmark base branch
+      if: github.event_name == 'pull_request'
+      run: |
+        git checkout ${{ github.event.pull_request.base.sha }}
+        if [ -f benches/ops.rs ]; then
+          cargo bench --features bench --bench ops --bench e2e -- --save-baseline=base
+        else
+          echo "No benchmarks on the base branch: nothing to compare with."
+        fi
+        git checkout ${{ github.sha }}
+
+    - name: Benchmark
+      run: |
+        set -o pipefail
+        args=(--save-summary=json)
+        if [ "${{ github.event_name }}" = pull_request ]; then
+          args+=(--baseline=base --callgrind-limits='ir=2%')
+        fi
+        {
+          echo '## Instruction counts'
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        status=0
+        cargo bench --features bench --bench ops --bench e2e -- "${args[@]}" \
+          | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+        exit $status
+
+    - name: Convert results
+      run: .github/scripts/gungraun-to-benchmark.sh > instructions.json
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: instructions
+        path: instructions.json
+
+  success-rate:
+    name: Curve success rate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: swatinem/rust-cache@v2
+
+    - name: Measure base branch
+      if: github.event_name == 'pull_request'
+      run: |
+        git checkout ${{ github.event.pull_request.base.sha }}
+        if [ -f examples/success_rate.rs ]; then
+          cargo run --release --features bench --example success_rate -- \
+            --json "$RUNNER_TEMP/base.json"
+        else
+          echo "No success rate example on the base branch: nothing to compare with."
+        fi
+        git checkout ${{ github.sha }}
+
+    - name: Measure
+      run: |
+        set -o pipefail
+        args=(--json success_rate.json)
+        if [ -f "$RUNNER_TEMP/base.json" ]; then
+          args+=(--compare "$RUNNER_TEMP/base.json")
+        fi
+        echo '## Curve success rate' >> "$GITHUB_STEP_SUMMARY"
+        cargo run --release --features bench --example success_rate -- "${args[@]}" \
+          | tee -a "$GITHUB_STEP_SUMMARY"
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: success-rate
+        path: success_rate.json
+
+  # Pushes to gh-pages from a single job, to avoid concurrent pushes.
+  publish:
+    name: Publish results
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [instructions, success-rate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/download-artifact@v8
+
+    - uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: Instruction counts
+        tool: customSmallerIsBetter
+        output-file-path: instructions/instructions.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+        # Instruction counts are deterministic: any significant increase is real.
+        alert-threshold: '102%'
+        comment-on-alert: true
+        summary-always: true
+
+    - uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: Curve success rate
+        tool: customSmallerIsBetter
+        output-file-path: success-rate/success_rate.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+        # Statistical measure over a limited number of curves: only large changes matter.
+        alert-threshold: '150%'
+        comment-on-alert: true
+        summary-always: true
