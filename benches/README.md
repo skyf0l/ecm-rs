@@ -50,5 +50,7 @@ cargo bench --features bench --bench walltime -- --baseline before
 
 - On pull requests, the base branch and the PR run in the same job and are compared there. The
   job fails if an instruction count grows by more than 2%.
+- On pull requests, github-action-benchmark also comments a comparison with the last `main` results
+  on the PR's commit.
 - On pushes to `main`, results are stored on the `gh-pages` branch by
   [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).
