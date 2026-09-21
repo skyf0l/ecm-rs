@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790018554335,
+  "lastUpdate": 1790018555585,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -164,6 +164,44 @@ window.BENCHMARK_DATA = {
             "name": "ops::setup::setup_trial_division::bits_256",
             "value": 16980362,
             "unit": "instructions"
+          }
+        ]
+      }
+    ],
+    "Curve success rate": [
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "4ca354a1e392eeaaad0fabc0c824f9ab098658cb",
+          "message": "fix(ci): reuse fetched gh-pages in second benchmark report",
+          "timestamp": "2026-09-21T23:19:01+04:00",
+          "tree_id": "28d92d801111bfcb28165b0c35c0b4929fe6cfc6",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/4ca354a1e392eeaaad0fabc0c824f9ab098658cb"
+        },
+        "date": 1790018555572,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 250,
+            "unit": "curves",
+            "extra": "found 4/1000 curves (stage 1: 4, stage 2: 0, setup: 0)\n95% CI: 98..642 curves\nGMP-ECM reference: ~25 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 500,
+            "unit": "curves",
+            "extra": "found 2/1000 curves (stage 1: 2, stage 2: 0, setup: 0)\n95% CI: 138..1823 curves\nGMP-ECM reference: ~90 curves"
           }
         ]
       }
