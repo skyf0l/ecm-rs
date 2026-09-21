@@ -168,14 +168,15 @@ jobs:
         tool: customSmallerIsBetter
         output-file-path: instructions/instructions.json
         github-token: ${{ secrets.GITHUB_TOKEN }}
-        # Only results from main are stored, PRs are only compared.
+        # Only results from main are stored (pushed), PRs are only compared. The action always
+        # commits to a local gh-pages branch, only the push depends on this.
         auto-push: ${{ github.event_name == 'push' }}
-        save-data-file: ${{ github.event_name == 'push' }}
         # Full comparison table on every PR, only alerts on main.
         comment-always: ${{ github.event_name == 'pull_request' }}
         # Instruction counts are deterministic: any significant increase is real.
         alert-threshold: '102%'
-        comment-on-alert: true
+        # PRs already get the full table: alert comments only on main.
+        comment-on-alert: ${{ github.event_name == 'push' }}
         summary-always: true
 
     - uses: benchmark-action/github-action-benchmark@v1
@@ -184,10 +185,12 @@ jobs:
         tool: customSmallerIsBetter
         output-file-path: success-rate/success_rate.json
         github-token: ${{ secrets.GITHUB_TOKEN }}
+        # Reuse the gh-pages branch fetched by the previous step: fetching it again fails on PRs,
+        # where the previous step's local commit is not pushed (non-fast-forward).
+        skip-fetch-gh-pages: true
         auto-push: ${{ github.event_name == 'push' }}
-        save-data-file: ${{ github.event_name == 'push' }}
         comment-always: ${{ github.event_name == 'pull_request' }}
         # Statistical measure over a limited number of curves: only large changes matter.
         alert-threshold: '150%'
-        comment-on-alert: true
+        comment-on-alert: ${{ github.event_name == 'push' }}
         summary-always: true
