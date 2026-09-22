@@ -841,6 +841,32 @@ mod tests {
     }
 
     #[test]
+    fn tiny_moduli() {
+        // Degenerate curves and non-invertible setups are frequent modulo tiny numbers: a curve
+        // either fails or returns a proper factor, it never panics.
+        let k = stage1_multiplier(100);
+        for n in (9u32..1500).step_by(2) {
+            let n = Integer::from(n);
+            if n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No {
+                continue;
+            }
+            for (param, first) in [(Param::Suyama, 6), (Param::Square, 2), (Param::Batch2, 2)] {
+                for sigma in first..first + 20 {
+                    let sigma = Integer::from(sigma);
+                    match run_curve(&n, param, &sigma, &k, 100, 1000) {
+                        CurveOutcome::Setup(g)
+                        | CurveOutcome::Stage1(g)
+                        | CurveOutcome::Stage2(g) => {
+                            assert!(g != 1 && g != n && n.is_divisible(&g), "{n} {param:?}")
+                        }
+                        CurveOutcome::Failed => {}
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn small_b1() {
         // b1 < 2*sqrt(b2) used to underflow when computing the first giant step.
         let n = semiprime();
