@@ -1,4 +1,5 @@
-use rug::Integer;
+use rug::{Assign, Integer};
+use std::rc::Rc;
 
 /// Montgomery form of Points in an elliptic curve.
 ///
@@ -12,6 +13,9 @@ use rug::Integer;
 /// `(E : b*y**2*z = x**3 + a*x**2*z + x*z**2)`.
 /// The `a_24` parameter is equal to `(a + 2)/4`.
 ///
+/// `a_24` and the modulus are shared by all the points of a curve (cloning a point doesn't copy
+/// them).
+///
 /// References
 /// ----------
 /// - http://www.hyperelliptic.org/tanja/SHARCS/talks06/Gaj.pdf
@@ -22,9 +26,9 @@ pub struct Point {
     /// Z coordinate of the Point
     pub z_cord: Integer,
     /// Parameter of the elliptic curve in Montgomery form
-    pub a_24: Integer,
+    pub a_24: Rc<Integer>,
     /// modulus
-    pub modulus: Integer,
+    pub modulus: Rc<Integer>,
 }
 
 impl Point {
@@ -40,9 +44,26 @@ impl Point {
         Point {
             x_cord,
             z_cord,
-            a_24,
-            modulus,
+            a_24: Rc::new(a_24),
+            modulus: Rc::new(modulus),
         }
+    }
+
+    /// Point with the given coordinates, on the same curve as `self`.
+    fn on_same_curve(&self, x_cord: Integer, z_cord: Integer) -> Point {
+        Point {
+            x_cord,
+            z_cord,
+            a_24: Rc::clone(&self.a_24),
+            modulus: Rc::clone(&self.modulus),
+        }
+    }
+
+    /// Empty integer large enough for the intermediate results of `add` and `double` (up to 5
+    /// times the size of the modulus, before reduction): computing in place in it never needs
+    /// to reallocate.
+    fn scratch(&self) -> Integer {
+        Integer::with_capacity(5 * self.modulus.significant_bits() as usize + 64)
     }
 
     /// Adds two points `self` and `Q` where `diff = self - Q`.
@@ -58,25 +79,55 @@ impl Point {
     /// - `Q`: Point on the curve in Montgomery form.
     /// - `diff`: `self - Q`
     pub fn add(&self, q: &Point, diff: &Point) -> Point {
-        let u = Integer::from(&self.x_cord - &self.z_cord) * Integer::from(&q.x_cord + &q.z_cord);
-        let v = Integer::from(&self.x_cord + &self.z_cord) * Integer::from(&q.x_cord - &q.z_cord);
-        let add = Integer::from(&u + &v);
-        let subt = u - v;
-        let x_cord = Integer::from(&diff.z_cord * &add) * &add % &self.modulus;
-        let z_cord = Integer::from(&diff.x_cord * &subt) * &subt % &self.modulus;
+        let n: &Integer = &self.modulus;
+        let (mut u, mut v, mut t) = (self.scratch(), self.scratch(), self.scratch());
 
-        Point::new(x_cord, z_cord, self.a_24.clone(), self.modulus.clone())
+        // u = (x1 - z1) * (x2 + z2)
+        u.assign(&self.x_cord - &self.z_cord);
+        t.assign(&q.x_cord + &q.z_cord);
+        u *= &t;
+        // v = (x1 + z1) * (x2 - z2)
+        v.assign(&self.x_cord + &self.z_cord);
+        t.assign(&q.x_cord - &q.z_cord);
+        v *= &t;
+
+        // x = diff.z * (u + v)^2
+        t.assign(&u + &v);
+        t.square_mut();
+        t *= &diff.z_cord;
+        t %= n;
+        // z = diff.x * (u - v)^2
+        u -= &v;
+        u.square_mut();
+        u *= &diff.x_cord;
+        u %= n;
+
+        self.on_same_curve(t, u)
     }
 
     /// Doubles a point in an elliptic curve in Montgomery form.
     pub fn double(&self) -> Point {
-        let u = Integer::from(&self.x_cord + &self.z_cord).square() % &self.modulus;
-        let v = Integer::from(&self.x_cord - &self.z_cord).square() % &self.modulus;
-        let diff = Integer::from(&u - &v);
-        let x_cord = (u * &v) % &self.modulus;
-        let z_cord = ((v + &self.a_24 * &diff) * diff) % &self.modulus;
+        let n: &Integer = &self.modulus;
+        let (mut u, mut v, mut diff) = (self.scratch(), self.scratch(), self.scratch());
 
-        Point::new(x_cord, z_cord, self.a_24.clone(), self.modulus.clone())
+        // u = (x + z)^2, v = (x - z)^2
+        u.assign(&self.x_cord + &self.z_cord);
+        u.square_mut();
+        u %= n;
+        v.assign(&self.x_cord - &self.z_cord);
+        v.square_mut();
+        v %= n;
+        diff.assign(&u - &v);
+
+        // x = u * v
+        u *= &v;
+        u %= n;
+        // z = (v + a_24 * diff) * diff
+        v += &*self.a_24 * &diff;
+        v *= &diff;
+        v %= n;
+
+        self.on_same_curve(u, v)
     }
 
     /// Scalar multiplication of a point in Montgomery form
@@ -91,8 +142,9 @@ impl Point {
         let mut q = self.clone();
         let mut r = self.double();
 
-        for i in format!("{:b}", k)[1..].chars() {
-            if i == '1' {
+        // Bits of `k` from the most significant one, which is skipped.
+        for bit in (0..k.significant_bits().saturating_sub(1)).rev() {
+            if k.get_bit(bit) {
                 q = r.add(&q, self);
                 r = r.double();
             } else {
@@ -110,8 +162,8 @@ impl PartialEq for Point {
         // X1/Z1 = X2/Z2 without any modular inverse: X1*Z2 = X2*Z1.
         self.a_24 == other.a_24
             && self.modulus == other.modulus
-            && Integer::from(&self.x_cord * &other.z_cord) % &self.modulus
-                == Integer::from(&other.x_cord * &self.z_cord) % &self.modulus
+            && Integer::from(&self.x_cord * &other.z_cord) % &*self.modulus
+                == Integer::from(&other.x_cord * &self.z_cord) % &*self.modulus
     }
 }
 
