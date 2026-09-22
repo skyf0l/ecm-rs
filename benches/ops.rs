@@ -26,16 +26,22 @@ fn stage1_input(bits: u32, b1: usize, param: Param) -> (Point, Integer) {
     (curve_point(bits, param), stage1_multiplier(b1))
 }
 
-/// Stage 1 output and the bounds, for the first curve from `SIGMA` on where stage 1 finds
-/// no factor, so stage 2 always runs completely.
-fn stage2_input(bits: u32, b1: usize, b2: usize) -> (Point, Stage2Plan) {
+/// Stage 1 output and the plan of stage 2 (the cheapest one, or the polynomial one if `poly`),
+/// for the first curve from `SIGMA` on where stage 1 finds no factor, so stage 2 always runs
+/// completely.
+fn stage2_input(bits: u32, b1: usize, b2: usize, poly: bool) -> (Point, Stage2Plan) {
     let n = semiprime_bits(bits, SEED);
     let k = stage1_multiplier(b1);
+    let plan = if poly {
+        Stage2Plan::poly(&n, b1, b2)
+    } else {
+        Stage2Plan::new(&n, b1, b2)
+    };
     (SIGMA..)
         .filter_map(|sigma| curve(&n, Param::default(), &Integer::from(sigma)).ok())
         .map(|p| stage1(&p, &k))
         .find(|q| q.z_cord.clone().gcd(&n) == 1)
-        .map(|q| (q, Stage2Plan::new(b1, b2)))
+        .map(|q| (q, plan))
         .unwrap()
 }
 
@@ -47,6 +53,7 @@ const B2_15: usize = GMP_ECM_BOUNDS[0].2;
 const B1_20: usize = GMP_ECM_BOUNDS[1].1;
 const B2_20: usize = GMP_ECM_BOUNDS[1].2;
 const B1_25: usize = GMP_ECM_BOUNDS[2].1;
+const B2_25: usize = GMP_ECM_BOUNDS[2].2;
 
 #[library_benchmark]
 #[bench::bits_64_b1_11k(stage1_input(64, B1_20, Param::Square))]
@@ -62,11 +69,13 @@ fn curve_stage1(input: (Point, Integer)) -> Point {
 }
 
 #[library_benchmark]
-#[bench::bits_64_b2_1_9m(stage2_input(64, B1_20, B2_20))]
-#[bench::bits_128_b2_1_9m(stage2_input(128, B1_20, B2_20))]
-#[bench::bits_256_b2_1_9m(stage2_input(256, B1_20, B2_20))]
-#[bench::bits_512_b2_1_9m(stage2_input(512, B1_20, B2_20))]
-#[bench::bits_256_b2_147k(stage2_input(256, B1_15, B2_15))]
+#[bench::bits_64_b2_1_9m(stage2_input(64, B1_20, B2_20, false))]
+#[bench::bits_128_b2_1_9m(stage2_input(128, B1_20, B2_20, false))]
+#[bench::bits_256_b2_1_9m(stage2_input(256, B1_20, B2_20, false))]
+#[bench::bits_512_b2_1_9m(stage2_input(512, B1_20, B2_20, false))]
+#[bench::bits_256_b2_147k(stage2_input(256, B1_15, B2_15, false))]
+#[bench::poly_bits_256_b2_1_9m(stage2_input(256, B1_20, B2_20, true))]
+#[bench::poly_bits_512_b2_12_7m(stage2_input(512, B1_25, B2_25, true))]
 fn curve_stage2(input: (Point, Stage2Plan)) -> Integer {
     let (q, plan) = black_box(&input);
     black_box(stage2(q, plan))
@@ -98,10 +107,12 @@ fn setup_stage1_multiplier(b1: usize) -> Integer {
 }
 
 #[library_benchmark]
-#[bench::b2_147k((B1_15, B2_15))]
-#[bench::b2_1_9m((B1_20, B2_20))]
-fn setup_stage2_plan(bounds: (usize, usize)) -> Stage2Plan {
-    black_box(Stage2Plan::new(bounds.0, bounds.1))
+#[bench::b2_147k((semiprime_bits(256, SEED), B1_15, B2_15))]
+#[bench::b2_1_9m((semiprime_bits(256, SEED), B1_20, B2_20))]
+#[bench::b2_12_7m((semiprime_bits(256, SEED), B1_25, B2_25))]
+fn setup_stage2_plan(input: (Integer, usize, usize)) -> Stage2Plan {
+    let (n, b1, b2) = black_box(&input);
+    black_box(Stage2Plan::new(n, *b1, *b2))
 }
 
 library_benchmark_group!(

@@ -221,6 +221,8 @@ pub struct Mont<const N: usize> {
     m: [u64; N],
     /// `-1/n mod 2^64`.
     ninv: u64,
+    /// `2^64*R mod n`: multiplying by it maps a residue to the polynomial representation.
+    to_poly: [u64; N],
     n: Integer,
 }
 
@@ -234,9 +236,12 @@ impl<const N: usize> Mont<N> {
         for _ in 0..6 {
             inv = inv.wrapping_mul(2u64.wrapping_sub(m[0].wrapping_mul(inv)));
         }
+        let mut to_poly = Integer::from(1) << (64 * N as u32 + 64);
+        to_poly %= n;
         Mont {
             m,
             ninv: inv.wrapping_neg(),
+            to_poly: Self::limbs(&to_poly),
             n: n.clone(),
         }
     }
@@ -486,6 +491,163 @@ impl Arith for Plain {
 
     fn mul_small(&self, r: &mut Integer, a: &Integer, c: u64) {
         r.assign(a * c);
+        *r %= &self.n;
+    }
+}
+
+/// Arithmetic on the coefficients of polynomials (see [`crate::poly`]), in a representation of
+/// their own where products are formed on plain limbs and reduced later: Kronecker substitution
+/// packs whole polynomials into big integers, so a coefficient of a product is a sum of many
+/// products of residues.
+///
+/// The polynomial representation of `x` is `x*R' mod n` (`R' = 2^(64*(N + 1))` for [`Mont`],
+/// `R' = 1` for [`Plain`]), a value in `[0, n)`: [`PolyArith::redc_wide`] divides by `R'`, so it
+/// maps the product of two such values back to the representation of the product.
+pub trait PolyArith: Arith {
+    /// Number of limbs of the values: `n < 2^(64*limbs)`.
+    fn limbs(&self) -> usize;
+    /// `r` = polynomial representation of the residue `x`.
+    fn to_poly(&self, r: &mut Self::Elem, x: &Self::Elem);
+    /// Writes the limbs of the value of `x` (polynomial representation) to `out`, of length
+    /// [`PolyArith::limbs`].
+    fn write_limbs(&self, x: &Self::Elem, out: &mut [u64]);
+    /// `acc += x*y` (values of the polynomial representation), `acc` having at least
+    /// `2*limbs + 1` limbs (the carry out of `acc` is lost).
+    fn mul_acc(&self, acc: &mut [u64], x: &Self::Elem, y: &Self::Elem);
+    /// `r = t/R' mod n`, for `t < n*R'` given by at most `2*limbs + 2` limbs.
+    fn redc_wide(&self, r: &mut Self::Elem, t: &[u64]);
+
+    /// `r = x*y` in the polynomial representation.
+    fn poly_mul(&self, r: &mut Self::Elem, x: &Self::Elem, y: &Self::Elem) {
+        let mut acc = vec![0; 2 * self.limbs() + 2];
+        self.mul_acc(&mut acc, x, y);
+        self.redc_wide(r, &acc);
+    }
+
+    /// Polynomial representation of `x` (any integer).
+    fn poly_from(&self, x: &Integer) -> Self::Elem {
+        let mut r = self.zero();
+        self.to_poly(&mut r, &self.residue(x));
+        r
+    }
+
+    /// Value in `[0, n)` of `x`, in the polynomial representation.
+    #[cfg(test)]
+    fn poly_value(&self, x: &Self::Elem) -> Integer {
+        let mut limbs = vec![0; self.limbs()];
+        self.write_limbs(x, &mut limbs);
+        let mut r = self.zero();
+        self.redc_wide(&mut r, &limbs);
+        self.write_limbs(&r, &mut limbs);
+        Integer::from_digits(&limbs, Order::Lsf)
+    }
+}
+
+/// `acc += x*y` on limbs, `acc` having at least `x.len() + y.len()` limbs; returns the carry
+/// out of `acc`.
+fn mul_acc_limbs(acc: &mut [u64], x: &[u64], y: &[u64]) -> u64 {
+    let mut top = 0;
+    for (i, &yi) in y.iter().enumerate() {
+        let mut c = 0;
+        for (j, &xj) in x.iter().enumerate() {
+            (acc[i + j], c) = mac(acc[i + j], xj, yi, c);
+        }
+        // Propagate the carry to the end of acc.
+        for a in &mut acc[i + x.len()..] {
+            if c == 0 {
+                break;
+            }
+            (*a, c) = adc(*a, c, 0);
+        }
+        top += c;
+    }
+    top
+}
+
+impl<const N: usize> PolyArith for Mont<N> {
+    fn limbs(&self) -> usize {
+        N
+    }
+
+    fn to_poly(&self, r: &mut [u64; N], x: &[u64; N]) {
+        self.mul(r, x, &self.to_poly);
+    }
+
+    fn write_limbs(&self, x: &[u64; N], out: &mut [u64]) {
+        out.copy_from_slice(x);
+    }
+
+    #[inline]
+    fn mul_acc(&self, acc: &mut [u64], x: &[u64; N], y: &[u64; N]) {
+        // Product on 2N limbs, then added to acc.
+        let mut p = [0u64; 2 * MAX_LIMBS];
+        let p = &mut p[..2 * N];
+        for i in 0..N {
+            let mut c = 0;
+            for j in 0..N {
+                (p[i + j], c) = mac(p[i + j], x[j], y[i], c);
+            }
+            p[i + N] = c;
+        }
+        let mut carry = 0;
+        for (a, &p) in acc.iter_mut().zip(p.iter()) {
+            (*a, carry) = adc(*a, p, carry);
+        }
+        for a in &mut acc[2 * N..] {
+            (*a, carry) = adc(*a, 0, carry);
+        }
+    }
+
+    /// Montgomery reduction by `N + 1` limbs: `(t + q*n)/R' < t/R' + n < 2n`.
+    fn redc_wide(&self, r: &mut [u64; N], t: &[u64]) {
+        let m = &self.m;
+        let mut buf = [0u64; 2 * MAX_LIMBS + 2];
+        let buf = &mut buf[..2 * N + 2];
+        buf[..t.len()].copy_from_slice(t);
+        // Step i clears limb i; hi is the carry into limb i + N + 1.
+        let mut hi = 0;
+        for i in 0..=N {
+            let q = buf[i].wrapping_mul(self.ninv);
+            let mut c = 0;
+            for j in 0..N {
+                (buf[i + j], c) = mac(buf[i + j], q, m[j], c);
+            }
+            let (s, c1) = adc(buf[i + N], c, 0);
+            let (s, c2) = adc(s, hi, 0);
+            buf[i + N] = s;
+            hi = c1 | c2;
+        }
+        let top = buf[2 * N + 1] + hi;
+        let mut v = [0; N];
+        v.copy_from_slice(&buf[N + 1..2 * N + 1]);
+        self.reduce_once(r, &v, top);
+    }
+}
+
+impl PolyArith for Plain {
+    fn limbs(&self) -> usize {
+        self.n.significant_bits().div_ceil(64) as usize
+    }
+
+    fn to_poly(&self, r: &mut Integer, x: &Integer) {
+        r.assign(x);
+    }
+
+    fn write_limbs(&self, x: &Integer, out: &mut [u64]) {
+        x.write_digits(out, Order::Lsf);
+    }
+
+    fn mul_acc(&self, acc: &mut [u64], x: &Integer, y: &Integer) {
+        let limbs = |v: &Integer| {
+            let mut digits = vec![0; v.significant_digits::<u64>()];
+            v.write_digits(&mut digits, Order::Lsf);
+            digits
+        };
+        mul_acc_limbs(acc, &limbs(x), &limbs(y));
+    }
+
+    fn redc_wide(&self, r: &mut Integer, t: &[u64]) {
+        r.assign_digits(t, Order::Lsf);
         *r %= &self.n;
     }
 }

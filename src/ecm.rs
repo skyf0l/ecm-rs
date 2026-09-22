@@ -90,7 +90,7 @@ pub fn ecm_one_factor(
     }
 
     let k = stage1_multiplier(b1);
-    let plan = Stage2Plan::new(b1, b2);
+    let plan = Stage2Plan::new(n, b1, b2);
     let param = Param::default();
 
     for _ in 0..max_curve {
@@ -693,11 +693,12 @@ mod tests {
         let n = semiprime();
         let (b1, b2) = (100, 10_000);
         let k = stage1_multiplier(b1);
-        let plan = Stage2Plan::new(b1, b2);
-        for sigma in 2..100 {
-            let q = stage1(&square_curve(&n, &Integer::from(sigma)).unwrap(), &k);
-            let g = stage2(&q, &plan);
-            assert_eq!(g, stage2_with(Plain::new(&n), &q, &plan));
+        for plan in [Stage2Plan::pairs(b1, b2), Stage2Plan::poly(&n, b1, b2)] {
+            for sigma in 2..100 {
+                let q = stage1(&square_curve(&n, &Integer::from(sigma)).unwrap(), &k);
+                let g = stage2(&q, &plan);
+                assert_eq!(g, stage2_with(Plain::new(&n), &q, &plan));
+            }
         }
     }
 
@@ -711,7 +712,7 @@ mod tests {
                 Param::Suyama,
                 &Integer::from(9),
                 &k,
-                &Stage2Plan::new(2000, 147_396)
+                &Stage2Plan::new(&semiprime(), 2000, 147_396)
             ),
             CurveOutcome::Stage2(Integer::from(4_009_823))
         );
@@ -729,7 +730,7 @@ mod tests {
         b2: usize,
     ) -> usize {
         let k = stage1_multiplier(b1);
-        let plan = Stage2Plan::new(b1, b2);
+        let plans = [Stage2Plan::pairs(b1, b2), Stage2Plan::poly(n, b1, b2)];
         let primes: Vec<Integer> = Primes::all()
             .skip_while(|&l| l <= b1)
             .take_while(|&l| l <= b2)
@@ -744,19 +745,21 @@ mod tests {
             if q.z_cord.clone().gcd(n) != 1 {
                 continue;
             }
-            let g = stage2(&q, &plan);
-            assert!(n.is_divisible(&g));
             let expected = primes.iter().any(|l| {
                 let g = q.mont_ladder(l).z_cord.gcd(n);
                 g != 1 && &g != n
             });
-            if expected {
-                assert_ne!(
-                    g, 1,
-                    "stage 2 missed a factor: {param:?} {sigma} {b1} {b2} {n}"
-                );
-                checked += 1;
+            for plan in &plans {
+                let g = stage2(&q, plan);
+                assert!(n.is_divisible(&g));
+                if expected {
+                    assert_ne!(
+                        g, 1,
+                        "stage 2 missed a factor: {plan:?} {param:?} {sigma} {b1} {b2} {n}"
+                    );
+                }
             }
+            checked += expected as usize;
         }
         checked
     }
@@ -813,16 +816,21 @@ mod tests {
         // Degenerate curves and non-invertible setups are frequent modulo tiny numbers: a curve
         // either fails or returns a proper factor, it never panics.
         let k = stage1_multiplier(100);
-        let plan = Stage2Plan::new(100, 1000);
+        let plans = [
+            Stage2Plan::pairs(100, 1000),
+            Stage2Plan::poly(&Integer::from(1u64 << 40), 100, 1000),
+        ];
         for n in (9u32..1500).step_by(2) {
             let n = Integer::from(n);
             if n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No {
                 continue;
             }
             for (param, first) in [(Param::Suyama, 6), (Param::Square, 2), (Param::Batch2, 2)] {
-                for sigma in first..first + 20 {
+                for (sigma, plan) in
+                    (first..first + 20).flat_map(|s| plans.iter().map(move |p| (s, p)))
+                {
                     let sigma = Integer::from(sigma);
-                    match run_curve(&n, param, &sigma, &k, &plan) {
+                    match run_curve(&n, param, &sigma, &k, plan) {
                         CurveOutcome::Setup(g)
                         | CurveOutcome::Stage1(g)
                         | CurveOutcome::Stage2(g) => {
