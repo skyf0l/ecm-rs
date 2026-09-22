@@ -2,6 +2,7 @@ use crate::{
     arith::{with_arith, Arith, Factor},
     curve::Curve,
     point::Point,
+    stage2::{stage2_with, Stage2Plan},
 };
 #[cfg(feature = "progress-bar")]
 use indicatif::ProgressBar;
@@ -71,7 +72,7 @@ pub fn ecm_one_factor(
         return Err(Error::BoundsNotEven);
     }
 
-    // Stage 2 needs at least 2 baby steps: `stage2_d(b1, b2) >= 2`.
+    // Stage 2 skips the primes of its wheel, which must be at most `b1`.
     if b1 < 6 || b2 < 4 {
         return Err(Error::BoundsTooSmall);
     }
@@ -89,6 +90,7 @@ pub fn ecm_one_factor(
     }
 
     let k = stage1_multiplier(b1);
+    let plan = Stage2Plan::new(b1, b2);
     let param = Param::default();
 
     for _ in 0..max_curve {
@@ -98,7 +100,7 @@ pub fn ecm_one_factor(
         }
 
         let sigma = random_sigma(n, param, rgen);
-        match run_curve(n, param, &sigma, &k, b1, b2) {
+        match run_curve(n, param, &sigma, &k, &plan) {
             CurveOutcome::Setup(g) | CurveOutcome::Stage1(g) | CurveOutcome::Stage2(g) => {
                 return Ok(g)
             }
@@ -168,14 +170,13 @@ pub enum CurveOutcome {
 
 /// Runs one ECM curve (curve setup, stage 1 and stage 2) of `param` with the given `sigma`.
 ///
-/// `k` must be the stage 1 multiplier returned by [`stage1_multiplier`] for `b1`.
+/// `k` must be the stage 1 multiplier returned by [`stage1_multiplier`] for the `b1` of `plan`.
 pub fn run_curve(
     n: &Integer,
     param: Param,
     sigma: &Integer,
     k: &Integer,
-    b1: usize,
-    b2: usize,
+    plan: &Stage2Plan,
 ) -> CurveOutcome {
     let q = match curve(n, param, sigma) {
         Ok(q) => q,
@@ -197,7 +198,7 @@ pub fn run_curve(
         return CurveOutcome::Failed;
     }
 
-    let g = stage2(&q, b1, b2);
+    let g = stage2(&q, plan);
 
     // Stage 2 Factor found
     if &g != n && g != 1 {
@@ -384,102 +385,13 @@ fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer) -> Point {
     p.on_same_curve(curve.arith.to_integer(&q.x), curve.arith.to_integer(&q.z))
 }
 
-/// Number of baby steps `D` of stage 2.
+/// Stage 2: baby-step giant-step standard continuation, with baby and giant steps normalized
+/// by batch inversions and prime pairing (one multiplication per pair of primes `m*D +- j`).
 ///
-/// `D <= b1 / 2 - 1` keeps `b1 - 2*D` positive: it is the multiplier of the first giant step.
-fn stage2_d(b1: usize, b2: usize) -> usize {
-    b2.isqrt().min(b1 / 2 - 1)
-}
-
-/// Stage 2 - Improved Standard Continuation.
-///
-/// Returns `gcd(g, n)` where `g` is the accumulated product over the primes in `(b1, b2]`.
-/// Requires `b1 >= 6` and `b2 >= 4`, so that `D >= 2`.
-///
-/// The x-coordinates of a point and its inverse are equal, so the primes `r - (2i + 1)` and
-/// `r + (2i + 1)` are both checked by comparing `r*Q` with `S[i] = (2i + 1)*Q`: each giant step
-/// covers `4*D` instead of `2*D`.
-pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
-    with_arith!(&q.modulus, |arith| stage2_with(arith, q, b1, b2))
-}
-
-fn stage2_with<A: Arith>(arith: A, q: &Point, b1: usize, b2: usize) -> Integer {
-    let d = stage2_d(b1, b2);
-    let two_d = 2 * d;
-    let curve = Curve::new(arith, &q.a_24);
-    let a = &curve.arith;
-    let mut scratch = curve.scratch();
-
-    // S[i] = (2*i + 1)*Q
-    let q_xz = curve.point(&q.x_cord, &q.z_cord);
-    let mut q2 = curve.infinity();
-    curve.double(&mut q2, &q_xz, &mut scratch);
-    let mut s = Vec::with_capacity(d);
-    s.push(q_xz.clone());
-    let mut q3 = curve.infinity();
-    curve.add(&mut q3, &q2, &q_xz, &q_xz, &mut scratch);
-    s.push(q3);
-    for i in 2..d {
-        let mut next = curve.infinity();
-        curve.add(&mut next, &s[i - 1], &q2, &s[i - 2], &mut scratch);
-        s.push(next);
-    }
-    let beta: Vec<A::Elem> = s
-        .iter()
-        .map(|s| {
-            let mut b = a.zero();
-            a.mul(&mut b, &s.x, &s.z);
-            b
-        })
-        .collect();
-
-    let mut g = a.residue(&Integer::from(1));
-    let (xq, zq) = (a.factor(&q.x_cord), a.factor(&q.z_cord));
-    let w = curve.ladder(&xq, &zq, &Integer::from(2 * two_d));
-    let mut t = curve.ladder(&xq, &zq, &Integer::from(b1 - two_d));
-    let mut r = curve.ladder(&xq, &zq, &Integer::from(b1 + two_d));
-    let mut next = curve.infinity();
-
-    // Each prime is checked once, even when `rr - delta` and `rr + delta` are both prime.
-    let mut seen = vec![false; d];
-    let mut deltas: Vec<usize> = Vec::with_capacity(two_d);
-    let mut primes = Primes::all().skip_while(|&p| p <= b1).peekable();
-    // Reused by every prime, to avoid allocating in the inner loop.
-    let (mut f, mut diff, mut sum, mut alpha, mut acc) =
-        (a.zero(), a.zero(), a.zero(), a.zero(), a.zero());
-
-    for rr in (b1 + two_d..b2 + two_d).step_by(2 * two_d) {
-        // R = rr*Q, and the primes of this giant step are rr +/- (2*delta + 1)
-        deltas.clear();
-        while let Some(p) = primes.next_if(|&p| p < rr + two_d) {
-            let delta = p.abs_diff(rr) >> 1;
-            if !seen[delta] {
-                seen[delta] = true;
-                deltas.push(delta);
-            }
-        }
-
-        a.mul(&mut alpha, &r.x, &r.z);
-        for &delta in &deltas {
-            seen[delta] = false;
-            // We want to calculate
-            // f = R.x_cord * S[delta].z_cord - S[delta].x_cord * R.z_cord
-            //   = (R.x - S.x) * (R.z + S.z) - alpha + beta[delta]
-            a.sub(&mut diff, &r.x, &s[delta].x);
-            a.add(&mut sum, &r.z, &s[delta].z);
-            a.mul(&mut f, &diff, &sum);
-            a.sub(&mut diff, &f, &alpha);
-            a.add(&mut f, &diff, &beta[delta]);
-            a.mul(&mut acc, &g, &f);
-            std::mem::swap(&mut g, &mut acc);
-        }
-
-        // T, R = R, R + W: R + W is computed from the old R, with difference T = R - W
-        curve.add(&mut next, &r, &w, &t, &mut scratch);
-        std::mem::swap(&mut t, &mut r);
-        std::mem::swap(&mut r, &mut next);
-    }
-    a.gcd(&g)
+/// Returns `gcd(g, n)` where `g` is the accumulated product over the primes in `(b1, b2]` of
+/// `plan` (or a factor found when normalizing the points, possibly `n`), and `1` if `b2 <= b1`.
+pub fn stage2(q: &Point, plan: &Stage2Plan) -> Integer {
+    with_arith!(&q.modulus, |arith| stage2_with(arith, q, plan))
 }
 
 /// Removes the factors of `n` among the first 100 000 primes.
@@ -781,10 +693,11 @@ mod tests {
         let n = semiprime();
         let (b1, b2) = (100, 10_000);
         let k = stage1_multiplier(b1);
+        let plan = Stage2Plan::new(b1, b2);
         for sigma in 2..100 {
             let q = stage1(&square_curve(&n, &Integer::from(sigma)).unwrap(), &k);
-            let g = stage2(&q, b1, b2);
-            assert_eq!(g, stage2_with(Plain::new(&n), &q, b1, b2));
+            let g = stage2(&q, &plan);
+            assert_eq!(g, stage2_with(Plain::new(&n), &q, &plan));
         }
     }
 
@@ -798,8 +711,7 @@ mod tests {
                 Param::Suyama,
                 &Integer::from(9),
                 &k,
-                2000,
-                147_396
+                &Stage2Plan::new(2000, 147_396)
             ),
             CurveOutcome::Stage2(Integer::from(4_009_823))
         );
@@ -807,37 +719,93 @@ mod tests {
 
     /// Stage 2 must find a factor whenever l*Q = O modulo a factor of n for some prime
     /// b1 < l <= b2, unless it finds all factors at once (g = n).
-    fn check_stage2_primes(param: Param, sigmas: std::ops::Range<u64>) {
-        let n = semiprime();
-        let (b1, b2) = (100, 10_000);
+    ///
+    /// Returns the number of curves where stage 2 had a factor to find.
+    fn check_stage2_primes(
+        n: &Integer,
+        param: Param,
+        sigmas: std::ops::Range<u64>,
+        b1: usize,
+        b2: usize,
+    ) -> usize {
         let k = stage1_multiplier(b1);
+        let plan = Stage2Plan::new(b1, b2);
+        let primes: Vec<Integer> = Primes::all()
+            .skip_while(|&l| l <= b1)
+            .take_while(|&l| l <= b2)
+            .map(Integer::from)
+            .collect();
         let mut checked = 0;
         for sigma in sigmas {
-            let q = stage1(&curve(&n, param, &Integer::from(sigma)).unwrap(), &k);
-            if q.z_cord.clone().gcd(&n) != 1 {
+            let Ok(p) = curve(n, param, &Integer::from(sigma)) else {
+                continue;
+            };
+            let q = stage1(&p, &k);
+            if q.z_cord.clone().gcd(n) != 1 {
                 continue;
             }
-            let expected = Primes::all()
-                .skip_while(|&l| l <= b1)
-                .take_while(|&l| l <= b2)
-                .any(|l| {
-                    let g = q.mont_ladder(&Integer::from(l)).z_cord.gcd(&n);
-                    g != 1 && g != n
-                });
+            let g = stage2(&q, &plan);
+            assert!(n.is_divisible(&g));
+            let expected = primes.iter().any(|l| {
+                let g = q.mont_ladder(l).z_cord.gcd(n);
+                g != 1 && &g != n
+            });
             if expected {
-                let g = stage2(&q, b1, b2);
-                assert_ne!(g, 1, "stage 2 missed a factor with sigma = {sigma}");
+                assert_ne!(
+                    g, 1,
+                    "stage 2 missed a factor: {param:?} {sigma} {b1} {b2} {n}"
+                );
                 checked += 1;
+            }
+        }
+        checked
+    }
+
+    #[test]
+    fn stage2_checks_all_primes() {
+        let n = semiprime();
+        for (param, first) in [(Param::Suyama, 6), (Param::Square, 2), (Param::Batch2, 2)] {
+            assert!(check_stage2_primes(&n, param, first..first + 300, 100, 10_000) > 100);
+        }
+    }
+
+    #[test]
+    fn stage2_checks_all_primes_bounds() {
+        // Small bounds, b2 not a multiple of D, b2 <= b1, and D larger than b2.
+        let n = semiprime();
+        let mut checked = 0;
+        for (b1, b2) in [
+            (6, 4),
+            (6, 6),
+            (6, 8),
+            (6, 100),
+            (8, 50),
+            (10, 1000),
+            (12, 3001),
+            (14, 20_000),
+            (100, 10_001),
+            (1000, 999),
+            (2000, 147_397),
+        ] {
+            for param in [Param::Square, Param::Batch2] {
+                checked += check_stage2_primes(&n, param, 2..80, b1, b2);
             }
         }
         assert!(checked > 100);
     }
 
     #[test]
-    fn stage2_checks_all_primes() {
-        check_stage2_primes(Param::Suyama, 6..300);
-        check_stage2_primes(Param::Square, 2..300);
-        check_stage2_primes(Param::Batch2, 2..300);
+    fn stage2_checks_all_primes_limbs() {
+        // A small factor times a large prime: every limb count of `Mont`, and `Plain`.
+        let mut rand = RandState::new();
+        for bits in [64, 100, 192, 320, 512, 700, 1000, 1100] {
+            let mut q = Integer::from(Integer::random_bits(bits, &mut rand));
+            q.set_bit(bits - 1, true);
+            let n = Integer::from(4_009_823) * q.next_prime();
+            let checked = check_stage2_primes(&n, Param::Batch2, 2..60, 100, 5000)
+                + check_stage2_primes(&n, Param::Square, 2..30, 30, 3000);
+            assert!(checked > 5, "{bits} bits: {checked}");
+        }
     }
 
     #[test]
@@ -845,6 +813,7 @@ mod tests {
         // Degenerate curves and non-invertible setups are frequent modulo tiny numbers: a curve
         // either fails or returns a proper factor, it never panics.
         let k = stage1_multiplier(100);
+        let plan = Stage2Plan::new(100, 1000);
         for n in (9u32..1500).step_by(2) {
             let n = Integer::from(n);
             if n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No {
@@ -853,7 +822,7 @@ mod tests {
             for (param, first) in [(Param::Suyama, 6), (Param::Square, 2), (Param::Batch2, 2)] {
                 for sigma in first..first + 20 {
                     let sigma = Integer::from(sigma);
-                    match run_curve(&n, param, &sigma, &k, 100, 1000) {
+                    match run_curve(&n, param, &sigma, &k, &plan) {
                         CurveOutcome::Setup(g)
                         | CurveOutcome::Stage1(g)
                         | CurveOutcome::Stage2(g) => {
