@@ -254,7 +254,12 @@ impl Stage2Plan {
     /// Plan of stage 2 for the primes in `(b1, b2]`. Requires `b1 >= 3`.
     pub fn new(b1: usize, b2: usize) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
-        let wheel = Wheel::new(giant_step(b1, b2));
+        Self::with_giant_step(b1, b2, giant_step(b1, b2))
+    }
+
+    /// Plan with the giant step `d`: a multiple of 6 whose prime factors are `<= b1`.
+    fn with_giant_step(b1: usize, b2: usize, d: usize) -> Self {
+        let wheel = Wheel::new(d);
         let mut pairing = Pairing::new(&wheel, b1, b2);
         let (m_lo, m_hi) = pairing.giant_steps();
         let words = (m_hi + 1).saturating_sub(m_lo) * wheel.words;
@@ -573,6 +578,170 @@ mod tests {
                 assert_eq!(rows, table[start..start + len * words]);
                 m0 += len;
             }
+        }
+    }
+
+    /// Every giant step the cost model can choose: `k*P` for a primorial `P` and `k` below the
+    /// next prime, with at most [`MAX_BABY_STEPS`] baby steps.
+    fn all_giant_steps() -> Vec<usize> {
+        PRIMORIALS
+            .iter()
+            .flat_map(|&(primorial, _, next)| (1..next).map(move |k| k * primorial))
+            .filter(|&d| phi(d) <= MAX_BABY_STEPS)
+            .collect()
+    }
+
+    /// Numbers `<= b2` checked by `plan`: the baby steps `j < D` (a point at infinity makes the
+    /// normalization fail) and both numbers `m*D +- j` of each pair.
+    fn covered(plan: &Stage2Plan) -> Vec<bool> {
+        let (d, words) = (plan.wheel.d, plan.wheel.words);
+        let mut covered = vec![false; plan.b2.max(d) + 3 * d];
+        for (j, &i) in plan.wheel.index.iter().enumerate() {
+            covered[j] = i != u32::MAX;
+        }
+        let table = plan.table.as_ref().unwrap();
+        for m in plan.m_lo..=plan.m_hi {
+            assert!(m >= 1);
+            for j in 1..d {
+                let i = plan.wheel.index[j];
+                if i != u32::MAX
+                    && table[(m - plan.m_lo) * words + i as usize / 64] >> (i % 64) & 1 == 1
+                {
+                    covered[m * d - j] = true;
+                    covered[m * d + j] = true;
+                }
+            }
+        }
+        covered
+    }
+
+    #[test]
+    fn plans_cover_primes() {
+        // Every giant step, with tiny bounds, b2 <= b1, b2 < D, b2 not a multiple of D, and
+        // primes next to b1, b2 and multiples of D.
+        let mut rand = rug::rand::RandState::new();
+        let mut random = |max: usize| {
+            rug::Integer::from(max)
+                .random_below(&mut rand)
+                .to_usize()
+                .unwrap()
+        };
+        for d in all_giant_steps() {
+            let b1_min = *prime_factors(d).last().unwrap();
+            let mut bounds = vec![(b1_min, 4), (b1_min, b1_min), (b1_min, b1_min + 1)];
+            for b1 in [b1_min, b1_min + 1, d - 1, d, d + 1, 3 * d / 2, 5 * d + 1] {
+                for b2 in [
+                    b1 + 1,
+                    b1 + 2,
+                    d - 2,
+                    d - 1,
+                    d,
+                    d + 1,
+                    2 * d - 1,
+                    2 * d + 1,
+                    7 * d,
+                ] {
+                    bounds.push((b1, b2));
+                }
+                bounds.push((b1, b1 + random(20 * d) + 1));
+            }
+            for (b1, b2) in bounds {
+                let plan = Stage2Plan::with_giant_step(b1, b2, d);
+                let covered = covered(&plan);
+                for l in Primes::all()
+                    .skip_while(|&l| l <= b1)
+                    .take_while(|&l| l <= b2)
+                {
+                    assert!(covered[l], "D = {d}, ({b1}, {b2}]: {l} not covered");
+                }
+                let mut pairing = Pairing::new(&plan.wheel, b1, b2);
+                let table = plan.table.as_ref().unwrap();
+                let mut m0 = plan.m_lo;
+                while m0 <= plan.m_hi {
+                    let len = (1 + m0 % 5).min(plan.m_hi + 1 - m0);
+                    let mut rows = vec![0; len * plan.wheel.words];
+                    pairing.fill(&plan.wheel, m0, &mut rows);
+                    let start = (m0 - plan.m_lo) * plan.wheel.words;
+                    assert_eq!(
+                        rows,
+                        table[start..start + rows.len()],
+                        "D = {d}, ({b1}, {b2}]"
+                    );
+                    m0 += len;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stage2_all_giant_steps() {
+        // For each giant step: stage 2 finds p whenever l*Q = O modulo p for a prime l in
+        // (b1, b2], whether l < D (baby step) or not (pair). The larger wheels are only covered by
+        // `plans_cover_primes`: checking l*Q = O for every l would be too slow.
+        let n = Integer::from(4_009_823u64) * Integer::from(99_476_569u64);
+        let mut found = 0;
+        for d in all_giant_steps().into_iter().filter(|&d| d < 30030) {
+            let b1 = (*prime_factors(d).last().unwrap()).max(30);
+            let b2 = b1 + 3 * d + 1000;
+            let plan = Stage2Plan::with_giant_step(b1, b2, d);
+            let streamed = Stage2Plan {
+                table: None,
+                ..plan.clone()
+            };
+            let k = stage1_multiplier(b1);
+            let primes: Vec<Integer> = Primes::all()
+                .skip_while(|&l| l <= b1)
+                .take_while(|&l| l <= b2)
+                .map(Integer::from)
+                .collect();
+            for sigma in 2..30 {
+                let q = stage1(
+                    &curve(&n, Param::Batch2, &Integer::from(sigma)).unwrap(),
+                    &k,
+                );
+                if q.z_cord.clone().gcd(&n) != 1 {
+                    continue;
+                }
+                let g = stage2_with(Mont::<1>::new(&n), &q, &plan);
+                assert_eq!(g, stage2_with(Mont::<1>::new(&n), &q, &streamed));
+                let expected = primes.iter().any(|l| {
+                    let g = q.mont_ladder(l).z_cord.gcd(&n);
+                    g != 1 && g != n
+                });
+                if expected {
+                    assert_ne!(g, 1, "D = {d}, sigma = {sigma}");
+                    found += 1;
+                }
+            }
+        }
+        assert!(found > 20, "{found}");
+    }
+
+    #[test]
+    fn normalize() {
+        let (p, q) = (Integer::from(4_009_823u64), Integer::from(99_476_569u64));
+        let n = Integer::from(&p * &q);
+        let a = Mont::<1>::new(&n);
+        let mut normalizer = Normalizer::new(&a, 4);
+        let residues = |v: &[Integer]| v.iter().map(|v| a.residue(v)).collect::<Vec<_>>();
+        let z = [3, 5, 7, 11].map(Integer::from);
+        let mut x = residues(&[6, 10, 14, 22].map(Integer::from));
+        normalizer.normalize(&a, &mut x, &residues(&z)).unwrap();
+        assert!(x.iter().all(|x| a.to_integer(x) == 2));
+        normalizer.normalize(&a, &mut [], &[]).unwrap();
+
+        // A failed inversion returns a proper factor among the z's, else n.
+        let mut x = residues(&[1, 1, 1].map(Integer::from));
+        for (z, g) in [
+            ([Integer::from(3), q.clone() * 2, Integer::from(5)], &q),
+            ([Integer::ZERO, Integer::from(3), p.clone()], &p),
+            ([p.clone(), q.clone(), Integer::from(1)], &p),
+            ([Integer::from(3), Integer::ZERO, Integer::from(1)], &n),
+        ] {
+            assert_eq!(
+                normalizer.normalize(&a, &mut x, &residues(&z)),
+                Err(g.clone())
+            );
         }
     }
 
