@@ -70,8 +70,8 @@ impl Point {
 
     /// Doubles a point in an elliptic curve in Montgomery form.
     pub fn double(&self) -> Point {
-        let u = Integer::from(&self.x_cord + &self.z_cord).square();
-        let v = Integer::from(&self.x_cord - &self.z_cord).square();
+        let u = Integer::from(&self.x_cord + &self.z_cord).square() % &self.modulus;
+        let v = Integer::from(&self.x_cord - &self.z_cord).square() % &self.modulus;
         let diff = Integer::from(&u - &v);
         let x_cord = (u * &v) % &self.modulus;
         let z_cord = ((v + &self.a_24 * &diff) * diff) % &self.modulus;
@@ -107,13 +107,11 @@ impl Point {
 impl PartialEq for Point {
     /// Two points are equal if X/Z of both points are equal.
     fn eq(&self, other: &Self) -> bool {
-        if self.a_24 != other.a_24 || self.modulus != other.modulus {
-            false
-        } else {
-            self.z_cord.clone().invert(&self.modulus).unwrap() * &self.x_cord % &self.modulus
-                == other.z_cord.clone().invert(&self.modulus).unwrap() * &other.x_cord
-                    % &self.modulus
-        }
+        // X1/Z1 = X2/Z2 without any modular inverse: X1*Z2 = X2*Z1.
+        self.a_24 == other.a_24
+            && self.modulus == other.modulus
+            && Integer::from(&self.x_cord * &other.z_cord) % &self.modulus
+                == Integer::from(&other.x_cord * &self.z_cord) % &self.modulus
     }
 }
 

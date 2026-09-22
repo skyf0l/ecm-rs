@@ -22,6 +22,9 @@ pub enum Error {
     NumberIsPrime,
 }
 
+/// Number of rounds of the probabilistic primality test.
+const PRIMALITY_REPS: u32 = 25;
+
 /// Returns one factor of n using Lenstra's 2 Stage Elliptic curve Factorization
 /// with Suyama's Parameterization. Here Montgomery arithmetic is used for fast
 /// computation of addition and doubling of points in elliptic curve.
@@ -68,7 +71,9 @@ pub fn ecm_one_factor(
         return Err(Error::BoundsTooSmall);
     }
 
-    if n.is_probably_prime(1000) != IsPrime::No {
+    // BPSW only (rug runs `reps - 24` Miller-Rabin rounds on top of it): no composite is known
+    // to pass it, and the caller usually already knows that `n` is composite.
+    if n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No {
         return Err(Error::NumberIsPrime);
     }
 
@@ -188,7 +193,7 @@ pub fn stage1(p: &Point, k: &Integer) -> Point {
 
 /// Number of baby steps `D` of stage 2.
 ///
-/// `D <= b1 / 2 - 1` keeps `b1 - 1 - 2*D` positive: it is the multiplier of the first giant step.
+/// `D <= b1 / 2 - 1` keeps `b1 - 2*D` positive: it is the multiplier of the first giant step.
 fn stage2_d(b1: usize, b2: usize) -> usize {
     b2.isqrt().min(b1 / 2 - 1)
 }
@@ -197,35 +202,52 @@ fn stage2_d(b1: usize, b2: usize) -> usize {
 ///
 /// Returns `gcd(g, n)` where `g` is the accumulated product over the primes in `(b1, b2]`.
 /// Requires `b1 >= 6` and `b2 >= 4`, so that `D >= 2`.
+///
+/// The x-coordinates of a point and its inverse are equal, so the primes `r - (2i + 1)` and
+/// `r + (2i + 1)` are both checked by comparing `r*Q` with `S[i] = (2i + 1)*Q`: each giant step
+/// covers `4*D` instead of `2*D`.
 pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
     let n = &q.modulus;
     let d = stage2_d(b1, b2);
     let two_d = 2 * d;
-    let mut beta: Vec<Integer> = vec![Integer::default(); d + 1];
-    let mut s: Vec<Point> = vec![Point::default(); d + 1];
 
-    s[1] = q.double();
-    s[2] = s[1].double();
-    beta[1] = Integer::from(&s[1].x_cord * &s[1].z_cord) % n;
-    beta[2] = Integer::from(&s[2].x_cord * &s[2].z_cord) % n;
-
-    for d in 3..=(d) {
-        s[d] = s[d - 1].add(&s[1], &s[d - 2]);
-        beta[d] = Integer::from(&s[d].x_cord * &s[d].z_cord) % n;
+    // S[i] = (2*i + 1)*Q
+    let q2 = q.double();
+    let mut s: Vec<Point> = Vec::with_capacity(d);
+    s.push(q.clone());
+    s.push(q2.add(q, q));
+    for i in 2..d {
+        s.push(s[i - 1].add(&q2, &s[i - 2]));
     }
+    let beta: Vec<Integer> = s
+        .iter()
+        .map(|s| Integer::from(&s.x_cord * &s.z_cord) % n)
+        .collect();
 
     let mut g = Integer::from(1);
-    let b = b1 - 1;
-    let mut t = q.mont_ladder(&Integer::from(b - two_d));
-    let mut r = q.mont_ladder(&Integer::from(b));
+    let w = q.mont_ladder(&Integer::from(2 * two_d));
+    let mut t = q.mont_ladder(&Integer::from(b1 - two_d));
+    let mut r = q.mont_ladder(&Integer::from(b1 + two_d));
 
-    // R = rr*Q: primes q in [rr + 2, rr + 2*D] are checked with S[delta] = 2*delta*Q,
-    // where q = rr + 2*delta.
-    let mut primes = Primes::all().skip_while(|&q| q < b + 2).peekable();
-    for rr in (b..b2).step_by(two_d) {
+    // Each prime is checked once, even when `rr - delta` and `rr + delta` are both prime.
+    let mut seen = vec![false; d];
+    let mut deltas: Vec<usize> = Vec::with_capacity(two_d);
+    let mut primes = Primes::all().skip_while(|&p| p <= b1).peekable();
+
+    for rr in (b1 + two_d..b2 + two_d).step_by(2 * two_d) {
+        // R = rr*Q, and the primes of this giant step are rr +/- (2*delta + 1)
+        deltas.clear();
+        while let Some(p) = primes.next_if(|&p| p < rr + two_d) {
+            let delta = p.abs_diff(rr) >> 1;
+            if !seen[delta] {
+                seen[delta] = true;
+                deltas.push(delta);
+            }
+        }
+
         let alpha = Integer::from(&r.x_cord * &r.z_cord) % n;
-        while let Some(q) = primes.next_if(|&q| q <= rr + two_d) {
-            let delta = (q - rr) / 2;
+        for &delta in &deltas {
+            seen[delta] = false;
             // We want to calculate
             // f = R.x_cord * S[delta].z_cord - S[delta].x_cord * R.z_cord
             let f = Integer::from(&r.x_cord - &s[delta].x_cord)
@@ -234,8 +256,9 @@ pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
                 + &beta[delta];
             g = (g * f) % n;
         }
-        // T, R = R, R + S[D]: R + S[D] is computed from the old R, with difference T = R - S[D]
-        let next = r.add(&s[d], &t);
+
+        // T, R = R, R + W: R + W is computed from the old R, with difference T = R - W
+        let next = r.add(&w, &t);
         t = std::mem::replace(&mut r, next);
     }
     g.gcd(n)
@@ -326,12 +349,23 @@ pub fn ecm_with_params(
     seed: usize,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<HashMap<Integer, usize>, Error> {
-    let (mut factors, mut n) = trial_division(n);
+    if !b1.is_multiple_of(2) || !b2.is_multiple_of(2) {
+        return Err(Error::BoundsNotEven);
+    }
+    if b1 < 6 || b2 < 4 {
+        return Err(Error::BoundsTooSmall);
+    }
+
+    let (mut factors, n) = trial_division(n);
 
     let mut rand_state = RandState::new();
     rand_state.seed(&seed.into());
 
-    while n != 1 {
+    // Composite factors left to split, with the multiplicity they have in the original number.
+    let mut queue = Vec::new();
+    sort_factor(n, 1, &mut factors, &mut queue);
+
+    while let Some((n, exponent)) = queue.pop() {
         let factor = ecm_one_factor(
             &n,
             b1,
@@ -340,20 +374,60 @@ pub fn ecm_with_params(
             &mut rand_state,
             #[cfg(feature = "progress-bar")]
             pb,
-        )
-        .unwrap_or(n.clone());
+        )?;
 
-        while n.is_divisible(&factor) {
-            n /= &factor;
-            *factors.entry(factor.clone()).or_insert(0) += 1;
+        // `factor` may itself be composite: both parts go through `sort_factor` again.
+        let mut cofactor = n;
+        let mut multiplicity = 0;
+        while cofactor.is_divisible(&factor) {
+            cofactor /= &factor;
+            multiplicity += 1;
         }
+        sort_factor(factor, exponent * multiplicity, &mut factors, &mut queue);
+        sort_factor(cofactor, exponent, &mut factors, &mut queue);
     }
 
     Ok(factors)
 }
 
+/// Records `n^exponent`: a prime goes to `factors`, a perfect power is reduced to its root, and
+/// any other composite is queued for [`ecm_one_factor`].
+fn sort_factor(
+    n: Integer,
+    exponent: usize,
+    factors: &mut HashMap<Integer, usize>,
+    queue: &mut Vec<(Integer, usize)>,
+) {
+    if n == 1 {
+        return;
+    }
+    if n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No {
+        *factors.entry(n).or_insert(0) += exponent;
+        return;
+    }
+    match perfect_power(&n) {
+        Some((root, power)) => sort_factor(root, exponent * power as usize, factors, queue),
+        None => queue.push((n, exponent)),
+    }
+}
+
+/// Writes `n` as `root^power` with the smallest possible `root`, if it is a perfect power.
+fn perfect_power(n: &Integer) -> Option<(Integer, u32)> {
+    if !n.is_perfect_power() {
+        return None;
+    }
+    for power in Primes::all().take_while(|&p| p as u32 <= n.significant_bits()) {
+        let (root, remainder) = n.clone().root_rem(Integer::new(), power as u32);
+        if remainder == 0 {
+            return Some((root, power as u32));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
+    use rug::ops::Pow;
     use std::str::FromStr;
 
     use super::*;
@@ -445,6 +519,67 @@ mod tests {
             Ok(g) => assert!(g != 1 && g != n && n.is_divisible(&g)),
             Err(e) => assert!(matches!(e, Error::ECMFailed)),
         }
+    }
+
+    fn ecm_with_params(
+        n: &Integer,
+        b1: usize,
+        b2: usize,
+        max_curve: usize,
+    ) -> Result<HashMap<Integer, usize>, Error> {
+        super::ecm_with_params(
+            n,
+            b1,
+            b2,
+            max_curve,
+            1234,
+            #[cfg(feature = "progress-bar")]
+            None,
+        )
+    }
+
+    #[test]
+    fn failure_is_an_error() {
+        // Bounds far too small for a 8-digit factor: no wrong factorization, an error.
+        assert!(matches!(
+            ecm_with_params(&semiprime(), 6, 100, 2),
+            Err(Error::ECMFailed)
+        ));
+    }
+
+    #[test]
+    fn driver_checks_bounds() {
+        assert!(matches!(
+            ecm_with_params(&semiprime(), 3, 100, 10),
+            Err(Error::BoundsNotEven)
+        ));
+        assert!(matches!(
+            ecm_with_params(&semiprime(), 4, 100, 10),
+            Err(Error::BoundsTooSmall)
+        ));
+    }
+
+    #[test]
+    fn perfect_power_of_prime() {
+        let p = Integer::from(2_802_377);
+        let n = p.clone().pow(3);
+        assert_eq!(
+            ecm_with_params(&n, 2000, 147_396, 10).unwrap(),
+            HashMap::from([(p, 3)])
+        );
+    }
+
+    #[test]
+    fn perfect_power_of_composite() {
+        // (4009823 * 99476569)^2: the root is composite and still has to be split.
+        let n = semiprime().pow(2);
+        assert_eq!(
+            ecm_with_params(&n, 2000, 147_396, 100).unwrap(),
+            HashMap::from([
+                (Integer::from(4_009_823), 2),
+                (Integer::from(99_476_569), 2)
+            ])
+        );
     }
 
     #[test]
