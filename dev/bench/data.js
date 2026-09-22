@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790041457597,
+  "lastUpdate": 1790041458879,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -553,6 +553,42 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/8a8bb275db20bc6e8d4fabc6adc12b7293da6b5e"
         },
         "date": 1790019267039,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 250,
+            "unit": "curves",
+            "extra": "found 4/1000 curves (stage 1: 4, stage 2: 0, setup: 0)\n95% CI: 98..642 curves\nGMP-ECM reference: ~25 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 500,
+            "unit": "curves",
+            "extra": "found 2/1000 curves (stage 1: 2, stage 2: 0, setup: 0)\n95% CI: 138..1823 curves\nGMP-ECM reference: ~90 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "committer": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "distinct": true,
+          "id": "feb6a244a5d530bce1cecba75c67baa23858b91a",
+          "message": "chore(deps): update rust crate indicatif to v0.18.6",
+          "timestamp": "2026-09-22T01:41:14Z",
+          "tree_id": "cac5935194a550ad4470126866110684d9a3ef83",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/feb6a244a5d530bce1cecba75c67baa23858b91a"
+        },
+        "date": 1790041458866,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
