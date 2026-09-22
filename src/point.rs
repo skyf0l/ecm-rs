@@ -1,4 +1,6 @@
-use rug::{Assign, Integer};
+#[cfg(any(test, feature = "bench"))]
+use rug::Assign;
+use rug::Integer;
 use std::rc::Rc;
 
 /// Montgomery form of Points in an elliptic curve.
@@ -15,6 +17,10 @@ use std::rc::Rc;
 ///
 /// `a_24` and the modulus are shared by all the points of a curve (cloning a point doesn't copy
 /// them).
+///
+/// This is the interface type of the stages, and its operations are a simple reference
+/// implementation (for tests and benchmarks only): the stages compute in Montgomery
+/// representation, see `crate::curve`.
 ///
 /// References
 /// ----------
@@ -50,7 +56,7 @@ impl Point {
     }
 
     /// Point with the given coordinates, on the same curve as `self`.
-    fn on_same_curve(&self, x_cord: Integer, z_cord: Integer) -> Point {
+    pub(crate) fn on_same_curve(&self, x_cord: Integer, z_cord: Integer) -> Point {
         Point {
             x_cord,
             z_cord,
@@ -62,6 +68,7 @@ impl Point {
     /// Empty integer large enough for the intermediate results of `add` and `double` (up to 5
     /// times the size of the modulus, before reduction): computing in place in it never needs
     /// to reallocate.
+    #[cfg(any(test, feature = "bench"))]
     fn scratch(&self) -> Integer {
         Integer::with_capacity(5 * self.modulus.significant_bits() as usize + 64)
     }
@@ -78,6 +85,7 @@ impl Point {
     ///
     /// - `Q`: Point on the curve in Montgomery form.
     /// - `diff`: `self - Q`
+    #[cfg(any(test, feature = "bench"))]
     pub fn add(&self, q: &Point, diff: &Point) -> Point {
         let n: &Integer = &self.modulus;
         let (mut u, mut v, mut t) = (self.scratch(), self.scratch(), self.scratch());
@@ -106,6 +114,7 @@ impl Point {
     }
 
     /// Doubles a point in an elliptic curve in Montgomery form.
+    #[cfg(any(test, feature = "bench"))]
     pub fn double(&self) -> Point {
         let n: &Integer = &self.modulus;
         let (mut u, mut v, mut diff) = (self.scratch(), self.scratch(), self.scratch());
@@ -138,6 +147,7 @@ impl Point {
     /// # Parameters
     ///
     /// - `k`: The positive integer multiplier
+    #[cfg(any(test, feature = "bench"))]
     pub fn mont_ladder(&self, k: &Integer) -> Point {
         let mut q = self.clone();
         let mut r = self.double();

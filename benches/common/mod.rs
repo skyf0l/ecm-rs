@@ -7,7 +7,7 @@ use rug::{rand::RandState, Integer};
 /// Seed used for every generated input, so all runs measure exactly the same work.
 pub const SEED: u64 = 0xEC0;
 
-/// Fixed Suyama parameter for single-curve benchmarks.
+/// Fixed curve parameter `sigma` for single-curve benchmarks (valid for every `Param`).
 pub const SIGMA: u64 = 1_234_567;
 
 /// Stage bounds recommended by GMP-ECM for a factor of `digits` decimal digits:
