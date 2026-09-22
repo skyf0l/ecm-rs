@@ -10,12 +10,15 @@
 //!
 //! ```text
 //! cargo run --release --features bench --example success_rate -- \
-//!     [--sizes 15,20,25] [--numbers 20] [--curves 50] [--json out.json] [--compare base.json]
+//!     [--sizes 15,20,25] [--numbers 20] [--curves 50] [--json out.json] [--compare base.json] \
+//!     [--markdown comparison.md]
 //! ```
 //!
 //! - `--json`: writes results in the `customSmallerIsBetter` format of
 //!   github-action-benchmark.
 //! - `--compare`: prints a markdown table comparing the results with a previous `--json` file.
+//!   A change is only marked better or worse when the 95% confidence intervals don't overlap.
+//! - `--markdown`: also writes that table to a file.
 
 #[path = "../benches/common/mod.rs"]
 mod common;
@@ -44,6 +47,7 @@ struct Args {
     curves: u64,
     json: Option<String>,
     compare: Option<String>,
+    markdown: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -53,6 +57,7 @@ fn parse_args() -> Args {
         curves: 50,
         json: None,
         compare: None,
+        markdown: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -68,6 +73,7 @@ fn parse_args() -> Args {
             "--curves" => args.curves = value().parse().unwrap(),
             "--json" => args.json = Some(value()),
             "--compare" => args.compare = Some(value()),
+            "--markdown" => args.markdown = Some(value()),
             _ => panic!("unknown argument {arg}"),
         }
     }
@@ -214,26 +220,55 @@ fn main() {
     }
 
     if let Some(path) = &args.compare {
-        print_comparison(&std::fs::read_to_string(path).unwrap(), &results);
+        let table = comparison(&std::fs::read_to_string(path).unwrap(), &results);
+        println!("\n{table}");
+        if let Some(markdown) = &args.markdown {
+            std::fs::write(markdown, table).unwrap();
+        }
     }
 }
 
-/// Prints a markdown table comparing `results` with a previous JSON output.
-fn print_comparison(base: &str, results: &[Value]) {
+/// 95% confidence interval of the expected curves, from the `extra` field of a result.
+fn interval(result: &Value) -> (f64, f64) {
+    let extra = result["extra"].as_str().unwrap();
+    let start = extra.find("95% CI: ").unwrap() + "95% CI: ".len();
+    let end = start + extra[start..].find(" curves").unwrap();
+    let (low, high) = extra[start..end].split_once("..").unwrap();
+    (low.parse().unwrap(), high.parse().unwrap_or(f64::INFINITY))
+}
+
+/// Markdown table comparing `results` with a previous JSON output (fewer curves is better).
+fn comparison(base: &str, results: &[Value]) -> String {
     let base: Vec<Value> = serde_json::from_str(base).unwrap();
-    println!();
-    println!("| Benchmark | Base | Current | Change |");
-    println!("|---|---:|---:|---:|");
+    let mut table = String::from(
+        "### Curve success rate\n\n| | Factor | Base | PR | Change |\n|---|---|---:|---:|---:|\n",
+    );
     for result in results {
         let name = result["name"].as_str().unwrap();
+        let name = name.strip_prefix("expected curves, ").unwrap_or(name);
         let value = result["value"].as_f64().unwrap();
-        match base.iter().find(|b| b["name"] == result["name"]) {
+        let (low, high) = interval(result);
+        let row = match base.iter().find(|b| b["name"] == result["name"]) {
             Some(b) => {
                 let old = b["value"].as_f64().unwrap();
+                let (old_low, old_high) = interval(b);
+                let mark = if high < old_low {
+                    "🟢"
+                } else if low > old_high {
+                    "🔴"
+                } else {
+                    "⚪"
+                };
                 let change = (value - old) / old * 100.0;
-                println!("| {name} | {old:.1} | {value:.1} | {change:+.1}% |");
+                format!(
+                    "| {mark} | {name} | {old:.1} ({old_low}..{old_high}) | {value:.1} ({low}..{high}) \
+                     | {change:+.1}% |"
+                )
             }
-            None => println!("| {name} | - | {value:.1} | new |"),
-        }
+            None => format!("| | {name} | - | {value:.1} ({low}..{high}) | new |"),
+        };
+        table.push_str(&row);
+        table.push('\n');
     }
+    table
 }
