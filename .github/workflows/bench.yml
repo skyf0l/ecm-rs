@@ -38,6 +38,9 @@ jobs:
     name: Instruction counts
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      # Results were uploaded (even with regressions): the report job can run.
+      uploaded: ${{ steps.upload.outcome == 'success' }}
 
     steps:
     - uses: actions/checkout@v7
@@ -78,30 +81,47 @@ jobs:
         # Back to the runner version of the PR, if the base branch used another one.
         .github/scripts/install-gungraun-runner.sh
 
+    # Regressions (exit code 3) don't stop the job: results are still uploaded and reported on
+    # the PR, and the job fails in its last step. Any other error fails immediately.
     - name: Benchmark
+      id: bench
       run: |
         set -o pipefail
         args=(--save-summary=json)
         if [ "${{ github.event_name }}" = pull_request ]; then
           args+=(--baseline=base --callgrind-limits='ir=2%')
         fi
-        {
-          echo '## Instruction counts'
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
-        status=0
-        cargo bench --locked --features bench --bench ops --bench e2e -- "${args[@]}" \
-          | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
-        echo '```' >> "$GITHUB_STEP_SUMMARY"
-        exit $status
+        echo '## Instruction counts' >> "$GITHUB_STEP_SUMMARY"
+        regressed=false
+        # One bench at a time: cargo stops at the first failing bench target.
+        for bench in e2e ops; do
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          cargo bench --locked --features bench --bench "$bench" -- "${args[@]}" \
+            | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          case $status in
+            0) ;;
+            3) regressed=true ;;
+            *) exit "$status" ;;
+          esac
+        done
+        echo "regressed=$regressed" >> "$GITHUB_OUTPUT"
 
     - name: Convert results
       run: .github/scripts/gungraun-to-benchmark.sh > instructions.json
 
     - uses: actions/upload-artifact@v7
+      id: upload
       with:
         name: instructions
         path: instructions.json
+
+    - name: Fail on regressions
+      if: steps.bench.outputs.regressed == 'true'
+      run: |
+        echo "::error::Instruction count regressions over the 2% limit, see the job summary or the PR comment"
+        exit 1
 
   success-rate:
     name: Curve success rate
@@ -150,10 +170,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [instructions, success-rate]
-    # Fork PRs get a read-only token: they can't comment, the job summaries above still work.
+    # Also runs when the instructions job failed on regressions, as long as its results were
+    # uploaded. Fork PRs get a read-only token: they can't comment, the job summaries above
+    # still work.
     if: >-
-      github.event_name == 'push' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      !cancelled() &&
+      needs.instructions.outputs.uploaded == 'true' &&
+      needs.success-rate.result == 'success' &&
+      (github.event_name == 'push' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       # Push to gh-pages and commit comments (main).
       contents: write
