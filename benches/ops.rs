@@ -43,6 +43,9 @@ fn stage2_input(bits: u32, b1: usize, b2: usize) -> (Point, usize, usize) {
         .unwrap()
 }
 
+/// Rounds used by `ecm_one_factor` and the driver.
+const PRIMALITY_REPS: u32 = 25;
+
 const B1_15: usize = GMP_ECM_BOUNDS[0].1;
 const B2_15: usize = GMP_ECM_BOUNDS[0].2;
 const B1_20: usize = GMP_ECM_BOUNDS[1].1;
@@ -100,13 +103,13 @@ fn setup_trial_division(n: Integer) -> (HashMap<Integer, usize>, Integer) {
     black_box(trial_division(black_box(&n)))
 }
 
-// Same primality test as `ecm_one_factor`, on a prime (worst case: all rounds run).
+// Same primality test as `ecm_one_factor` and the driver, on a prime (worst case: all rounds run).
 #[library_benchmark]
 #[bench::bits_128(prime_bits(128, SEED))]
 #[bench::bits_256(prime_bits(256, SEED))]
 #[bench::bits_512(prime_bits(512, SEED))]
 fn setup_primality(p: Integer) -> IsPrime {
-    black_box(black_box(&p).is_probably_prime(1000))
+    black_box(black_box(&p).is_probably_prime(PRIMALITY_REPS))
 }
 
 #[library_benchmark]
