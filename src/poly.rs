@@ -499,6 +499,109 @@ mod tests {
         }
     }
 
+    /// Polynomial of `len` coefficients whose values in the polynomial representation are all
+    /// `n - 1`: the largest sums of products in a Kronecker slot or a schoolbook accumulator.
+    fn largest_poly<A: PolyArith>(a: &A, len: usize) -> Vec<A::Elem> {
+        let n = a.modulus();
+        let r_prime = if crate::arith::mont_limbs(n) == 0 {
+            Integer::from(1)
+        } else {
+            Integer::from(1) << (64 * (a.limbs() as u32 + 1))
+        };
+        let x = Integer::from(n - 1u32) * r_prime.invert(n).unwrap() % n;
+        let x = a.poly_from(&x);
+        let mut v = vec![0; a.limbs()];
+        a.write_limbs(&x, &mut v);
+        assert_eq!(
+            Integer::from_digits(&v, Order::Lsf),
+            Integer::from(n - 1u32)
+        );
+        vec![x; len]
+    }
+
+    fn check_random_products<A: PolyArith>(a: &A, rand: &mut RandState<'_>) {
+        let n = a.modulus().clone();
+        let mut ws = Workspace::new();
+        let below = |max: usize, rand: &mut RandState<'_>| {
+            Integer::from(max).random_below(rand).to_usize().unwrap()
+        };
+        for i in 0..12 {
+            let lx = 1 + below(if i % 3 == 0 { 200 } else { 30 }, rand);
+            let ly = 1 + below(if i % 4 == 0 { 200 } else { 30 }, rand);
+            let (x, y) = if i % 2 == 0 {
+                (largest_poly(a, lx), largest_poly(a, ly))
+            } else {
+                (random_poly(a, lx, rand), random_poly(a, ly, rand))
+            };
+            let (xv, yv) = (values(a, &x), values(a, &y));
+            let mut r = vec![a.zero(); lx + ly - 1];
+            mul(a, &mut ws, &mut r, &x, &y);
+            assert_eq!(values(a, &r), naive_mul(&xv, &yv, &n), "{lx} {ly}");
+
+            // Monic factors.
+            let one = || std::iter::once(Integer::from(1));
+            let (xm, ym): (Vec<_>, Vec<_>) = (
+                xv.iter().cloned().chain(one()).collect(),
+                yv.iter().cloned().chain(one()).collect(),
+            );
+            let mut r = vec![a.zero(); lx + ly];
+            mul_monic(a, &mut ws, &mut r, &x, &y);
+            assert_eq!(
+                values(a, &r),
+                naive_mul(&xm, &ym, &n)[..lx + ly],
+                "{lx} {ly}"
+            );
+
+            // Middle product by the monic y, lx outputs.
+            let s = if i % 2 == 0 {
+                largest_poly(a, lx + ly)
+            } else {
+                random_poly(a, lx + ly, rand)
+            };
+            let sv = values(a, &s);
+            let mut out = vec![a.zero(); lx];
+            let (mut rev, mut buf, mut t) = (Vec::new(), Vec::new(), a.zero());
+            middle(a, &mut ws, &mut out, &y, &s, &mut rev, &mut buf, &mut t);
+            for (k, out) in values(a, &out).iter().enumerate() {
+                let sum = ym
+                    .iter()
+                    .zip(&sv[k..])
+                    .fold(Integer::new(), |acc, (y, s)| acc + y * s);
+                assert_eq!(*out, sum % &n, "{lx} {ly}");
+            }
+
+            // Inverse of a series given by fewer terms than the precision.
+            let mut f = x;
+            f[0] = a.poly_from(&Integer::from(1));
+            let len = lx + below(40, rand);
+            let g = inverse(a, &mut ws, &f, len);
+            let p = naive_mul(&values(a, &f), &values(a, &g), &n);
+            assert!(
+                p[..len]
+                    .iter()
+                    .enumerate()
+                    .all(|(k, p)| *p == (k == 0) as u32),
+                "{lx} {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn random_products() {
+        // Random lengths around the schoolbook threshold and largest coefficients, for every
+        // limb count and Plain (even or too large n).
+        let mut rand = RandState::new();
+        for limbs in 1..=17u32 {
+            for n in [
+                (Integer::from(1) << (64 * limbs)) - 1u32,
+                (Integer::from(1) << (64 * limbs - 37)) + 1u32,
+                (Integer::from(1) << (64 * limbs)) - 2u32,
+            ] {
+                with_arith!(&n, |a| check_random_products(&a, &mut rand));
+            }
+        }
+    }
+
     /// Evaluates `x` at `v` modulo `n`.
     fn eval(x: &[Integer], v: &Integer, n: &Integer) -> Integer {
         x.iter()
@@ -509,7 +612,7 @@ mod tests {
     fn check_tree<A: PolyArith>(a: &A, rand: &mut RandState<'_>) {
         let n = a.modulus().clone();
         let mut ws = Workspace::new();
-        for d in [1, 2, 3, 5, 8, 13, 16, 31, 33, 100] {
+        for d in [1, 2, 3, 5, 8, 13, 16, 31, 33, 100, 129, 300] {
             let roots: Vec<Integer> = (0..d).map(|_| n.clone().random_below(rand)).collect();
             let leaves: Vec<A::Elem> = roots
                 .iter()

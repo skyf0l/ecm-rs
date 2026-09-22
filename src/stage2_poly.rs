@@ -210,9 +210,9 @@ fn accumulate<A: PolyArith>(
 mod tests {
     use super::*;
     use crate::{
-        arith::{Mont, Plain},
-        ecm::{curve, stage1, stage1_multiplier, Param},
-        stage2::POLY_GIANT_STEPS,
+        arith::{with_arith, Mont, Plain},
+        ecm::{curve, stage1, stage1_multiplier, stage2, Param},
+        stage2::{Stage2Plan, POLY_GIANT_STEPS},
     };
     use primal::Primes;
 
@@ -329,5 +329,44 @@ mod tests {
             }
         }
         assert!(found > 20, "{found}");
+    }
+
+    #[test]
+    fn stage2_large_d1_limbs() {
+        // Large baby-step sets (Kronecker products at every level of the tree, including the
+        // middle products of the evaluation) for every kind of arithmetic: whenever the
+        // baby-step giant-step continuation finds the small factor, so must the polynomial one.
+        let mut rand = rug::rand::RandState::new();
+        let b1 = 100;
+        for (d1, b2, sizes) in [
+            (2310, 1_400_000, &[64, 128, 512, 1024, 1100][..]),
+            (30030, 1_000_000, &[64, 320][..]),
+        ] {
+            for &bits in sizes {
+                let mut big = Integer::from(Integer::random_bits(bits, &mut rand));
+                big.set_bit(bits - 1, true);
+                let n = Integer::from(4_009_823) * big.next_prime();
+                let plan = PolyPlan::new(b1, b2, d1);
+                let pairs = Stage2Plan::pairs(b1, b2);
+                let k = stage1_multiplier(b1);
+                let mut found = 0;
+                for sigma in 2..8 {
+                    let q = stage1(
+                        &curve(&n, Param::Batch2, &Integer::from(sigma)).unwrap(),
+                        &k,
+                    );
+                    if q.z_cord.clone().gcd(&n) != 1 {
+                        continue;
+                    }
+                    let g = with_arith!(&n, |a| stage2_with(a, &q, &plan));
+                    assert_eq!(g, stage2_with(Plain::new(&n), &q, &plan));
+                    if stage2(&q, &pairs) != 1 {
+                        assert_ne!(g, 1, "d1 = {d1}, {bits} bits, sigma = {sigma}");
+                        found += 1;
+                    }
+                }
+                assert!(found > 0, "d1 = {d1}, {bits} bits");
+            }
+        }
     }
 }
