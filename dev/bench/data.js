@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790098673962,
+  "lastUpdate": 1790098675904,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -966,6 +966,42 @@ window.BENCHMARK_DATA = {
             "value": 500,
             "unit": "curves",
             "extra": "found 2/1000 curves (stage 1: 2, stage 2: 0, setup: 0)\n95% CI: 138..1823 curves\nGMP-ECM reference: ~90 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "1ee1d3ac63335478daef752011ae2269e1efc053",
+          "message": "ci(bench): single sticky PR comment, worst changes first",
+          "timestamp": "2026-09-22T21:36:16+04:00",
+          "tree_id": "f18503b7c1f581fd0c528ff9d765e6fd9e525419",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/1ee1d3ac63335478daef752011ae2269e1efc053"
+        },
+        "date": 1790098675891,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 29.41176470588235,
+            "unit": "curves",
+            "extra": "found 34/1000 curves (stage 1: 2, stage 2: 32, setup: 0)\n95% CI: 21..41 curves\nGMP-ECM reference: ~25 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 58.8235294117647,
+            "unit": "curves",
+            "extra": "found 17/1000 curves (stage 1: 1, stage 2: 16, setup: 0)\n95% CI: 37..94 curves\nGMP-ECM reference: ~90 curves"
           }
         ]
       }
