@@ -109,7 +109,6 @@ impl Counts {
 /// Runs `curves` curves on each of `numbers` composites `p * q`, with `p` of `digits` digits.
 fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64, param: Param) -> Counts {
     let k = stage1_multiplier(b1);
-    let plan = Stage2Plan::new(b1, b2);
 
     // (n, sigma) of every curve, drawn up front so results don't depend on thread scheduling.
     let mut tasks = Vec::new();
@@ -128,6 +127,8 @@ fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64, param: 
         }
     }
 
+    // All the numbers have about the same size.
+    let plan = Stage2Plan::new(&tasks[0].0, b1, b2);
     let next = AtomicUsize::new(0);
     let threads = thread::available_parallelism().map_or(1, |n| n.get());
     let results: Vec<Counts> = thread::scope(|s| {

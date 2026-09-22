@@ -8,7 +8,7 @@
 //! `m*D - j` and `m*D + j`. Every number coprime to `D` is covered by two such pairs (with `j`
 //! and with `D - j`), and the [`Pairing`] picks pairs so that most of them cover two primes.
 //! Stage 2 accumulates `g = prod (x(R_m) - x(S_j))` over the chosen pairs, which only depend on
-//! `b1` and `b2`: they are computed once in a [`Stage2Plan`], shared by all curves.
+//! `b1` and `b2`: they are computed once in a [`PairPlan`], shared by all curves.
 //!
 //! Baby and giant steps are normalized to `z = 1` with Montgomery's batch inversion trick (one
 //! modular inversion per batch, and four multiplications per point), so each pair costs one
@@ -17,9 +17,11 @@
 //! `l < D`, which are baby steps.
 
 use crate::{
-    arith::Arith,
+    arith::{Arith, PolyArith},
+    cost::Costs,
     curve::{Curve, Xz},
     point::Point,
+    stage2_poly::{self, PolyPlan},
 };
 use primal::Primes;
 use rug::Integer;
@@ -31,7 +33,7 @@ const GIANT_BATCH: usize = 256;
 /// Largest number of baby steps (they are all kept in memory).
 const MAX_BABY_STEPS: usize = 1 << 17;
 
-/// Largest pair table (in 64-bit words) kept in a [`Stage2Plan`]: larger ones are recomputed by
+/// Largest pair table (in 64-bit words) kept in a [`PairPlan`]: larger ones are recomputed by
 /// every curve, one batch of giant steps at a time.
 const MAX_TABLE_WORDS: usize = 1 << 22;
 
@@ -86,7 +88,7 @@ impl Wheel {
 }
 
 /// Distinct prime factors of `n`.
-fn prime_factors(mut n: usize) -> Vec<usize> {
+pub(crate) fn prime_factors(mut n: usize) -> Vec<usize> {
     let mut primes = Vec::new();
     let mut p = 2;
     while p * p <= n {
@@ -105,7 +107,7 @@ fn prime_factors(mut n: usize) -> Vec<usize> {
 }
 
 /// Euler's totient.
-fn phi(n: usize) -> usize {
+pub(crate) fn phi(n: usize) -> usize {
     prime_factors(n)
         .into_iter()
         .fold(n, |phi, p| phi / p * (p - 1))
@@ -117,7 +119,7 @@ fn phi(n: usize) -> usize {
 /// and one normalization per giant step.
 ///
 /// The prime factors of `D` must be `<= b1`: the wheel skips the primes dividing `D`.
-fn giant_step(b1: usize, b2: usize) -> usize {
+pub(crate) fn giant_step(b1: usize, b2: usize) -> usize {
     let mut best = (usize::MAX, 6);
     for (primorial, largest, next) in PRIMORIALS {
         if largest > b1 {
@@ -237,9 +239,112 @@ impl Pairing {
     }
 }
 
-/// Everything stage 2 needs that only depends on the bounds, shared by all the curves.
+/// Everything stage 2 needs that only depends on the bounds (and the size of `n`), shared by
+/// all the curves: which continuation to run, and its parameters.
 #[derive(Debug, Clone)]
-pub struct Stage2Plan {
+pub enum Stage2Plan {
+    /// Baby-step giant-step continuation with prime pairing (this module): one multiplication
+    /// per pair of primes, cheapest for small `b2`.
+    Pairs(PairPlan),
+    /// Polynomial continuation (product trees, Kronecker substitution): quasi-linear in
+    /// `sqrt(b2)` per block, cheapest for large `b2`.
+    Poly(PolyPlan),
+}
+
+impl Stage2Plan {
+    /// Cheapest plan (according to [`Costs`]) for the primes in `(b1, b2]`, modulo numbers of the
+    /// size of `n`. Requires `b1 >= 3`.
+    pub fn new(n: &Integer, b1: usize, b2: usize) -> Self {
+        assert!(b1 >= 3, "stage 2 requires b1 >= 3");
+        let costs = Costs::new(n.significant_bits() as usize);
+        let d = giant_step(b1, b2);
+        let pairs = costs.pairs_stage2(b1, b2, d, phi(d));
+        let (poly, poly_cost) = best_poly_plan(&costs, b1, b2);
+        if poly_cost < pairs {
+            Stage2Plan::Poly(poly)
+        } else {
+            Stage2Plan::pairs(b1, b2)
+        }
+    }
+
+    /// Plan of the baby-step giant-step continuation. Requires `b1 >= 3`.
+    pub fn pairs(b1: usize, b2: usize) -> Self {
+        Stage2Plan::Pairs(PairPlan::new(b1, b2))
+    }
+
+    /// Plan of the polynomial continuation, for numbers of the size of `n`. Requires `b1 >= 3`.
+    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
+    pub fn poly(n: &Integer, b1: usize, b2: usize) -> Self {
+        assert!(b1 >= 3, "stage 2 requires b1 >= 3");
+        let costs = Costs::new(n.significant_bits() as usize);
+        Stage2Plan::Poly(best_poly_plan(&costs, b1, b2).0)
+    }
+
+    /// Largest `b2' >= b2` such that stage 2 checks every prime in `(b1, b2']`.
+    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
+    pub fn b2(&self) -> usize {
+        match self {
+            Stage2Plan::Pairs(plan) => plan.b2,
+            Stage2Plan::Poly(plan) => plan.b2_covered(),
+        }
+    }
+}
+
+/// Giant steps `d1` of the polynomial continuation: the multiples of 6 with more baby steps
+/// (`phi(d1)/2`) than all the smaller ones (from GMP-ECM's `bestD`).
+pub(crate) const POLY_GIANT_STEPS: [usize; 90] = [
+    12, 18, 30, 42, 60, 90, 120, 150, 210, 240, 270, 330, 420, 510, 630, 840, 1050, 1260, 1470,
+    1680, 1890, 2310, 2730, 3150, 3570, 3990, 4620, 5460, 6090, 6930, 8190, 9240, 10920, 12180,
+    13860, 16170, 18480, 20790, 23100, 30030, 34650, 39270, 43890, 48510, 60060, 66990, 78540,
+    90090, 99330, 120120, 133980, 150150, 180180, 210210, 240240, 270270, 300300, 334950, 371280,
+    420420, 510510, 570570, 600600, 630630, 746130, 870870, 1021020, 1141140, 1291290, 1531530,
+    1711710, 1891890, 2081310, 2312310, 2552550, 2852850, 3183180, 3573570, 3993990, 4594590,
+    5105100, 5705700, 6322470, 7147140, 7987980, 8978970, 10210200, 11741730, 13123110, 14804790,
+];
+
+/// Largest memory (in bytes) for the polynomials of the polynomial continuation.
+const MAX_POLY_MEMORY: f64 = 256.0 * 1024.0 * 1024.0;
+
+/// Cheapest polynomial continuation and its cost: the best giant step `d1`.
+fn best_poly_plan(costs: &Costs, b1: usize, b2: usize) -> (PolyPlan, f64) {
+    let mut best = (PolyPlan::shape_only(b1, b2, 6), f64::INFINITY);
+    for d1 in [6].into_iter().chain(POLY_GIANT_STEPS) {
+        if prime_factors(d1).iter().any(|&p| p > b1) {
+            continue;
+        }
+        let plan = PolyPlan::shape_only(b1, b2, d1);
+        let (_, df, giants) = plan.shape();
+        // The product tree of F (a coefficient per leaf and level), and a few more polynomials.
+        let levels = (usize::BITS - df.leading_zeros()) as f64 + 8.0;
+        if levels * df as f64 * costs.elem_bytes() > MAX_POLY_MEMORY {
+            break;
+        }
+        let cost = costs.poly_stage2(&plan);
+        if cost < best.1 {
+            best = (plan, cost);
+        }
+        if giants < df / 4 {
+            // Larger giant steps only make F larger.
+            break;
+        }
+    }
+    let (_, cost) = best;
+    let d1 = best.0.shape().0;
+    (PolyPlan::new(b1, b2, d1), cost)
+}
+
+/// Stage 2 on the residues of `arith` with `plan`: returns `gcd(g, n)`, see
+/// [`crate::ecm::stage2`].
+pub fn stage2_with<A: PolyArith>(arith: A, q: &Point, plan: &Stage2Plan) -> Integer {
+    match plan {
+        Stage2Plan::Pairs(plan) => pairs_stage2_with(arith, q, plan),
+        Stage2Plan::Poly(plan) => stage2_poly::stage2_with(arith, q, plan),
+    }
+}
+
+/// Plan of the baby-step giant-step continuation: the wheel and the pairs to check.
+#[derive(Debug, Clone)]
+pub struct PairPlan {
     b1: usize,
     b2: usize,
     wheel: Wheel,
@@ -250,7 +355,7 @@ pub struct Stage2Plan {
     table: Option<Vec<u64>>,
 }
 
-impl Stage2Plan {
+impl PairPlan {
     /// Plan of stage 2 for the primes in `(b1, b2]`. Requires `b1 >= 3`.
     pub fn new(b1: usize, b2: usize) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
@@ -270,7 +375,7 @@ impl Stage2Plan {
             }
             table
         });
-        Stage2Plan {
+        PairPlan {
             b1,
             b2,
             wheel,
@@ -282,7 +387,7 @@ impl Stage2Plan {
 }
 
 /// Reusable buffers of the batch inversion.
-struct Normalizer<E> {
+pub(crate) struct Normalizer<E> {
     prefix: Vec<E>,
     inv: E,
     next: E,
@@ -291,7 +396,7 @@ struct Normalizer<E> {
 }
 
 impl<E: Clone> Normalizer<E> {
-    fn new<A: Arith<Elem = E>>(a: &A, len: usize) -> Self {
+    pub(crate) fn new<A: Arith<Elem = E>>(a: &A, len: usize) -> Self {
         Normalizer {
             prefix: vec![a.zero(); len],
             inv: a.zero(),
@@ -306,7 +411,7 @@ impl<E: Clone> Normalizer<E> {
     ///
     /// If some `z[i]` is not invertible, returns `Err(g)` with `g` a non-trivial factor of `n`
     /// found among the `z[i]` if possible, else `n`.
-    fn normalize<A: Arith<Elem = E>>(
+    pub(crate) fn normalize<A: Arith<Elem = E>>(
         &mut self,
         a: &A,
         x: &mut [E],
@@ -345,8 +450,8 @@ impl<E: Clone> Normalizer<E> {
     }
 }
 
-/// Stage 2 on the residues of `arith`: returns `gcd(g, n)`, see [`crate::ecm::stage2`].
-pub fn stage2_with<A: Arith>(arith: A, q: &Point, plan: &Stage2Plan) -> Integer {
+/// Baby-step giant-step stage 2 on the residues of `arith`: returns `gcd(g, n)`.
+fn pairs_stage2_with<A: Arith>(arith: A, q: &Point, plan: &PairPlan) -> Integer {
     let curve = Curve::new(arith, &q.a_24);
     match accumulate(&curve, q, plan) {
         Ok(g) => curve.arith.gcd(&g),
@@ -354,21 +459,23 @@ pub fn stage2_with<A: Arith>(arith: A, q: &Point, plan: &Stage2Plan) -> Integer 
     }
 }
 
-/// Normalized x-coordinates of the baby steps `j*Q`, `j < D` coprime to `D`, or `Err(g)` with a
+/// Normalized x-coordinates of the baby steps `j*Q` for `j < limit`, `j = +-1 mod 6`, with
+/// `index[j] != u32::MAX` (their position in the result, of length `len`), or `Err(g)` with a
 /// factor found by a failed inversion.
-fn baby_steps<A: Arith>(
+pub(crate) fn baby_steps<A: Arith>(
     curve: &Curve<A>,
     q: &Point,
-    wheel: &Wheel,
+    limit: usize,
+    index: &[u32],
+    len: usize,
     normalizer: &mut Normalizer<A::Elem>,
 ) -> Result<Vec<A::Elem>, Integer> {
     let a = &curve.arith;
-    let d = wheel.d;
     let mut scratch = curve.scratch();
-    let mut xs = vec![a.zero(); wheel.len];
-    let mut zs = vec![a.zero(); wheel.len];
+    let mut xs = vec![a.zero(); len];
+    let mut zs = vec![a.zero(); len];
     let mut store = |j: usize, p: &Xz<A::Elem>| {
-        let i = wheel.index[j];
+        let i = index[j];
         if i != u32::MAX {
             xs[i as usize].clone_from(&p.x);
             zs[i as usize].clone_from(&p.z);
@@ -389,9 +496,9 @@ fn baby_steps<A: Arith>(
     let mut next = curve.infinity();
     for (first, diff, mut j) in [(q1.clone(), q5.clone(), 1), (q5, q1, 5)] {
         let (mut prev, mut cur) = (diff, first);
-        loop {
+        while j < limit {
             store(j, &cur);
-            if j + 6 >= d {
+            if j + 6 >= limit {
                 break;
             }
             curve.add(&mut next, &cur, &q6, &prev, &mut scratch);
@@ -405,11 +512,7 @@ fn baby_steps<A: Arith>(
 }
 
 /// Product `g` of stage 2, or `Err(g)` with a factor found by a failed inversion.
-fn accumulate<A: Arith>(
-    curve: &Curve<A>,
-    q: &Point,
-    plan: &Stage2Plan,
-) -> Result<A::Elem, Integer> {
+fn accumulate<A: Arith>(curve: &Curve<A>, q: &Point, plan: &PairPlan) -> Result<A::Elem, Integer> {
     let a = &curve.arith;
     let wheel = &plan.wheel;
     let (d, words) = (wheel.d, wheel.words);
@@ -420,7 +523,7 @@ fn accumulate<A: Arith>(
     }
 
     // Also checks the primes l < D: l*Q = O modulo p makes z(l*Q) = 0 mod p.
-    let baby = baby_steps(curve, q, wheel, &mut normalizer)?;
+    let baby = baby_steps(curve, q, d, &wheel.index, wheel.len, &mut normalizer)?;
     let (m_lo, m_hi) = (plan.m_lo, plan.m_hi);
     if m_lo > m_hi {
         return Ok(one);
@@ -515,6 +618,32 @@ mod tests {
     }
 
     #[test]
+    fn auto_plan() {
+        // The baby-step giant-step continuation for small b2, the polynomial one for large b2,
+        // earlier for larger numbers; both cover at least (b1, b2].
+        for (bits, b1, b2, poly) in [
+            (128, 11_000, 1_873_422, false),
+            (256, 11_000, 1_873_422, false),
+            (256, 250_000, 128_992_510, true),
+            (512, 50_000, 12_746_592, true),
+            (1024, 3_000_000, 10_000_000_000, true),
+            (2000, 50_000, 12_746_592, true),
+        ] {
+            let n = (Integer::from(1) << bits) - 1u32;
+            let plan = Stage2Plan::new(&n, b1, b2);
+            assert_eq!(
+                matches!(plan, Stage2Plan::Poly(_)),
+                poly,
+                "{bits} {b1} {b2}"
+            );
+            assert!(plan.b2() >= b2);
+            if let Stage2Plan::Poly(plan) = &plan {
+                assert!(plan.b2_covered() < b2 + plan.shape().0);
+            }
+        }
+    }
+
+    #[test]
     fn giant_step_primes_below_b1() {
         for b1 in 3..100 {
             for b2 in [1, b1 + 1, 1000, 1_000_000, 100_000_000] {
@@ -538,7 +667,7 @@ mod tests {
             (2000, 147_396),
             (11_000, 1_873_422),
         ] {
-            let plan = Stage2Plan::new(b1, b2);
+            let plan = PairPlan::new(b1, b2);
             let (d, words) = (plan.wheel.d, plan.wheel.words);
             let table = plan.table.as_ref().unwrap();
             let mut covered = vec![false; b2 + 3 * d];
@@ -593,7 +722,7 @@ mod tests {
 
     /// Numbers `<= b2` checked by `plan`: the baby steps `j < D` (a point at infinity makes the
     /// normalization fail) and both numbers `m*D +- j` of each pair.
-    fn covered(plan: &Stage2Plan) -> Vec<bool> {
+    fn covered(plan: &PairPlan) -> Vec<bool> {
         let (d, words) = (plan.wheel.d, plan.wheel.words);
         let mut covered = vec![false; plan.b2.max(d) + 3 * d];
         for (j, &i) in plan.wheel.index.iter().enumerate() {
@@ -646,7 +775,7 @@ mod tests {
                 bounds.push((b1, b1 + random(20 * d) + 1));
             }
             for (b1, b2) in bounds {
-                let plan = Stage2Plan::with_giant_step(b1, b2, d);
+                let plan = PairPlan::with_giant_step(b1, b2, d);
                 let covered = covered(&plan);
                 for l in Primes::all()
                     .skip_while(|&l| l <= b1)
@@ -683,8 +812,8 @@ mod tests {
         for d in all_giant_steps().into_iter().filter(|&d| d < 30030) {
             let b1 = (*prime_factors(d).last().unwrap()).max(30);
             let b2 = b1 + 3 * d + 1000;
-            let plan = Stage2Plan::with_giant_step(b1, b2, d);
-            let streamed = Stage2Plan {
+            let plan = PairPlan::with_giant_step(b1, b2, d);
+            let streamed = PairPlan {
                 table: None,
                 ..plan.clone()
             };
@@ -702,8 +831,8 @@ mod tests {
                 if q.z_cord.clone().gcd(&n) != 1 {
                     continue;
                 }
-                let g = stage2_with(Mont::<1>::new(&n), &q, &plan);
-                assert_eq!(g, stage2_with(Mont::<1>::new(&n), &q, &streamed));
+                let g = pairs_stage2_with(Mont::<1>::new(&n), &q, &plan);
+                assert_eq!(g, pairs_stage2_with(Mont::<1>::new(&n), &q, &streamed));
                 let expected = primes.iter().any(|l| {
                     let g = q.mont_ladder(l).z_cord.gcd(&n);
                     g != 1 && g != n
@@ -751,9 +880,9 @@ mod tests {
         let n = Integer::from(4_009_823u64) * Integer::from(99_476_569u64);
         let (b1, b2) = (1000, 1_000_000);
         let k = stage1_multiplier(b1);
-        let plan = Stage2Plan::new(b1, b2);
+        let plan = PairPlan::new(b1, b2);
         assert!(plan.m_hi - plan.m_lo > 2 * GIANT_BATCH);
-        let streamed = Stage2Plan {
+        let streamed = PairPlan {
             table: None,
             ..plan.clone()
         };

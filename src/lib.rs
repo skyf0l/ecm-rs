@@ -3,10 +3,13 @@
 #![warn(missing_docs)]
 
 mod arith;
+mod cost;
 mod curve;
 mod ecm;
 mod point;
+mod poly;
 mod stage2;
+mod stage2_poly;
 
 pub use crate::ecm::{ecm, ecm_one_factor, ecm_with_params, Error};
 
