@@ -554,6 +554,115 @@ mod tests {
         }
     }
 
+    /// Random value below `2^bits` whose limbs are mostly `0`, `1` or all ones: carry and
+    /// borrow edge cases that uniform random values almost never hit.
+    fn adversarial(bits: u32, rand: &mut RandState<'_>) -> Integer {
+        let mut x = Integer::new();
+        for i in 0..bits.div_ceil(64) {
+            let limb = match rand.bits(2) {
+                0 => Integer::ZERO,
+                1 => Integer::from(1),
+                2 => Integer::from(u64::MAX),
+                _ => Integer::from(Integer::random_bits(64, rand)),
+            };
+            x += limb << (64 * i);
+        }
+        x.keep_bits(bits)
+    }
+
+    #[test]
+    fn mont_edge_cases() {
+        let mut rand = RandState::new();
+        for limbs in 1..=MAX_LIMBS as u32 + 1 {
+            let bits = 64 * limbs;
+            let r = Integer::from(Integer::u_pow_u(2, bits));
+            let mut moduli = vec![
+                // Largest modulus, all limbs ones.
+                Integer::from(&r - 1),
+                Integer::from(&r - 3),
+                // Smallest modulus of this size: top limb 1.
+                Integer::from(Integer::u_pow_u(2, bits - 64)) + 1,
+                // Top limb 1, low limbs all ones.
+                Integer::from(Integer::u_pow_u(2, bits - 63)) - 1,
+                // Just above R/2.
+                Integer::from(&r >> 1) + 1,
+            ];
+            moduli.extend((0..8).map(|_| adversarial(bits, &mut rand) | 1u32));
+            for n in moduli {
+                if n <= 1 {
+                    continue;
+                }
+                let size = n.significant_bits().div_ceil(64) as usize;
+                let expected = if n.is_odd() && size <= MAX_LIMBS {
+                    size
+                } else {
+                    0
+                };
+                assert_eq!(mont_limbs(&n), expected);
+                with_arith!(&n, |a| check_edges(&a, &mut rand));
+            }
+        }
+    }
+
+    /// Checks [`Arith::mul`], [`Arith::sqr`] and [`Arith::mul_small`] on residues near `0`,
+    /// near `n` and with limbs all ones.
+    fn check_edges<A: Arith>(a: &A, rand: &mut RandState<'_>) {
+        let n = a.modulus().clone();
+        let bits = n.significant_bits();
+        let mut values = vec![
+            Integer::ZERO,
+            Integer::from(1),
+            Integer::from(2),
+            Integer::from(&n - 1),
+            Integer::from(&n - 2),
+            Integer::from(&n >> 1),
+            Integer::from(&n >> 1) + 1u32,
+        ];
+        values.extend((0..10).map(|_| adversarial(bits, rand) % &n));
+        values.extend((0..5).map(|_| n.clone().random_below(rand)));
+        for x in &mut values {
+            *x = reduce(x, &n);
+        }
+        let mut r = a.zero();
+        for x in &values {
+            let ex = a.residue(x);
+            assert_eq!(a.to_integer(&ex), *x, "residue {x} mod {n}");
+            a.sqr(&mut r, &ex);
+            assert_eq!(a.to_integer(&r), Integer::from(x * x) % &n, "{x}^2 mod {n}");
+            for c in [1, 2, u64::MAX - 1, u64::MAX, rand.bits(32) as u64] {
+                // One-limb form `c` of `c/2^64` (Mont) or of `c` (Plain).
+                let c_int = Integer::from(c);
+                for y in [&c_int * inverse_r(&n) % &n, c_int % &n] {
+                    if a.small(&y) == Some(c) {
+                        a.mul_small(&mut r, &ex, c);
+                        let expected = Integer::from(x * &y) % &n;
+                        assert_eq!(a.to_integer(&r), expected, "{x}*{y} mod {n}");
+                    }
+                }
+            }
+            for y in &values {
+                let ey = a.residue(y);
+                a.mul(&mut r, &ex, &ey);
+                assert_eq!(
+                    a.to_integer(&r),
+                    Integer::from(x * y) % &n,
+                    "{x}*{y} mod {n}"
+                );
+                a.add(&mut r, &ex, &ey);
+                assert_eq!(a.to_integer(&r), Integer::from(x + y) % &n);
+                a.sub(&mut r, &ex, &ey);
+                assert_eq!(a.to_integer(&r), reduce(&Integer::from(x - y), &n));
+            }
+        }
+    }
+
+    /// `1/2^64 mod n`, or `1` if `n` is even.
+    fn inverse_r(n: &Integer) -> Integer {
+        Integer::from(Integer::u_pow_u(2, 64))
+            .invert(n)
+            .unwrap_or(Integer::from(1))
+    }
+
     #[test]
     fn plain_matches_integers() {
         let mut rand = RandState::new();
