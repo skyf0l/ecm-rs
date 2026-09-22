@@ -63,6 +63,11 @@ pub fn ecm_one_factor(
         return Err(Error::BoundsNotEven);
     }
 
+    // Stage 2 needs at least 2 baby steps: `stage2_d(b1, b2) >= 2`.
+    if b1 < 6 || b2 < 4 {
+        return Err(Error::BoundsTooSmall);
+    }
+
     if n.is_probably_prime(1000) != IsPrime::No {
         return Err(Error::NumberIsPrime);
     }
@@ -73,18 +78,17 @@ pub fn ecm_one_factor(
         pb.set_position(0);
     }
 
-    let mut curve = 0;
     let k = stage1_multiplier(b1);
+    let sigma_range = Integer::from(n - 6);
 
-    while curve <= max_curve {
-        curve += 1;
-
+    for _ in 0..max_curve {
         #[cfg(feature = "progress-bar")]
         if let Some(pb) = pb {
             pb.inc(1);
         }
 
-        let sigma = (n - Integer::from(1)).random_below(rgen);
+        // Suyama's parametrization: sigma in [6, n - 1]
+        let sigma = sigma_range.clone().random_below(rgen) + 6;
         match run_curve(n, &sigma, &k, b1, b2) {
             CurveOutcome::Setup(g) | CurveOutcome::Stage1(g) | CurveOutcome::Stage2(g) => {
                 return Ok(g)
@@ -116,6 +120,8 @@ pub enum CurveOutcome {
 pub fn run_curve(n: &Integer, sigma: &Integer, k: &Integer, b1: usize, b2: usize) -> CurveOutcome {
     let q = match suyama_curve(n, sigma) {
         Ok(q) => q,
+        // If g = n, try another curve
+        Err(g) if &g == n => return CurveOutcome::Failed,
         Err(g) => return CurveOutcome::Setup(g),
     };
 
@@ -153,24 +159,25 @@ pub fn stage1_multiplier(b1: usize) -> Integer {
 
 /// Builds the starting point of a curve using Suyama's parametrization.
 ///
-/// Returns `Err(g)` with `g = gcd(4*u^3*v, n)` when the curve cannot be built.
+/// Returns `Err(g)` with `g = gcd(2*u^3*v, n)` when the curve cannot be built (`g` may be `n`).
 pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     let three = Integer::from(3);
-    let u = (Integer::from(sigma * sigma) - Integer::from(5)) % n;
-    let v: Integer = (4 * sigma.clone()) % n;
-    let diff = Integer::from(&v - &u);
+    let u = (Integer::from(sigma * sigma) - 5u32) % n;
+    let v = Integer::from(sigma * 4u32) % n;
     let u_3 = u.clone().pow_mod(&three, n).unwrap();
-    let v_3 = v.clone().pow_mod(&three, n).unwrap();
 
-    let c = match (Integer::from(4) * &u_3 * &v).invert(n) {
-        Ok(c) => {
-            (diff.pow_mod(&three, n).unwrap() * (Integer::from(4) * &u + &v) * c - Integer::from(2))
-                % n
-        }
-        _ => return Err((Integer::from(4) * u_3 * v).gcd(n)),
+    // We use the elliptic curve y^2 = x^3 + a*x^2 + x
+    // where a = (v - u)^3 * (3*u + v) / (4*u^3*v) - 2
+    // However, we do not declare a because it is more convenient
+    // to use a24 = (a + 2) / 4 in the calculation.
+    let u_3_v = Integer::from(&u_3 * &v);
+    let a24 = match Integer::from(&u_3_v * 16u32).invert(n) {
+        Ok(inv) => Integer::from(&v - &u).pow_mod(&three, n).unwrap() * (3u32 * u + &v) * inv % n,
+        // If the invert(16*u^3*v, n) doesn't exist (i.e., g != 1)
+        Err(_) => return Err((u_3_v * 2u32).gcd(n)),
     };
 
-    let a24 = (c + 2) * Integer::from(4).invert(n).unwrap() % n;
+    let v_3 = v.pow_mod(&three, n).unwrap();
     Ok(Point::new(u_3, v_3, a24, n.clone()))
 }
 
@@ -179,12 +186,20 @@ pub fn stage1(p: &Point, k: &Integer) -> Point {
     p.mont_ladder(k)
 }
 
+/// Number of baby steps `D` of stage 2.
+///
+/// `D <= b1 / 2 - 1` keeps `b1 - 1 - 2*D` positive: it is the multiplier of the first giant step.
+fn stage2_d(b1: usize, b2: usize) -> usize {
+    b2.isqrt().min(b1 / 2 - 1)
+}
+
 /// Stage 2 - Improved Standard Continuation.
 ///
 /// Returns `gcd(g, n)` where `g` is the accumulated product over the primes in `(b1, b2]`.
+/// Requires `b1 >= 6` and `b2 >= 4`, so that `D >= 2`.
 pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
     let n = &q.modulus;
-    let d = (b2 as f64).sqrt() as usize;
+    let d = stage2_d(b1, b2);
     let two_d = 2 * d;
     let mut beta: Vec<Integer> = vec![Integer::default(); d + 1];
     let mut s: Vec<Point> = vec![Point::default(); d + 1];
@@ -204,20 +219,24 @@ pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
     let mut t = q.mont_ladder(&Integer::from(b - two_d));
     let mut r = q.mont_ladder(&Integer::from(b));
 
-    let mut primes = Primes::all().skip_while(|&q| q < b);
+    // R = rr*Q: primes q in [rr + 2, rr + 2*D] are checked with S[delta] = 2*delta*Q,
+    // where q = rr + 2*delta.
+    let mut primes = Primes::all().skip_while(|&q| q < b + 2).peekable();
     for rr in (b..b2).step_by(two_d) {
         let alpha = Integer::from(&r.x_cord * &r.z_cord) % n;
-        for q in primes.by_ref().take_while(|&q| q <= rr + two_d) {
+        while let Some(q) = primes.next_if(|&q| q <= rr + two_d) {
             let delta = (q - rr) / 2;
-            let f = Integer::from(&r.x_cord - &s[d].x_cord)
-                * Integer::from(&r.z_cord + &s[d].z_cord)
+            // We want to calculate
+            // f = R.x_cord * S[delta].z_cord - S[delta].x_cord * R.z_cord
+            let f = Integer::from(&r.x_cord - &s[delta].x_cord)
+                * Integer::from(&r.z_cord + &s[delta].z_cord)
                 - &alpha
                 + &beta[delta];
             g = (g * f) % n;
         }
-        // Swap
-        std::mem::swap(&mut t, &mut r);
-        r = r.add(&s[d], &t);
+        // T, R = R, R + S[D]: R + S[D] is computed from the old R, with difference T = R - S[D]
+        let next = r.add(&s[d], &t);
+        t = std::mem::replace(&mut r, next);
     }
     g.gcd(n)
 }
@@ -345,6 +364,103 @@ mod tests {
             #[cfg(feature = "progress-bar")]
             None,
         )
+    }
+
+    fn ecm_one_factor(
+        n: &Integer,
+        b1: usize,
+        b2: usize,
+        max_curve: usize,
+    ) -> Result<Integer, Error> {
+        super::ecm_one_factor(
+            n,
+            b1,
+            b2,
+            max_curve,
+            &mut RandState::new(),
+            #[cfg(feature = "progress-bar")]
+            None,
+        )
+    }
+
+    /// 4009823 * 99476569
+    fn semiprime() -> Integer {
+        Integer::from(4_009_823u64) * Integer::from(99_476_569u64)
+    }
+
+    #[test]
+    fn suyama_curve_matches_sympy() {
+        // Reference values computed with sympy's `_ecm_one_factor` curve setup.
+        let n = Integer::from(398_883_434_337_287u64);
+        let p = suyama_curve(&n, &Integer::from(123_456_789)).unwrap();
+        assert_eq!(p.x_cord, 397_114_098_224_516u64);
+        assert_eq!(p.z_cord, 208_271_263_140_048u64);
+        assert_eq!(p.a_24, 161_303_906_265_111u64);
+    }
+
+    #[test]
+    fn stage2_finds_factor() {
+        // With sigma = 9, stage 1 misses the factor and stage 2 finds it.
+        let k = stage1_multiplier(2000);
+        assert_eq!(
+            run_curve(&semiprime(), &Integer::from(9), &k, 2000, 147_396),
+            CurveOutcome::Stage2(Integer::from(4_009_823))
+        );
+    }
+
+    #[test]
+    fn stage2_checks_all_primes() {
+        // Stage 2 must find a factor whenever l*Q = O modulo a factor of n for some prime
+        // b1 < l <= b2, unless it finds all factors at once (g = n).
+        let n = semiprime();
+        let (b1, b2) = (100, 10_000);
+        let k = stage1_multiplier(b1);
+        let mut checked = 0;
+        for sigma in 6..300 {
+            let q = stage1(&suyama_curve(&n, &Integer::from(sigma)).unwrap(), &k);
+            if q.z_cord.clone().gcd(&n) != 1 {
+                continue;
+            }
+            let expected = Primes::all()
+                .skip_while(|&l| l <= b1)
+                .take_while(|&l| l <= b2)
+                .any(|l| {
+                    let g = q.mont_ladder(&Integer::from(l)).z_cord.gcd(&n);
+                    g != 1 && g != n
+                });
+            if expected {
+                let g = stage2(&q, b1, b2);
+                assert_ne!(g, 1, "stage 2 missed a factor with sigma = {sigma}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 100);
+    }
+
+    #[test]
+    fn small_b1() {
+        // b1 < 2*sqrt(b2) used to underflow when computing the first giant step.
+        let n = semiprime();
+        match ecm_one_factor(&n, 100, 100_000, 50) {
+            Ok(g) => assert!(g != 1 && g != n && n.is_divisible(&g)),
+            Err(e) => assert!(matches!(e, Error::ECMFailed)),
+        }
+    }
+
+    #[test]
+    fn too_small_bounds() {
+        assert!(matches!(
+            ecm_one_factor(&semiprime(), 4, 100, 10),
+            Err(Error::BoundsTooSmall)
+        ));
+    }
+
+    #[test]
+    fn no_curve() {
+        assert!(matches!(
+            ecm_one_factor(&semiprime(), 2000, 147_396, 0),
+            Err(Error::ECMFailed)
+        ));
     }
 
     #[test]
