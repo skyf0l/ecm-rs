@@ -26,7 +26,7 @@
 mod common;
 
 use common::{prime_digits, GMP_ECM_BOUNDS, SEED};
-use ecm::bench::{random_sigma, run_curve, stage1_multiplier, CurveOutcome, Param};
+use ecm::bench::{random_sigma, run_curve, stage1_multiplier, CurveOutcome, Param, Stage2Plan};
 use rug::{rand::RandState, Integer};
 use serde_json::{json, Value};
 use std::{
@@ -109,6 +109,7 @@ impl Counts {
 /// Runs `curves` curves on each of `numbers` composites `p * q`, with `p` of `digits` digits.
 fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64, param: Param) -> Counts {
     let k = stage1_multiplier(b1);
+    let plan = Stage2Plan::new(b1, b2);
 
     // (n, sigma) of every curve, drawn up front so results don't depend on thread scheduling.
     let mut tasks = Vec::new();
@@ -140,7 +141,7 @@ fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64, param: 
                             return counts;
                         };
                         counts.curves += 1;
-                        match run_curve(n, param, sigma, &k, b1, b2) {
+                        match run_curve(n, param, sigma, &k, &plan) {
                             CurveOutcome::Stage1(_) => counts.stage1 += 1,
                             CurveOutcome::Stage2(_) => counts.stage2 += 1,
                             // `Setup` may return `n` itself: only count proper factors.

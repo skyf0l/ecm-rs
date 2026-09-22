@@ -8,7 +8,9 @@
 mod common;
 
 use common::{prime_bits, semiprime_bits, GMP_ECM_BOUNDS, SEED, SIGMA};
-use ecm::bench::{curve, stage1, stage1_multiplier, stage2, trial_division, Param, Point};
+use ecm::bench::{
+    curve, stage1, stage1_multiplier, stage2, trial_division, Param, Point, Stage2Plan,
+};
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use rug::{integer::IsPrime, Integer};
 use std::{collections::HashMap, hint::black_box};
@@ -26,14 +28,14 @@ fn stage1_input(bits: u32, b1: usize, param: Param) -> (Point, Integer) {
 
 /// Stage 1 output and the bounds, for the first curve from `SIGMA` on where stage 1 finds
 /// no factor, so stage 2 always runs completely.
-fn stage2_input(bits: u32, b1: usize, b2: usize) -> (Point, usize, usize) {
+fn stage2_input(bits: u32, b1: usize, b2: usize) -> (Point, Stage2Plan) {
     let n = semiprime_bits(bits, SEED);
     let k = stage1_multiplier(b1);
     (SIGMA..)
         .filter_map(|sigma| curve(&n, Param::default(), &Integer::from(sigma)).ok())
         .map(|p| stage1(&p, &k))
         .find(|q| q.z_cord.clone().gcd(&n) == 1)
-        .map(|q| (q, b1, b2))
+        .map(|q| (q, Stage2Plan::new(b1, b2)))
         .unwrap()
 }
 
@@ -65,9 +67,9 @@ fn curve_stage1(input: (Point, Integer)) -> Point {
 #[bench::bits_256_b2_1_9m(stage2_input(256, B1_20, B2_20))]
 #[bench::bits_512_b2_1_9m(stage2_input(512, B1_20, B2_20))]
 #[bench::bits_256_b2_147k(stage2_input(256, B1_15, B2_15))]
-fn curve_stage2(input: (Point, usize, usize)) -> Integer {
-    let (q, b1, b2) = black_box(&input);
-    black_box(stage2(q, *b1, *b2))
+fn curve_stage2(input: (Point, Stage2Plan)) -> Integer {
+    let (q, plan) = black_box(&input);
+    black_box(stage2(q, plan))
 }
 
 library_benchmark_group!(name = curve, benchmarks = [curve_stage1, curve_stage2]);
@@ -95,12 +97,20 @@ fn setup_stage1_multiplier(b1: usize) -> Integer {
     black_box(stage1_multiplier(black_box(b1)))
 }
 
+#[library_benchmark]
+#[bench::b2_147k((B1_15, B2_15))]
+#[bench::b2_1_9m((B1_20, B2_20))]
+fn setup_stage2_plan(bounds: (usize, usize)) -> Stage2Plan {
+    black_box(Stage2Plan::new(bounds.0, bounds.1))
+}
+
 library_benchmark_group!(
     name = setup,
     benchmarks = [
         setup_trial_division,
         setup_primality,
-        setup_stage1_multiplier
+        setup_stage1_multiplier,
+        setup_stage2_plan
     ]
 );
 

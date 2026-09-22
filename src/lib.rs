@@ -6,6 +6,7 @@ mod arith;
 mod curve;
 mod ecm;
 mod point;
+mod stage2;
 
 pub use crate::ecm::{ecm, ecm_one_factor, ecm_with_params, Error};
 
@@ -18,4 +19,5 @@ pub mod bench {
         stage1_multiplier, stage2, suyama_curve, trial_division, CurveOutcome, Param,
     };
     pub use crate::point::Point;
+    pub use crate::stage2::Stage2Plan;
 }
