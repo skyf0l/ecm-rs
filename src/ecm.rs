@@ -2,7 +2,7 @@ use crate::point::Point;
 #[cfg(feature = "progress-bar")]
 use indicatif::ProgressBar;
 use primal::Primes;
-use rug::{integer::IsPrime, rand::RandState, Integer};
+use rug::{integer::IsPrime, rand::RandState, Assign, Integer};
 use std::collections::HashMap;
 
 /// Error occured during ecm factorization.
@@ -207,7 +207,7 @@ fn stage2_d(b1: usize, b2: usize) -> usize {
 /// `r + (2i + 1)` are both checked by comparing `r*Q` with `S[i] = (2i + 1)*Q`: each giant step
 /// covers `4*D` instead of `2*D`.
 pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
-    let n = &q.modulus;
+    let n: &Integer = &q.modulus;
     let d = stage2_d(b1, b2);
     let two_d = 2 * d;
 
@@ -233,6 +233,8 @@ pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
     let mut seen = vec![false; d];
     let mut deltas: Vec<usize> = Vec::with_capacity(two_d);
     let mut primes = Primes::all().skip_while(|&p| p <= b1).peekable();
+    // Reused by every prime, to avoid allocating in the inner loop.
+    let (mut f, mut sum) = (Integer::new(), Integer::new());
 
     for rr in (b1 + two_d..b2 + two_d).step_by(2 * two_d) {
         // R = rr*Q, and the primes of this giant step are rr +/- (2*delta + 1)
@@ -250,11 +252,14 @@ pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
             seen[delta] = false;
             // We want to calculate
             // f = R.x_cord * S[delta].z_cord - S[delta].x_cord * R.z_cord
-            let f = Integer::from(&r.x_cord - &s[delta].x_cord)
-                * Integer::from(&r.z_cord + &s[delta].z_cord)
-                - &alpha
-                + &beta[delta];
-            g = (g * f) % n;
+            //   = (R.x - S.x) * (R.z + S.z) - alpha + beta[delta]
+            f.assign(&r.x_cord - &s[delta].x_cord);
+            sum.assign(&r.z_cord + &s[delta].z_cord);
+            f *= &sum;
+            f -= &alpha;
+            f += &beta[delta];
+            g *= &f;
+            g %= n;
         }
 
         // T, R = R, R + W: R + W is computed from the old R, with difference T = R - W
@@ -469,7 +474,7 @@ mod tests {
         let p = suyama_curve(&n, &Integer::from(123_456_789)).unwrap();
         assert_eq!(p.x_cord, 397_114_098_224_516u64);
         assert_eq!(p.z_cord, 208_271_263_140_048u64);
-        assert_eq!(p.a_24, 161_303_906_265_111u64);
+        assert_eq!(*p.a_24, 161_303_906_265_111u64);
     }
 
     #[test]
