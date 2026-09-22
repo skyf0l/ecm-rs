@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790057323905,
+  "lastUpdate": 1790057325170,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -753,6 +753,42 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/feb6a244a5d530bce1cecba75c67baa23858b91a"
         },
         "date": 1790041458866,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 250,
+            "unit": "curves",
+            "extra": "found 4/1000 curves (stage 1: 4, stage 2: 0, setup: 0)\n95% CI: 98..642 curves\nGMP-ECM reference: ~25 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 500,
+            "unit": "curves",
+            "extra": "found 2/1000 curves (stage 1: 2, stage 2: 0, setup: 0)\n95% CI: 138..1823 curves\nGMP-ECM reference: ~90 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "668b5596df14ce76cdf997acdbb3c0668e9bd75a",
+          "message": "chore(deps): update rust crate rug to v1.30.0",
+          "timestamp": "2026-09-22T10:05:27+04:00",
+          "tree_id": "65f9a48fa201ea25a7b50d80a8fa270f3ea8fe25",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/668b5596df14ce76cdf997acdbb3c0668e9bd75a"
+        },
+        "date": 1790057325156,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
