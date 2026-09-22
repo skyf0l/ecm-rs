@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790100498141,
+  "lastUpdate": 1790102498915,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -948,6 +948,170 @@ window.BENCHMARK_DATA = {
           {
             "name": "ops::point::point_double::bits_64",
             "value": 3486,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_128",
+            "value": 151391,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_256",
+            "value": 947601,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_512",
+            "value": 3664977,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_11k",
+            "value": 2138344,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_2k",
+            "value": 1368326,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_50k",
+            "value": 13120001,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_trial_division::bits_256",
+            "value": 16980362,
+            "unit": "instructions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "2be040f3330a4d93f93d26950a38b2bc00ce712f",
+          "message": "perf: fewer allocations in point arithmetic and stage 2\n\n  - share a_24 and the modulus between the points of a curve (Rc) instead of copying them\n    in every add and double\n  - compute add and double in place in 3 preallocated temporaries\n  - reuse the stage 2 scratch integers for every prime\n  - mont_ladder reads the bits of k instead of formatting it\n\n  Instruction counts: factorizations -24% to -30%, stage 1 -12% to -32%, stage 2 -11% to\n  -39%. Wall time -24% (median) to -33% (min). Results are bit-for-bit identical.",
+          "timestamp": "2026-09-22T22:40:10+04:00",
+          "tree_id": "10ebf61c07b1b91248b481a71e631382ba551713",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/2be040f3330a4d93f93d26950a38b2bc00ce712f"
+        },
+        "date": 1790102498168,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "e2e::e2e::factorize::digits_15",
+            "value": 374680085,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_17",
+            "value": 720769846,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_25",
+            "value": 2524590664,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_128_b1_11k",
+            "value": 122566908,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_11k",
+            "value": 224035855,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_2k",
+            "value": 40598347,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_512_b1_11k",
+            "value": 408978971,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_64_b1_11k",
+            "value": 88387032,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_128_b2_1_9m",
+            "value": 185492023,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_147k",
+            "value": 38296490,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_1_9m",
+            "value": 362115755,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_512_b2_1_9m",
+            "value": 683933802,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_64_b2_1_9m",
+            "value": 144827453,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_128",
+            "value": 4670,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_256",
+            "value": 6478,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_512",
+            "value": 8597,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_64",
+            "value": 3432,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_128",
+            "value": 4201,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_256",
+            "value": 5365,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_512",
+            "value": 4754,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_64",
+            "value": 3306,
             "unit": "instructions"
           },
           {
