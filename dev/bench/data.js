@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790100495805,
+  "lastUpdate": 1790100498141,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -1153,6 +1153,42 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/1ee1d3ac63335478daef752011ae2269e1efc053"
         },
         "date": 1790098675891,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 29.41176470588235,
+            "unit": "curves",
+            "extra": "found 34/1000 curves (stage 1: 2, stage 2: 32, setup: 0)\n95% CI: 21..41 curves\nGMP-ECM reference: ~25 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 58.8235294117647,
+            "unit": "curves",
+            "extra": "found 17/1000 curves (stage 1: 1, stage 2: 16, setup: 0)\n95% CI: 37..94 curves\nGMP-ECM reference: ~90 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "c327398a3c269342048000194d50009c51f45843",
+          "message": "fix: port remaining sympy ECM fixes\n\n  - driver: return an error instead of a wrong factorization, split composite factors,\n    reduce perfect powers (2802377^2: 0.25s -> 0.04s)\n  - primality test with 25 rounds instead of 1000 (582M -> 3.7M instructions at 512 bits)\n  - stage 2: check both primes r +/- (2i+1) per giant step (-4% to -10% per curve)\n  - double: reduce before multiplying (stage 1 -6.5% at 256 bits, -15.7% at 512)",
+          "timestamp": "2026-09-22T22:05:29+04:00",
+          "tree_id": "c39b1e214534975287082dd83d244fe0eb29d80e",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/c327398a3c269342048000194d50009c51f45843"
+        },
+        "date": 1790100498132,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
