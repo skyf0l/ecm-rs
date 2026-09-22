@@ -2,6 +2,8 @@
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 
+mod arith;
+mod curve;
 mod ecm;
 mod point;
 
@@ -12,8 +14,8 @@ pub use crate::ecm::{ecm, ecm_one_factor, ecm_with_params, Error};
 #[doc(hidden)]
 pub mod bench {
     pub use crate::ecm::{
-        optimal_params, run_curve, stage1, stage1_multiplier, stage2, suyama_curve, trial_division,
-        CurveOutcome,
+        batch2_curve, curve, optimal_params, random_sigma, run_curve, square_curve, stage1,
+        stage1_multiplier, stage2, suyama_curve, trial_division, CurveOutcome, Param,
     };
     pub use crate::point::Point;
 }

@@ -10,10 +10,12 @@
 //!
 //! ```text
 //! cargo run --release --features bench --example success_rate -- \
-//!     [--sizes 15,20,25] [--numbers 20] [--curves 50] [--json out.json] [--compare base.json] \
-//!     [--markdown comparison.md]
+//!     [--sizes 15,20,25] [--numbers 20] [--curves 50] [--param 1] [--json out.json] \
+//!     [--compare base.json] [--markdown comparison.md]
 //! ```
 //!
+//! - `--param`: family of curves, as GMP-ECM's `-param`: `0` (Suyama), `1` or `2` (default:
+//!   the one of `ecm_one_factor`).
 //! - `--json`: writes results in the `customSmallerIsBetter` format of
 //!   github-action-benchmark.
 //! - `--compare`: prints a markdown table comparing the results with a previous `--json` file.
@@ -24,7 +26,7 @@
 mod common;
 
 use common::{prime_digits, GMP_ECM_BOUNDS, SEED};
-use ecm::bench::{run_curve, stage1_multiplier, CurveOutcome};
+use ecm::bench::{random_sigma, run_curve, stage1_multiplier, CurveOutcome, Param};
 use rug::{rand::RandState, Integer};
 use serde_json::{json, Value};
 use std::{
@@ -45,6 +47,7 @@ struct Args {
     sizes: Vec<u32>,
     numbers: u64,
     curves: u64,
+    param: Param,
     json: Option<String>,
     compare: Option<String>,
     markdown: Option<String>,
@@ -55,6 +58,7 @@ fn parse_args() -> Args {
         sizes: vec![15, 20],
         numbers: 20,
         curves: 50,
+        param: Param::default(),
         json: None,
         compare: None,
         markdown: None,
@@ -71,6 +75,14 @@ fn parse_args() -> Args {
             }
             "--numbers" => args.numbers = value().parse().unwrap(),
             "--curves" => args.curves = value().parse().unwrap(),
+            "--param" => {
+                args.param = match value().as_str() {
+                    "0" => Param::Suyama,
+                    "1" => Param::Square,
+                    "2" => Param::Batch2,
+                    p => panic!("unknown param {p}"),
+                }
+            }
             "--json" => args.json = Some(value()),
             "--compare" => args.compare = Some(value()),
             "--markdown" => args.markdown = Some(value()),
@@ -95,7 +107,7 @@ impl Counts {
 }
 
 /// Runs `curves` curves on each of `numbers` composites `p * q`, with `p` of `digits` digits.
-fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64) -> Counts {
+fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64, param: Param) -> Counts {
     let k = stage1_multiplier(b1);
 
     // (n, sigma) of every curve, drawn up front so results don't depend on thread scheduling.
@@ -107,7 +119,10 @@ fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64) -> Coun
         rand.seed(&Integer::from(seed));
         let range = Integer::from(&n - 7);
         for _ in 0..curves {
-            let sigma = Integer::from(6) + range.clone().random_below(&mut rand);
+            let sigma = match param {
+                Param::Suyama => Integer::from(6) + range.clone().random_below(&mut rand),
+                _ => random_sigma(&n, param, &mut rand),
+            };
             tasks.push((n.clone(), sigma));
         }
     }
@@ -125,7 +140,7 @@ fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64) -> Coun
                             return counts;
                         };
                         counts.curves += 1;
-                        match run_curve(n, sigma, &k, b1, b2) {
+                        match run_curve(n, param, sigma, &k, b1, b2) {
                             CurveOutcome::Stage1(_) => counts.stage1 += 1,
                             CurveOutcome::Stage2(_) => counts.stage2 += 1,
                             // `Setup` may return `n` itself: only count proper factors.
@@ -170,7 +185,7 @@ fn main() {
             .unwrap_or_else(|| panic!("no bounds for {digits}-digit factors"));
 
         let start = Instant::now();
-        let counts = measure(digits, b1, b2, args.numbers, args.curves);
+        let counts = measure(digits, b1, b2, args.numbers, args.curves, args.param);
         let elapsed = start.elapsed().as_secs_f64();
 
         let found = counts.found();

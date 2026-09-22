@@ -1,8 +1,12 @@
-use crate::point::Point;
+use crate::{
+    arith::{with_arith, Arith, Factor},
+    curve::Curve,
+    point::Point,
+};
 #[cfg(feature = "progress-bar")]
 use indicatif::ProgressBar;
 use primal::Primes;
-use rug::{integer::IsPrime, rand::RandState, Assign, Integer};
+use rug::{integer::IsPrime, rand::RandState, Integer};
 use std::collections::HashMap;
 
 /// Error occured during ecm factorization.
@@ -25,9 +29,10 @@ pub enum Error {
 /// Number of rounds of the probabilistic primality test.
 const PRIMALITY_REPS: u32 = 25;
 
-/// Returns one factor of n using Lenstra's 2 Stage Elliptic curve Factorization
-/// with Suyama's Parameterization. Here Montgomery arithmetic is used for fast
-/// computation of addition and doubling of points in elliptic curve.
+/// Returns one factor of n using Lenstra's 2 Stage Elliptic curve Factorization,
+/// with the curves of GMP-ECM's parametrization 2 (see [`Param::Batch2`]). Here Montgomery
+/// curves and Montgomery modular arithmetic are used for fast computation of addition and
+/// doubling of points.
 ///
 /// This ECM method considers elliptic curves in Montgomery form (E : b*y^2*z = x^3 + a*x^2*z + x*z^2)
 /// and involves elliptic curve operations (mod N), where the elements in Z are reduced (mod N).
@@ -84,7 +89,7 @@ pub fn ecm_one_factor(
     }
 
     let k = stage1_multiplier(b1);
-    let sigma_range = Integer::from(n - 6);
+    let param = Param::default();
 
     for _ in 0..max_curve {
         #[cfg(feature = "progress-bar")]
@@ -92,9 +97,8 @@ pub fn ecm_one_factor(
             pb.inc(1);
         }
 
-        // Suyama's parametrization: sigma in [6, n - 1]
-        let sigma = sigma_range.clone().random_below(rgen) + 6;
-        match run_curve(n, &sigma, &k, b1, b2) {
+        let sigma = random_sigma(n, param, rgen);
+        match run_curve(n, param, &sigma, &k, b1, b2) {
             CurveOutcome::Setup(g) | CurveOutcome::Stage1(g) | CurveOutcome::Stage2(g) => {
                 return Ok(g)
             }
@@ -104,6 +108,49 @@ pub fn ecm_one_factor(
 
     // ECM failed, Increase the bounds
     Err(Error::ECMFailed)
+}
+
+/// Families of curves, named after GMP-ECM's `-param` values.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Param {
+    /// Suyama's parametrization (GMP-ECM `-param 0`), see [`suyama_curve`]: `sigma` in
+    /// `[6, n - 1]`.
+    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
+    Suyama,
+    /// GMP-ECM's default parametrization (`-param 1`), see [`square_curve`]: `sigma` in
+    /// `[2, 2^32)`. The cheapest stage 1, but about 1.3 times more curves than with the others
+    /// are needed to find a factor.
+    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
+    Square,
+    /// GMP-ECM's `-param 2`, see [`batch2_curve`]: `sigma` in `[2, 2^64)`. The default: as
+    /// effective as Suyama's curves, with a stage 1 almost as cheap as with `Square`.
+    #[default]
+    Batch2,
+}
+
+/// Random `sigma` for the curves of `param`, in the range documented by [`Param`].
+pub fn random_sigma(n: &Integer, param: Param, rgen: &mut RandState<'_>) -> Integer {
+    match param {
+        Param::Suyama => Integer::from(n - 6).random_below(rgen) + 6,
+        Param::Square => Integer::from((1u64 << 32) - 2).random_below(rgen) + 2,
+        Param::Batch2 => Integer::from(u64::MAX - 1).random_below(rgen) + 2,
+    }
+}
+
+/// Starting point of the curve of `param` given by `sigma`.
+///
+/// Returns `Err(g)` when the curve cannot be built, where `g` is a factor of `n` found while
+/// building it (`g` may be `1` or `n`: then the curve is just unusable).
+pub fn curve(n: &Integer, param: Param, sigma: &Integer) -> Result<Point, Integer> {
+    // Montgomery arithmetic needs an odd modulus.
+    if n.is_even() {
+        return Err(Integer::from(2));
+    }
+    match param {
+        Param::Suyama => suyama_curve(n, sigma),
+        Param::Square => square_curve(n, sigma),
+        Param::Batch2 => batch2_curve(n, sigma),
+    }
 }
 
 /// Result of running a single ECM curve.
@@ -119,14 +166,21 @@ pub enum CurveOutcome {
     Failed,
 }
 
-/// Runs one ECM curve (curve setup, stage 1 and stage 2) with the given `sigma`.
+/// Runs one ECM curve (curve setup, stage 1 and stage 2) of `param` with the given `sigma`.
 ///
 /// `k` must be the stage 1 multiplier returned by [`stage1_multiplier`] for `b1`.
-pub fn run_curve(n: &Integer, sigma: &Integer, k: &Integer, b1: usize, b2: usize) -> CurveOutcome {
-    let q = match suyama_curve(n, sigma) {
+pub fn run_curve(
+    n: &Integer,
+    param: Param,
+    sigma: &Integer,
+    k: &Integer,
+    b1: usize,
+    b2: usize,
+) -> CurveOutcome {
+    let q = match curve(n, param, sigma) {
         Ok(q) => q,
-        // If g = n, try another curve
-        Err(g) if &g == n => return CurveOutcome::Failed,
+        // If g = 1 or n, try another curve
+        Err(g) if g == 1 || &g == n => return CurveOutcome::Failed,
         Err(g) => return CurveOutcome::Setup(g),
     };
 
@@ -186,9 +240,148 @@ pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     Ok(Point::new(u_3, v_3, a24, n.clone()))
 }
 
-/// Stage 1: computes `k*P`.
+/// Builds the starting point of a curve using GMP-ECM's parametrization 1
+/// (`ECM_PARAM_BATCH_SQUARE`): the curve `b*y^2 = x^3 + a*x^2 + x` with `a = 4*d - 2`,
+/// `b = 16*d + 2` and `d = sigma^2/2^64 mod n`, and the point `(2 : 1)`.
+///
+/// Its stage 1 is cheaper than with other curves: `(a + 2)/4 = d` has the one-limb Montgomery
+/// form `sigma^2` for `sigma < 2^32`, and the coordinates of the starting point are small.
+///
+/// `n` must be odd. Returns `Err(n)` when the curve is singular (`d = 0` or `d = 1`).
+pub fn square_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
+    let inv = Integer::from(Integer::u_pow_u(2, 64))
+        .invert(n)
+        .expect("n must be odd");
+    let d = Integer::from(sigma * sigma) * inv % n;
+    if d == 0 || d == 1 {
+        return Err(n.clone());
+    }
+    Ok(Point::new(2.into(), 1.into(), d, n.clone()))
+}
+
+/// Builds the starting point of a curve using GMP-ECM's parametrization 2
+/// (`ECM_PARAM_BATCH_2`): the point `(2 : 1)` on the curve `b*y^2 = x^3 + a*x^2 + x` with
+/// `a = -(3*x3^4 + 6*x3^2 - 1)/(4*x3^3)` and `x3 = (3*x + y + 6)/(2*(y - 3))`, where
+/// `(x, y) = sigma*(-3, 3)` on `y^2 = x^3 + 36`.
+///
+/// These curves have the same expected torsion (so the same probability of success) as
+/// Suyama's, and a starting point with small coordinates: their stage 1 costs one full
+/// multiplication per ladder step less than with Suyama's parametrization.
+///
+/// Requires `sigma >= 2`. Returns `Err(g)` with a factor `g` of `n` found by a failed
+/// inversion (`g` may be `n`).
+pub fn batch2_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
+    if *sigma < 2 {
+        return Err(n.clone());
+    }
+    let md = |x: Integer| -> Integer {
+        let mut x = x % n;
+        if x < 0 {
+            x += n;
+        }
+        x
+    };
+    let inv =
+        |x: &Integer| -> Result<Integer, Integer> { x.clone().invert(n).map_err(|x| x.gcd(n)) };
+
+    let (x, y, z) = with_arith!(n, |arith| batch2_multiple(arith, sigma));
+
+    // Affine coordinates.
+    let z_inv = inv(&z)?;
+    let z_inv2 = md(z_inv.clone().square());
+    let x = md(x * &z_inv2);
+    let y = md(y * z_inv2 * z_inv);
+
+    let x3 = md((3 * x + &y + 6) * inv(&md(2 * (y - 3)))?);
+    let x3_2 = md(x3.clone().square());
+    // a = -(3*x3^4 + 6*x3^2 - 1)/(4*x3^3), and a24 = (a + 2)/4
+    let x3_4: Integer = x3_2.clone().square();
+    let numerator: Integer = x3_4 * 3u32 + Integer::from(&x3_2 * 6u32) - 1u32;
+    let a = md(-numerator * inv(&md(4 * x3_2 * x3))?);
+    let a24 = md((a + 2) * inv(&Integer::from(4))?);
+    Ok(Point::new(2.into(), 1.into(), a24, n.clone()))
+}
+
+/// `sigma*(-3 : 3 : 1)` in Jacobian coordinates, on the curve `y^2 = x^3 + 36`.
+fn batch2_multiple<A: Arith>(a: A, sigma: &Integer) -> (Integer, Integer, Integer) {
+    let (px, py) = (a.residue(&Integer::from(-3)), a.residue(&Integer::from(3)));
+    let (mut x, mut y, mut z) = (px.clone(), py.clone(), a.residue(&Integer::from(1)));
+    let [mut t0, mut t1, mut t2, mut t3, mut t4, mut t5, mut t6, mut t7] =
+        std::array::from_fn(|_| a.zero());
+    for bit in (0..sigma.significant_bits() - 1).rev() {
+        // Doubling, "dbl-2009-l" (a = 0).
+        a.sqr(&mut t0, &x); // A = x^2
+        a.sqr(&mut t1, &y); // B = y^2
+        a.sqr(&mut t2, &t1); // C = B^2
+        a.add(&mut t3, &x, &t1);
+        a.sqr(&mut t4, &t3);
+        a.sub(&mut t3, &t4, &t0);
+        a.sub(&mut t4, &t3, &t2);
+        a.add(&mut t3, &t4, &t4); // D = 2*((x + B)^2 - A - C)
+        a.add(&mut t4, &t0, &t0);
+        a.add(&mut t5, &t4, &t0); // E = 3*A
+        a.sqr(&mut t0, &t5); // F = E^2
+        a.sub(&mut t4, &t0, &t3);
+        a.sub(&mut t0, &t4, &t3); // x3 = F - 2*D
+        a.mul(&mut t4, &y, &z);
+        a.add(&mut z, &t4, &t4); // z3 = 2*y*z
+        a.sub(&mut t4, &t3, &t0);
+        a.mul(&mut t3, &t5, &t4);
+        a.add(&mut t4, &t2, &t2);
+        a.add(&mut t2, &t4, &t4);
+        a.add(&mut t4, &t2, &t2);
+        a.sub(&mut y, &t3, &t4); // y3 = E*(D - x3) - 8*C
+        std::mem::swap(&mut x, &mut t0);
+
+        if sigma.get_bit(bit) {
+            // Mixed addition of (-3, 3), "madd-2007-bl".
+            a.sqr(&mut t0, &z); // Z1Z1 = z^2
+            a.mul(&mut t1, &px, &t0); // U2 = px*Z1Z1
+            a.mul(&mut t2, &py, &z);
+            a.mul(&mut t3, &t2, &t0); // S2 = py*z*Z1Z1
+            a.sub(&mut t2, &t1, &x); // H = U2 - x
+            a.sqr(&mut t1, &t2); // HH = H^2
+            a.add(&mut t4, &t1, &t1);
+            a.add(&mut t5, &t4, &t4); // I = 4*HH
+            a.mul(&mut t4, &t2, &t5); // J = H*I
+            a.sub(&mut t6, &t3, &y);
+            a.add(&mut t3, &t6, &t6); // r = 2*(S2 - y)
+            a.mul(&mut t6, &x, &t5); // V = x*I
+            a.sqr(&mut t5, &t3);
+            a.sub(&mut t7, &t5, &t4);
+            a.sub(&mut t5, &t7, &t6);
+            a.sub(&mut x, &t5, &t6); // x3 = r^2 - J - 2*V
+            a.sub(&mut t5, &t6, &x);
+            a.mul(&mut t6, &t3, &t5);
+            a.mul(&mut t5, &y, &t4);
+            a.add(&mut t7, &t5, &t5);
+            a.sub(&mut y, &t6, &t7); // y3 = r*(V - x3) - 2*y*J
+            a.add(&mut t5, &z, &t2);
+            a.sqr(&mut t6, &t5);
+            a.sub(&mut t5, &t6, &t0);
+            a.sub(&mut z, &t5, &t1); // z3 = (z + H)^2 - Z1Z1 - HH
+        }
+    }
+    (a.to_integer(&x), a.to_integer(&y), a.to_integer(&z))
+}
+
+/// Stage 1: computes `k*P`, for `k >= 1`.
 pub fn stage1(p: &Point, k: &Integer) -> Point {
-    p.mont_ladder(k)
+    with_arith!(&p.modulus, |arith| stage1_with(arith, p, k))
+}
+
+fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer) -> Point {
+    let n: &Integer = &p.modulus;
+    // Normalizing P to z = 1 saves a multiplication per ladder step. If z is not invertible, P
+    // is the point at infinity modulo a factor of n, and so is k*P: P has the same gcd.
+    let Ok(z_inv) = p.z_cord.clone().invert(n) else {
+        return p.clone();
+    };
+    let x = Integer::from(&p.x_cord * &z_inv) % n;
+
+    let curve = Curve::new(arith, &p.a_24);
+    let q = curve.ladder(&curve.arith.factor(&x), &Factor::One, k);
+    p.on_same_curve(curve.arith.to_integer(&q.x), curve.arith.to_integer(&q.z))
 }
 
 /// Number of baby steps `D` of stage 2.
@@ -207,34 +400,53 @@ fn stage2_d(b1: usize, b2: usize) -> usize {
 /// `r + (2i + 1)` are both checked by comparing `r*Q` with `S[i] = (2i + 1)*Q`: each giant step
 /// covers `4*D` instead of `2*D`.
 pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
-    let n: &Integer = &q.modulus;
+    with_arith!(&q.modulus, |arith| stage2_with(arith, q, b1, b2))
+}
+
+fn stage2_with<A: Arith>(arith: A, q: &Point, b1: usize, b2: usize) -> Integer {
     let d = stage2_d(b1, b2);
     let two_d = 2 * d;
+    let curve = Curve::new(arith, &q.a_24);
+    let a = &curve.arith;
+    let mut scratch = curve.scratch();
 
     // S[i] = (2*i + 1)*Q
-    let q2 = q.double();
-    let mut s: Vec<Point> = Vec::with_capacity(d);
-    s.push(q.clone());
-    s.push(q2.add(q, q));
+    let q_xz = curve.point(&q.x_cord, &q.z_cord);
+    let mut q2 = curve.infinity();
+    curve.double(&mut q2, &q_xz, &mut scratch);
+    let mut s = Vec::with_capacity(d);
+    s.push(q_xz.clone());
+    let mut q3 = curve.infinity();
+    curve.add(&mut q3, &q2, &q_xz, &q_xz, &mut scratch);
+    s.push(q3);
     for i in 2..d {
-        s.push(s[i - 1].add(&q2, &s[i - 2]));
+        let mut next = curve.infinity();
+        curve.add(&mut next, &s[i - 1], &q2, &s[i - 2], &mut scratch);
+        s.push(next);
     }
-    let beta: Vec<Integer> = s
+    let beta: Vec<A::Elem> = s
         .iter()
-        .map(|s| Integer::from(&s.x_cord * &s.z_cord) % n)
+        .map(|s| {
+            let mut b = a.zero();
+            a.mul(&mut b, &s.x, &s.z);
+            b
+        })
         .collect();
 
-    let mut g = Integer::from(1);
-    let w = q.mont_ladder(&Integer::from(2 * two_d));
-    let mut t = q.mont_ladder(&Integer::from(b1 - two_d));
-    let mut r = q.mont_ladder(&Integer::from(b1 + two_d));
+    let mut g = a.residue(&Integer::from(1));
+    let (xq, zq) = (a.factor(&q.x_cord), a.factor(&q.z_cord));
+    let w = curve.ladder(&xq, &zq, &Integer::from(2 * two_d));
+    let mut t = curve.ladder(&xq, &zq, &Integer::from(b1 - two_d));
+    let mut r = curve.ladder(&xq, &zq, &Integer::from(b1 + two_d));
+    let mut next = curve.infinity();
 
     // Each prime is checked once, even when `rr - delta` and `rr + delta` are both prime.
     let mut seen = vec![false; d];
     let mut deltas: Vec<usize> = Vec::with_capacity(two_d);
     let mut primes = Primes::all().skip_while(|&p| p <= b1).peekable();
     // Reused by every prime, to avoid allocating in the inner loop.
-    let (mut f, mut sum) = (Integer::new(), Integer::new());
+    let (mut f, mut diff, mut sum, mut alpha, mut acc) =
+        (a.zero(), a.zero(), a.zero(), a.zero(), a.zero());
 
     for rr in (b1 + two_d..b2 + two_d).step_by(2 * two_d) {
         // R = rr*Q, and the primes of this giant step are rr +/- (2*delta + 1)
@@ -247,26 +459,27 @@ pub fn stage2(q: &Point, b1: usize, b2: usize) -> Integer {
             }
         }
 
-        let alpha = Integer::from(&r.x_cord * &r.z_cord) % n;
+        a.mul(&mut alpha, &r.x, &r.z);
         for &delta in &deltas {
             seen[delta] = false;
             // We want to calculate
             // f = R.x_cord * S[delta].z_cord - S[delta].x_cord * R.z_cord
             //   = (R.x - S.x) * (R.z + S.z) - alpha + beta[delta]
-            f.assign(&r.x_cord - &s[delta].x_cord);
-            sum.assign(&r.z_cord + &s[delta].z_cord);
-            f *= &sum;
-            f -= &alpha;
-            f += &beta[delta];
-            g *= &f;
-            g %= n;
+            a.sub(&mut diff, &r.x, &s[delta].x);
+            a.add(&mut sum, &r.z, &s[delta].z);
+            a.mul(&mut f, &diff, &sum);
+            a.sub(&mut diff, &f, &alpha);
+            a.add(&mut f, &diff, &beta[delta]);
+            a.mul(&mut acc, &g, &f);
+            std::mem::swap(&mut g, &mut acc);
         }
 
         // T, R = R, R + W: R + W is computed from the old R, with difference T = R - W
-        let next = r.add(&w, &t);
-        t = std::mem::replace(&mut r, next);
+        curve.add(&mut next, &r, &w, &t, &mut scratch);
+        std::mem::swap(&mut t, &mut r);
+        std::mem::swap(&mut r, &mut next);
     }
-    g.gcd(n)
+    a.gcd(&g)
 }
 
 /// Removes the factors of `n` among the first 100 000 primes.
@@ -436,6 +649,7 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
+    use crate::arith::Plain;
 
     fn ecm(n: &Integer) -> Result<HashMap<Integer, usize>, Error> {
         super::ecm(
@@ -478,25 +692,128 @@ mod tests {
     }
 
     #[test]
+    fn square_curve_matches_gmp_ecm() {
+        // `echo 398883434337287 | ecm -sigma 1:$sigma 300 0` finds a factor in step 1 exactly
+        // for these sigma in [2, 40] (GMP-ECM 7.0.7).
+        let n = semiprime();
+        let k = stage1_multiplier(300);
+        let expected = HashMap::from([
+            (3, 4_009_823),
+            (10, 4_009_823),
+            (17, 99_476_569),
+            (32, 4_009_823),
+            (39, 4_009_823),
+        ]);
+        for sigma in 2..=40 {
+            let p = square_curve(&n, &Integer::from(sigma)).unwrap();
+            let g = stage1(&p, &k).z_cord.gcd(&n);
+            match expected.get(&sigma) {
+                Some(&factor) => assert_eq!(g, factor, "sigma = {sigma}"),
+                None => assert_eq!(g, 1, "sigma = {sigma}"),
+            }
+        }
+    }
+
+    #[test]
+    fn batch2_curve_matches_gmp_ecm() {
+        // `echo 398883434337287 | ecm -sigma 2:$sigma 300 0` finds a factor in step 1 (which
+        // includes the curve setup) exactly for these sigma in [2, 40] (GMP-ECM 7.0.7).
+        let n = semiprime();
+        let k = stage1_multiplier(300);
+        let (p, q) = (Integer::from(4_009_823), Integer::from(99_476_569));
+        let mut expected: HashMap<u64, Integer> = [2, 3, 4, 5, 13, 15, 20, 21, 25, 26, 34, 36]
+            .into_iter()
+            .map(|sigma| (sigma, p.clone()))
+            .collect();
+        expected.extend([(9, q.clone()), (17, q), (24, n.clone())]);
+        for sigma in 2..=40 {
+            let g = match batch2_curve(&n, &Integer::from(sigma)) {
+                Ok(p) => stage1(&p, &k).z_cord.gcd(&n),
+                Err(g) => g,
+            };
+            assert_eq!(
+                g,
+                expected
+                    .get(&sigma)
+                    .cloned()
+                    .unwrap_or_default()
+                    .max(Integer::from(1)),
+                "sigma = {sigma}"
+            );
+        }
+    }
+
+    /// Checks the Montgomery ladder of [`stage1`] against the reference [`Point::mont_ladder`].
+    fn check_stage1(n: &Integer, param: Param, sigma: u64) {
+        let p = curve(n, param, &Integer::from(sigma)).unwrap();
+        for k in [1u32, 2, 3, 7, 1000, 123_456_789] {
+            let k = Integer::from(k);
+            assert_eq!(
+                stage1(&p, &k),
+                p.mont_ladder(&k),
+                "{n} {param:?} {sigma} {k}"
+            );
+        }
+        let k = stage1_multiplier(200);
+        assert_eq!(stage1(&p, &k), p.mont_ladder(&k));
+    }
+
+    #[test]
+    fn stage1_matches_reference() {
+        let mut rand = RandState::new();
+        // One limb, every limb count of `Mont`, and the `Plain` fallback.
+        for bits in [
+            40, 64, 100, 128, 192, 256, 320, 384, 448, 512, 700, 1024, 1025, 1500,
+        ] {
+            let mut n = Integer::from(Integer::random_bits(bits, &mut rand));
+            n.set_bit(bits - 1, true);
+            // Prime: building the curves never fails.
+            let n = n.next_prime();
+            check_stage1(&n, Param::Square, 1_234_567);
+            check_stage1(&n, Param::Suyama, 1_234_567);
+            check_stage1(&n, Param::Batch2, 1_234_567);
+        }
+    }
+
+    #[test]
+    fn stage2_matches_plain() {
+        // Montgomery and plain arithmetic give the same product, so the same gcd.
+        let n = semiprime();
+        let (b1, b2) = (100, 10_000);
+        let k = stage1_multiplier(b1);
+        for sigma in 2..100 {
+            let q = stage1(&square_curve(&n, &Integer::from(sigma)).unwrap(), &k);
+            let g = stage2(&q, b1, b2);
+            assert_eq!(g, stage2_with(Plain::new(&n), &q, b1, b2));
+        }
+    }
+
+    #[test]
     fn stage2_finds_factor() {
         // With sigma = 9, stage 1 misses the factor and stage 2 finds it.
         let k = stage1_multiplier(2000);
         assert_eq!(
-            run_curve(&semiprime(), &Integer::from(9), &k, 2000, 147_396),
+            run_curve(
+                &semiprime(),
+                Param::Suyama,
+                &Integer::from(9),
+                &k,
+                2000,
+                147_396
+            ),
             CurveOutcome::Stage2(Integer::from(4_009_823))
         );
     }
 
-    #[test]
-    fn stage2_checks_all_primes() {
-        // Stage 2 must find a factor whenever l*Q = O modulo a factor of n for some prime
-        // b1 < l <= b2, unless it finds all factors at once (g = n).
+    /// Stage 2 must find a factor whenever l*Q = O modulo a factor of n for some prime
+    /// b1 < l <= b2, unless it finds all factors at once (g = n).
+    fn check_stage2_primes(param: Param, sigmas: std::ops::Range<u64>) {
         let n = semiprime();
         let (b1, b2) = (100, 10_000);
         let k = stage1_multiplier(b1);
         let mut checked = 0;
-        for sigma in 6..300 {
-            let q = stage1(&suyama_curve(&n, &Integer::from(sigma)).unwrap(), &k);
+        for sigma in sigmas {
+            let q = stage1(&curve(&n, param, &Integer::from(sigma)).unwrap(), &k);
             if q.z_cord.clone().gcd(&n) != 1 {
                 continue;
             }
@@ -514,6 +831,13 @@ mod tests {
             }
         }
         assert!(checked > 100);
+    }
+
+    #[test]
+    fn stage2_checks_all_primes() {
+        check_stage2_primes(Param::Suyama, 6..300);
+        check_stage2_primes(Param::Square, 2..300);
+        check_stage2_primes(Param::Batch2, 2..300);
     }
 
     #[test]

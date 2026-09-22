@@ -8,26 +8,20 @@
 mod common;
 
 use common::{prime_bits, semiprime_bits, GMP_ECM_BOUNDS, SEED, SIGMA};
-use ecm::bench::{stage1, stage1_multiplier, stage2, suyama_curve, trial_division, Point};
+use ecm::bench::{curve, stage1, stage1_multiplier, stage2, trial_division, Param, Point};
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use rug::{integer::IsPrime, Integer};
 use std::{collections::HashMap, hint::black_box};
 
-/// Starting point of the curve given by `SIGMA`, on a `bits`-bit modulus.
-fn curve_point(bits: u32) -> Point {
+/// Starting point of the curve of `param` given by `SIGMA`, on a `bits`-bit modulus.
+fn curve_point(bits: u32, param: Param) -> Point {
     let n = semiprime_bits(bits, SEED);
-    suyama_curve(&n, &Integer::from(SIGMA)).expect("sigma must give a valid curve")
-}
-
-/// `(2P, P, P)`: arguments of `2P.add(P, P)`.
-fn add_input(bits: u32) -> (Point, Point, Point) {
-    let p = curve_point(bits);
-    (p.double(), p.clone(), p)
+    curve(&n, param, &Integer::from(SIGMA)).expect("sigma must give a valid curve")
 }
 
 /// Starting point and stage 1 multiplier for `b1`.
-fn stage1_input(bits: u32, b1: usize) -> (Point, Integer) {
-    (curve_point(bits), stage1_multiplier(b1))
+fn stage1_input(bits: u32, b1: usize, param: Param) -> (Point, Integer) {
+    (curve_point(bits, param), stage1_multiplier(b1))
 }
 
 /// Stage 1 output and the bounds, for the first curve from `SIGMA` on where stage 1 finds
@@ -36,7 +30,7 @@ fn stage2_input(bits: u32, b1: usize, b2: usize) -> (Point, usize, usize) {
     let n = semiprime_bits(bits, SEED);
     let k = stage1_multiplier(b1);
     (SIGMA..)
-        .filter_map(|sigma| suyama_curve(&n, &Integer::from(sigma)).ok())
+        .filter_map(|sigma| curve(&n, Param::default(), &Integer::from(sigma)).ok())
         .map(|p| stage1(&p, &k))
         .find(|q| q.z_cord.clone().gcd(&n) == 1)
         .map(|q| (q, b1, b2))
@@ -53,32 +47,13 @@ const B2_20: usize = GMP_ECM_BOUNDS[1].2;
 const B1_25: usize = GMP_ECM_BOUNDS[2].1;
 
 #[library_benchmark]
-#[bench::bits_64(curve_point(64))]
-#[bench::bits_128(curve_point(128))]
-#[bench::bits_256(curve_point(256))]
-#[bench::bits_512(curve_point(512))]
-fn point_double(p: Point) -> Point {
-    black_box(black_box(&p).double())
-}
-
-#[library_benchmark]
-#[bench::bits_64(add_input(64))]
-#[bench::bits_128(add_input(128))]
-#[bench::bits_256(add_input(256))]
-#[bench::bits_512(add_input(512))]
-fn point_add(input: (Point, Point, Point)) -> Point {
-    let (q, p, diff) = black_box(&input);
-    black_box(q.add(p, diff))
-}
-
-library_benchmark_group!(name = point, benchmarks = [point_double, point_add]);
-
-#[library_benchmark]
-#[bench::bits_64_b1_11k(stage1_input(64, B1_20))]
-#[bench::bits_128_b1_11k(stage1_input(128, B1_20))]
-#[bench::bits_256_b1_11k(stage1_input(256, B1_20))]
-#[bench::bits_512_b1_11k(stage1_input(512, B1_20))]
-#[bench::bits_256_b1_2k(stage1_input(256, B1_15))]
+#[bench::bits_64_b1_11k(stage1_input(64, B1_20, Param::Square))]
+#[bench::bits_128_b1_11k(stage1_input(128, B1_20, Param::Square))]
+#[bench::bits_256_b1_11k(stage1_input(256, B1_20, Param::Square))]
+#[bench::bits_512_b1_11k(stage1_input(512, B1_20, Param::Square))]
+#[bench::bits_1024_b1_11k(stage1_input(1024, B1_20, Param::Square))]
+#[bench::bits_256_b1_2k(stage1_input(256, B1_15, Param::Square))]
+#[bench::suyama_bits_256_b1_11k(stage1_input(256, B1_20, Param::Suyama))]
 fn curve_stage1(input: (Point, Integer)) -> Point {
     let (p, k) = black_box(&input);
     black_box(stage1(p, k))
@@ -129,4 +104,4 @@ library_benchmark_group!(
     ]
 );
 
-main!(library_benchmark_groups = point, curve, setup);
+main!(library_benchmark_groups = curve, setup);
