@@ -24,7 +24,7 @@ use std::rc::Rc;
 ///
 /// References
 /// ----------
-/// - http://www.hyperelliptic.org/tanja/SHARCS/talks06/Gaj.pdf
+/// - <http://www.hyperelliptic.org/tanja/SHARCS/talks06/Gaj.pdf>
 #[derive(Debug, Clone, Default)]
 pub struct Point {
     /// X coordinate of the Point

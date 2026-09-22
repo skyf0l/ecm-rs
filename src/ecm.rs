@@ -30,7 +30,7 @@ pub enum Error {
 const PRIMALITY_REPS: u32 = 25;
 
 /// Returns one factor of n using Lenstra's 2 Stage Elliptic curve Factorization,
-/// with the curves of GMP-ECM's parametrization 2 (see [`Param::Batch2`]). Here Montgomery
+/// with the curves of GMP-ECM's parametrization 2 (`-param 2`). Here Montgomery
 /// curves and Montgomery modular arithmetic are used for fast computation of addition and
 /// doubling of points.
 ///
