@@ -3,8 +3,9 @@ name: Benchmarks
 # - Pull requests:
 #   - the base branch and the PR are measured in the same job, the comparison is written to
 #     the job summary, and the job fails on an instruction count regression (exact);
-#   - github-action-benchmark compares with the last main results stored on gh-pages and
-#     comments the table on the PR (one comment per benchmark set, updated on each push).
+#   - one PR comment with both comparisons, worst changes first (updated on each push);
+#   - github-action-benchmark compares with the last main results stored on gh-pages, in the
+#     job summary.
 # - Pushes to main: github-action-benchmark stores the results on the gh-pages branch, draws
 #   the history charts, and comments on the commit on regressions.
 
@@ -111,11 +112,17 @@ jobs:
     - name: Convert results
       run: .github/scripts/gungraun-to-benchmark.sh > instructions.json
 
+    - name: Build PR comment
+      if: github.event_name == 'pull_request'
+      run: .github/scripts/gungraun-comment.sh target/gungraun 2 0.5 > instructions.md
+
     - uses: actions/upload-artifact@v7
       id: upload
       with:
         name: instructions
-        path: instructions.json
+        path: |
+          instructions.json
+          instructions.md
 
     - name: Fail on regressions
       if: steps.bench.outputs.regressed == 'true'
@@ -152,7 +159,7 @@ jobs:
         set -o pipefail
         args=(--json success_rate.json)
         if [ -f "$RUNNER_TEMP/base.json" ]; then
-          args+=(--compare "$RUNNER_TEMP/base.json")
+          args+=(--compare "$RUNNER_TEMP/base.json" --markdown success_rate.md)
         fi
         echo '## Curve success rate' >> "$GITHUB_STEP_SUMMARY"
         cargo run --locked --release --features bench --example success_rate -- "${args[@]}" \
@@ -161,7 +168,9 @@ jobs:
     - uses: actions/upload-artifact@v7
       with:
         name: success-rate
-        path: success_rate.json
+        path: |
+          success_rate.json
+          success_rate.md
 
   # Compares with the last results stored on gh-pages (from main) and, on main, stores the new
   # results there. A single job, to avoid concurrent pushes to gh-pages.
@@ -182,12 +191,27 @@ jobs:
     permissions:
       # Push to gh-pages and commit comments (main).
       contents: write
-      # Comparison comment on PRs (a PR review, updated in place on each push).
+      # Comparison comment on PRs.
       pull-requests: write
 
     steps:
     - uses: actions/checkout@v7
     - uses: actions/download-artifact@v8
+
+    # A single PR comment with both comparisons, worst changes first and unchanged benchmarks
+    # collapsed (the action's own comment lists everything by name).
+    - name: Build PR comment
+      if: github.event_name == 'pull_request'
+      env:
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: .github/scripts/bench-comment.sh > "$RUNNER_TEMP/comment.md"
+
+    # Creates the comment, or updates the one with the same header on the next pushes.
+    - uses: marocchino/sticky-pull-request-comment@v3
+      if: github.event_name == 'pull_request'
+      with:
+        header: benchmarks
+        path: ${{ runner.temp }}/comment.md
 
     - uses: benchmark-action/github-action-benchmark@v1
       with:
@@ -198,11 +222,9 @@ jobs:
         # Only results from main are stored (pushed), PRs are only compared. The action always
         # commits to a local gh-pages branch, only the push depends on this.
         auto-push: ${{ github.event_name == 'push' }}
-        # Full comparison table on every PR (a PR review comment), only alerts on main.
-        comment-always: ${{ github.event_name == 'pull_request' }}
         # Instruction counts are deterministic: any significant increase is real.
         alert-threshold: '102%'
-        # PRs already get the full table: alert comments only on main.
+        # PRs get our own comment (above): alert comments only on main.
         comment-on-alert: ${{ github.event_name == 'push' }}
         summary-always: true
 
@@ -216,7 +238,6 @@ jobs:
         # where the previous step's local commit is not pushed (non-fast-forward).
         skip-fetch-gh-pages: true
         auto-push: ${{ github.event_name == 'push' }}
-        comment-always: ${{ github.event_name == 'pull_request' }}
         # Statistical measure over a limited number of curves: only large changes matter.
         alert-threshold: '150%'
         comment-on-alert: ${{ github.event_name == 'push' }}
