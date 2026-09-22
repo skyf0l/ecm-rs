@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790098675904,
+  "lastUpdate": 1790100495805,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -819,6 +819,170 @@ window.BENCHMARK_DATA = {
           {
             "name": "ops::setup::setup_trial_division::bits_256",
             "value": 16980361,
+            "unit": "instructions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "c327398a3c269342048000194d50009c51f45843",
+          "message": "fix: port remaining sympy ECM fixes\n\n  - driver: return an error instead of a wrong factorization, split composite factors,\n    reduce perfect powers (2802377^2: 0.25s -> 0.04s)\n  - primality test with 25 rounds instead of 1000 (582M -> 3.7M instructions at 512 bits)\n  - stage 2: check both primes r +/- (2i+1) per giant step (-4% to -10% per curve)\n  - double: reduce before multiplying (stage 1 -6.5% at 256 bits, -15.7% at 512)",
+          "timestamp": "2026-09-22T22:05:29+04:00",
+          "tree_id": "c39b1e214534975287082dd83d244fe0eb29d80e",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/c327398a3c269342048000194d50009c51f45843"
+        },
+        "date": 1790100495034,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "e2e::e2e::factorize::digits_15",
+            "value": 492020858,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_17",
+            "value": 978562848,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_25",
+            "value": 3605237391,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_128_b1_11k",
+            "value": 181439195,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_11k",
+            "value": 265196655,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_2k",
+            "value": 48063964,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_512_b1_11k",
+            "value": 466933034,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_64_b1_11k",
+            "value": 127086054,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_128_b2_1_9m",
+            "value": 304228068,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_147k",
+            "value": 46476429,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_1_9m",
+            "value": 443962532,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_512_b2_1_9m",
+            "value": 767273711,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_64_b2_1_9m",
+            "value": 213598671,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_128",
+            "value": 7803,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_256",
+            "value": 9449,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_512",
+            "value": 12377,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_64",
+            "value": 6161,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_128",
+            "value": 5391,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_256",
+            "value": 7021,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_512",
+            "value": 6448,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_64",
+            "value": 3486,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_128",
+            "value": 151391,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_256",
+            "value": 947601,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_512",
+            "value": 3664977,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_11k",
+            "value": 2138344,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_2k",
+            "value": 1368326,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_50k",
+            "value": 13120001,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_trial_division::bits_256",
+            "value": 16980362,
             "unit": "instructions"
           }
         ]
