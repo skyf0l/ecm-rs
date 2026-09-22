@@ -302,7 +302,7 @@ pub(crate) const POLY_GIANT_STEPS: [usize; 90] = [
     5105100, 5705700, 6322470, 7147140, 7987980, 8978970, 10210200, 11741730, 13123110, 14804790,
 ];
 
-/// Largest memory (in bytes) for the polynomials of the polynomial continuation.
+/// Largest memory (in bytes) used by the polynomial continuation.
 const MAX_POLY_MEMORY: f64 = 256.0 * 1024.0 * 1024.0;
 
 /// Cheapest polynomial continuation and its cost: the best giant step `d1`.
@@ -314,9 +314,11 @@ fn best_poly_plan(costs: &Costs, b1: usize, b2: usize) -> (PolyPlan, f64) {
         }
         let plan = PolyPlan::shape_only(b1, b2, d1);
         let (_, df, giants) = plan.shape();
-        // The product tree of F (a coefficient per leaf and level), and a few more polynomials.
-        let levels = (usize::BITS - df.leading_zeros()) as f64 + 8.0;
-        if levels * df as f64 * costs.elem_bytes() > MAX_POLY_MEMORY {
+        // The product tree of F (a coefficient per leaf and level), and at the peak (measured)
+        // about 44 more coefficients per leaf: the other polynomials, the Kronecker products
+        // and GMP's scratch space.
+        let coeffs = (usize::BITS - df.leading_zeros()) as f64 + 44.0;
+        if coeffs * df as f64 * costs.elem_bytes() > MAX_POLY_MEMORY {
             break;
         }
         let cost = costs.poly_stage2(&plan);
