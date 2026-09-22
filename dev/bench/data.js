@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790102498915,
+  "lastUpdate": 1790102500258,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -1353,6 +1353,42 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/c327398a3c269342048000194d50009c51f45843"
         },
         "date": 1790100498132,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 29.41176470588235,
+            "unit": "curves",
+            "extra": "found 34/1000 curves (stage 1: 2, stage 2: 32, setup: 0)\n95% CI: 21..41 curves\nGMP-ECM reference: ~25 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 58.8235294117647,
+            "unit": "curves",
+            "extra": "found 17/1000 curves (stage 1: 1, stage 2: 16, setup: 0)\n95% CI: 37..94 curves\nGMP-ECM reference: ~90 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "2be040f3330a4d93f93d26950a38b2bc00ce712f",
+          "message": "perf: fewer allocations in point arithmetic and stage 2\n\n  - share a_24 and the modulus between the points of a curve (Rc) instead of copying them\n    in every add and double\n  - compute add and double in place in 3 preallocated temporaries\n  - reuse the stage 2 scratch integers for every prime\n  - mont_ladder reads the bits of k instead of formatting it\n\n  Instruction counts: factorizations -24% to -30%, stage 1 -12% to -32%, stage 2 -11% to\n  -39%. Wall time -24% (median) to -33% (min). Results are bit-for-bit identical.",
+          "timestamp": "2026-09-22T22:40:10+04:00",
+          "tree_id": "10ebf61c07b1b91248b481a71e631382ba551713",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/2be040f3330a4d93f93d26950a38b2bc00ce712f"
+        },
+        "date": 1790102500249,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
