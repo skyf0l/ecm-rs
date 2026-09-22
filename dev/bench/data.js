@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790041458879,
+  "lastUpdate": 1790057323905,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -491,6 +491,170 @@ window.BENCHMARK_DATA = {
           {
             "name": "ops::setup::setup_trial_division::bits_256",
             "value": 16980362,
+            "unit": "instructions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "668b5596df14ce76cdf997acdbb3c0668e9bd75a",
+          "message": "chore(deps): update rust crate rug to v1.30.0",
+          "timestamp": "2026-09-22T10:05:27+04:00",
+          "tree_id": "65f9a48fa201ea25a7b50d80a8fa270f3ea8fe25",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/668b5596df14ce76cdf997acdbb3c0668e9bd75a"
+        },
+        "date": 1790057323409,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "e2e::e2e::factorize::digits_15",
+            "value": 700131544,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_17",
+            "value": 1587181409,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_25",
+            "value": 3738164256,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_128_b1_11k",
+            "value": 181033252,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_11k",
+            "value": 283772628,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_2k",
+            "value": 51434732,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_512_b1_11k",
+            "value": 554066317,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_64_b1_11k",
+            "value": 131171924,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_128_b2_1_9m",
+            "value": 312278919,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_147k",
+            "value": 50631203,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_1_9m",
+            "value": 461875441,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_512_b2_1_9m",
+            "value": 804560409,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_64_b2_1_9m",
+            "value": 216499478,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_128",
+            "value": 7376,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_256",
+            "value": 9353,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_512",
+            "value": 12407,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_64",
+            "value": 6161,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_128",
+            "value": 5832,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_256",
+            "value": 6382,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_512",
+            "value": 6372,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_64",
+            "value": 4140,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_128",
+            "value": 20322789,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_256",
+            "value": 113824360,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_512",
+            "value": 582283115,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_11k",
+            "value": 2138344,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_2k",
+            "value": 1368326,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_50k",
+            "value": 13120001,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_trial_division::bits_256",
+            "value": 16980361,
             "unit": "instructions"
           }
         ]
