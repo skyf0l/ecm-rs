@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790019267048,
+  "lastUpdate": 1790041457597,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -202,6 +202,170 @@ window.BENCHMARK_DATA = {
           {
             "name": "e2e::e2e::factorize::digits_25",
             "value": 3738164549,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_128_b1_11k",
+            "value": 181033252,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_11k",
+            "value": 283772628,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_256_b1_2k",
+            "value": 51434732,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_512_b1_11k",
+            "value": 554066317,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage1::bits_64_b1_11k",
+            "value": 131171924,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_128_b2_1_9m",
+            "value": 312278916,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_147k",
+            "value": 50631200,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_256_b2_1_9m",
+            "value": 461875438,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_512_b2_1_9m",
+            "value": 804560406,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::curve_stage2::bits_64_b2_1_9m",
+            "value": 216499475,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_128",
+            "value": 7376,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_256",
+            "value": 9353,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_512",
+            "value": 12407,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_add::bits_64",
+            "value": 6161,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_128",
+            "value": 5832,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_256",
+            "value": 6382,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_512",
+            "value": 6372,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::point::point_double::bits_64",
+            "value": 4140,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_128",
+            "value": 20322789,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_256",
+            "value": 113824360,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_primality::bits_512",
+            "value": 582283115,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_11k",
+            "value": 2138343,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_2k",
+            "value": 1368325,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_50k",
+            "value": 13120000,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_trial_division::bits_256",
+            "value": 16980362,
+            "unit": "instructions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "committer": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "distinct": true,
+          "id": "feb6a244a5d530bce1cecba75c67baa23858b91a",
+          "message": "chore(deps): update rust crate indicatif to v0.18.6",
+          "timestamp": "2026-09-22T01:41:14Z",
+          "tree_id": "cac5935194a550ad4470126866110684d9a3ef83",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/feb6a244a5d530bce1cecba75c67baa23858b91a"
+        },
+        "date": 1790041456899,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "e2e::e2e::factorize::digits_15",
+            "value": 700131545,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_17",
+            "value": 1587181469,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_25",
+            "value": 3738164155,
             "unit": "instructions"
           },
           {
