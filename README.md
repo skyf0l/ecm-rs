@@ -23,7 +23,7 @@ The implementation started as a translation of sympy's, and now uses the techniq
   below 2^16, curves are run with GMP-ECM's optimal `B1` (and default `B2`) for factors of 10,
   15, 20, ... digits in turn, each for the expected number of curves given by GMP-ECM's
   probability model, and Pollard's P-1 method (with a `B1` 20 times larger) runs before each
-  size. The time to find a factor depends on its size, not on the size of the number.
+  size. The time to find a factor depends on its size much more than on the size of the number.
 - `ecm_with_params` and `ecm_one_factor` run curves with fixed bounds.
 
 ## Performance
