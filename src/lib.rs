@@ -20,6 +20,7 @@ pub use crate::ecm::{ecm, ecm_one_factor, ecm_with_params, Error};
 #[cfg(feature = "bench")]
 #[doc(hidden)]
 pub mod bench {
+    pub use crate::arith::ArithBatch;
     pub use crate::curve::Point;
     pub use crate::driver::factor;
     pub use crate::ecm::{

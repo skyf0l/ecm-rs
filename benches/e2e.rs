@@ -1,10 +1,13 @@
-//! Instruction-count benchmarks (Valgrind/Callgrind) of complete factorizations.
+//! Instruction-count benchmarks (Valgrind/Callgrind) of the driver overhead: complete
+//! factorizations (`ecm::ecm`) of small numbers of the README.
 //!
-//! The run time of ECM depends a lot on luck (which curves are drawn), so each benchmark
-//! factors the same number with several seeds and measures the total. Results are checked:
-//! a wrong factorization makes the benchmark fail instead of reporting a fake speedup.
+//! These numbers are factored in a few curves (or by trial division, P-1, ...), so the cost is
+//! mostly the driver's: trial division, primality tests, stage 1 multipliers, stage 2 plans,
+//! choice of the bounds. The cost of the curves themselves is measured by `ops.rs`.
 //!
-//! Numbers are small on purpose: Valgrind slows execution down by about 50x.
+//! The run time depends on luck (which curves are drawn), so each benchmark factors the same
+//! number with several seeds and measures the total. Results are checked: a wrong factorization
+//! makes the benchmark fail instead of reporting a fake speedup.
 //!
 //! Run with `cargo bench --features bench --bench e2e` (requires Valgrind and `gungraun-runner`).
 
