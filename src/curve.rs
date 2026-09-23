@@ -106,7 +106,7 @@ impl<A: Arith> Curve<A> {
     /// 4M + 4S, plus the multiplications by `xd`, `zd` and `a24`: with GMP-ECM's parametrization
     /// 1 (`(xd : zd) = (2 : 1)` and a small `a24`), these are two additions and a one-limb
     /// multiplication.
-    #[inline]
+    #[inline(always)]
     pub fn dup_add(
         &self,
         p: &mut Xz<A::Elem>,

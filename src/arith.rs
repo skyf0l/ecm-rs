@@ -60,7 +60,7 @@ pub trait Arith {
     }
 
     /// `r = a * f`.
-    #[inline]
+    #[inline(always)]
     fn mul_factor(&self, r: &mut Self::Elem, a: &Self::Elem, f: &Factor<Self::Elem>) {
         match f {
             Factor::One => r.clone_from(a),
@@ -298,7 +298,7 @@ impl<const N: usize> Arith for Mont<N> {
     }
 
     /// Montgomery multiplication, CIOS method: `r = a*b/R mod n`.
-    #[inline]
+    #[inline(always)]
     fn mul(&self, r: &mut [u64; N], a: &[u64; N], b: &[u64; N]) {
         let m = &self.m;
         // t = (t_hi, t_n, t[N-1..0]) < 2n at the end of every iteration.
@@ -325,7 +325,7 @@ impl<const N: usize> Arith for Mont<N> {
 
     /// For mid sizes, separate squaring (half the products of a multiplication) and reduction
     /// are faster than CIOS.
-    #[inline]
+    #[inline(always)]
     fn sqr(&self, r: &mut [u64; N], a: &[u64; N]) {
         if !(3..=12).contains(&N) {
             return self.mul(r, a, a);
@@ -368,7 +368,7 @@ impl<const N: usize> Arith for Mont<N> {
         self.reduce_once(r, &wide[1], hi);
     }
 
-    #[inline]
+    #[inline(always)]
     fn add(&self, r: &mut [u64; N], a: &[u64; N], b: &[u64; N]) {
         let mut s = [0; N];
         let mut carry = 0;
@@ -378,7 +378,7 @@ impl<const N: usize> Arith for Mont<N> {
         self.reduce_once(r, &s, carry);
     }
 
-    #[inline]
+    #[inline(always)]
     fn sub(&self, r: &mut [u64; N], a: &[u64; N], b: &[u64; N]) {
         let mut borrow = 0;
         for j in 0..N {
@@ -398,7 +398,7 @@ impl<const N: usize> Arith for Mont<N> {
         (Integer::from(x << 64) % &self.n).to_u64()
     }
 
-    #[inline]
+    #[inline(always)]
     fn mul_small(&self, r: &mut [u64; N], a: &[u64; N], c: u64) {
         let m = &self.m;
         // t = a*c < n*2^64
