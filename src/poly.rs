@@ -7,33 +7,104 @@
 //! the coefficients of the product are unpacked and reduced. Small products are schoolbook,
 //! with one reduction per coefficient too.
 //!
+//! When only some coefficients of a product are needed, a wrap-around product (modulo
+//! `X^L - 1`, a product of integers modulo `2^(L*s) - 1`: GMP's `mpn_mulmod_bnm1`, about half
+//! the cost of a full product) is often enough: for `q*f` in a reduction modulo `f`, whose high
+//! coefficients are known.
+//!
 //! A monic polynomial of degree `d` is stored as its `d` low coefficients, the leading `1` is
 //! implicit.
 
-use crate::arith::PolyArith;
+use crate::arith::{mpn, PolyArith};
 use rug::{integer::Order, Assign, Integer};
+use std::collections::HashMap;
 
 /// Products with a factor of at most this many coefficients are schoolbook.
 pub const SCHOOLBOOK: usize = 12;
 
 /// Reusable buffers of the polynomial products.
 pub struct Workspace {
-    x: Integer,
-    y: Integer,
-    product: Integer,
-    limbs: Vec<u64>,
+    /// The packed operands.
+    x: Vec<u64>,
+    y: Vec<u64>,
+    bufs: Buffers,
+    /// Shapes of the wrap-around products, by `(lmin, smin)`: see [`wrap_shape`].
+    shapes: HashMap<(usize, usize), Option<Shape>>,
+}
+
+/// Buffers of a Kronecker product.
+struct Buffers {
+    product: Vec<u64>,
+    scratch: Vec<u64>,
     acc: Vec<u64>,
+    /// Without GMP's low-level functions: the operands and the product as integers.
+    ints: [Integer; 3],
 }
 
 impl Workspace {
     pub fn new() -> Self {
         Workspace {
-            x: Integer::new(),
-            y: Integer::new(),
-            product: Integer::new(),
-            limbs: Vec::new(),
-            acc: Vec::new(),
+            x: Vec::new(),
+            y: Vec::new(),
+            bufs: Buffers {
+                product: Vec::new(),
+                scratch: Vec::new(),
+                acc: Vec::new(),
+                ints: [Integer::new(), Integer::new(), Integer::new()],
+            },
+            shapes: HashMap::new(),
         }
+    }
+}
+
+/// A polynomial packed for Kronecker products, kept to be reused while the slot width and the
+/// polynomial don't change (the polynomial is the caller's responsibility).
+#[derive(Default)]
+pub struct Packed {
+    s: usize,
+    len: usize,
+    limbs: Vec<u64>,
+    size: usize,
+}
+
+impl Packed {
+    /// The limbs of `x` packed with slots of `s` bits, packed again if `s` or the length
+    /// changed.
+    fn get<A: PolyArith>(&mut self, a: &A, x: &[A::Elem], s: usize) -> &[u64] {
+        if self.s != s || self.len != x.len() || self.limbs.is_empty() {
+            self.size = pack(a, &mut self.limbs, x, s);
+            (self.s, self.len) = (s, x.len());
+        }
+        &self.limbs[..self.size]
+    }
+}
+
+/// An operand of a product: its coefficients, and maybe where to keep its packed form.
+pub struct Operand<'a, 'b, E> {
+    coeffs: &'a [E],
+    cache: Option<&'b mut Packed>,
+}
+
+impl<'a, 'b, E> Operand<'a, 'b, E> {
+    /// An operand packed again for each product.
+    pub fn new(coeffs: &'a [E]) -> Self {
+        Operand {
+            coeffs,
+            cache: None,
+        }
+    }
+
+    /// An operand whose packed form is kept in `cache` (packed again if the slot width or
+    /// the length change, but not if only the coefficients do).
+    pub fn cached(coeffs: &'a [E], cache: &'b mut Packed) -> Self {
+        Operand {
+            coeffs,
+            cache: Some(cache),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.coeffs.len()
     }
 }
 
@@ -46,31 +117,132 @@ pub fn mul<A: PolyArith>(
     y: &[A::Elem],
 ) {
     debug_assert_eq!(r.len() + 1, x.len() + y.len());
-    if x.len().min(y.len()) <= SCHOOLBOOK {
-        schoolbook(a, ws, r, x, y);
-    } else {
-        kronecker(a, ws, r, x, y);
+    mul_part(a, ws, r, 0, Operand::new(x), Operand::new(y));
+}
+
+/// `out[t]` = coefficient `from + t` of `x*y` (zero above its degree), unpacking and reducing
+/// only these: a short product when `from = 0`.
+pub fn mul_part<A: PolyArith>(
+    a: &A,
+    ws: &mut Workspace,
+    out: &mut [A::Elem],
+    from: usize,
+    x: Operand<'_, '_, A::Elem>,
+    y: Operand<'_, '_, A::Elem>,
+) {
+    let (lx, ly) = (x.len(), y.len());
+    debug_assert!(lx > 0 && ly > 0);
+    if lx.min(ly) <= SCHOOLBOOK {
+        schoolbook(a, &mut ws.bufs.acc, out, from, x.coeffs, y.coeffs, None);
+        return;
+    }
+    let s = slot_bits(a.modulus(), lx.min(ly));
+    kronecker(a, ws, out, from, x, y, s, None);
+}
+
+/// Wrap-around product: `out[t]` = coefficient `from + t` of `x*y mod (X^L - 1)`, for some
+/// `L >= lmin` (returned). Requires `x.len()`, `y.len()` and `from + out.len()` at most
+/// `lmin`. Coefficient `k < L` is `c_k + c_(k + L)` for the coefficients `c` of `x*y` (which
+/// has `x.len() + y.len() - 1` of them): exact when `k + L` is above the degree.
+pub fn mul_wrap<A: PolyArith>(
+    a: &A,
+    ws: &mut Workspace,
+    out: &mut [A::Elem],
+    from: usize,
+    x: Operand<'_, '_, A::Elem>,
+    y: Operand<'_, '_, A::Elem>,
+    lmin: usize,
+) -> usize {
+    let (lx, ly) = (x.len(), y.len());
+    debug_assert!(lx > 0 && ly > 0 && lx.max(ly) <= lmin && from + out.len() <= lmin);
+    if lx.min(ly) <= SCHOOLBOOK {
+        schoolbook(a, &mut ws.bufs.acc, out, from, x.coeffs, y.coeffs, Some(lmin));
+        return lmin;
+    }
+    // A wrapped coefficient is a sum of at most min(lx, ly) products (both are <= L), as in
+    // a full product.
+    let smin = slot_bits(a.modulus(), lx.min(ly));
+    let shape = *ws
+        .shapes
+        .entry((lmin, smin))
+        .or_insert_with(|| wrap_shape(lmin, smin));
+    match shape {
+        // Cheaper than the full product, and valid for GMP: an + bn > rn/2.
+        Some(shape)
+            if shape.rn + 8 < (lx + ly) * shape.s / 64
+                && (lx + ly) * shape.s / 64 > shape.rn / 2 =>
+        {
+            kronecker(a, ws, out, from, x, y, shape.s, Some(shape.rn));
+            shape.l
+        }
+        _ => {
+            // Full product: exact, the same as a wrap-around at L >= its length.
+            let l = lmin.max(lx + ly - 1);
+            mul_part(a, ws, out, from, x, y);
+            l
+        }
     }
 }
 
-/// Schoolbook product: each coefficient of `r` is accumulated on limbs, then reduced once.
+/// Size of a wrap-around product modulo `X^L - 1` and `2^(64*rn) - 1`, with slots of `s`
+/// bits: `L*s = 64*rn`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Shape {
+    l: usize,
+    s: usize,
+    rn: usize,
+}
+
+/// The smallest wrap-around product with `L >= lmin` and slots of `s >= smin` bits, among the
+/// sizes `rn` efficient for GMP (`None` without GMP's low-level functions).
+fn wrap_shape(lmin: usize, smin: usize) -> Option<Shape> {
+    if !mpn::ENABLED {
+        return None;
+    }
+    let mut rn = mpn::mulmod_bnm1_next_size((lmin * smin).div_ceil(64));
+    for _ in 0..200 {
+        let bits = 64 * rn;
+        // L = bits/s >= lmin: s <= bits/lmin.
+        if let Some(s) = (smin..=bits / lmin).find(|s| bits.is_multiple_of(*s)) {
+            return Some(Shape {
+                l: bits / s,
+                s,
+                rn,
+            });
+        }
+        rn = mpn::mulmod_bnm1_next_size(rn + 1);
+    }
+    None
+}
+
+/// Schoolbook product: `out[t]` = coefficient `from + t` of `x*y`, or of `x*y mod (X^L - 1)`
+/// with `wrap = Some(L)` (`x.len()`, `y.len() <= L`), accumulated on limbs, then reduced once.
 fn schoolbook<A: PolyArith>(
     a: &A,
-    ws: &mut Workspace,
-    r: &mut [A::Elem],
+    acc: &mut Vec<u64>,
+    out: &mut [A::Elem],
+    from: usize,
     x: &[A::Elem],
     y: &[A::Elem],
+    wrap: Option<usize>,
 ) {
     let width = 2 * a.limbs() + 2;
-    ws.acc.resize(width, 0);
-    for (k, r) in r.iter_mut().enumerate() {
-        ws.acc.fill(0);
-        let lo = k.saturating_sub(y.len() - 1);
-        let hi = k.min(x.len() - 1);
-        for i in lo..=hi {
-            a.mul_acc(&mut ws.acc, &x[i], &y[k - i]);
+    acc.resize(width, 0);
+    let (lx, ly) = (x.len(), y.len());
+    for (t, r) in out.iter_mut().enumerate() {
+        acc.fill(0);
+        // At most one term per i: at most min(lx, ly) terms, wrapped or not.
+        for k in std::iter::once(from + t).chain(wrap.map(|l| from + t + l)) {
+            if k + 1 >= lx + ly {
+                continue;
+            }
+            let lo = k.saturating_sub(ly - 1);
+            let hi = k.min(lx - 1);
+            for i in lo..=hi {
+                a.mul_acc(acc, &x[i], &y[k - i]);
+            }
         }
-        a.redc_wide(r, &ws.acc);
+        a.redc_wide(r, acc);
     }
 }
 
@@ -81,11 +253,13 @@ fn slot_bits(n: &Integer, len: usize) -> usize {
     2 * n.significant_bits() as usize + (usize::BITS - len.leading_zeros()) as usize
 }
 
-/// Packs the values of `x` into `buf`, one every `s` bits.
-fn pack<A: PolyArith>(a: &A, buf: &mut Vec<u64>, x: &[A::Elem], s: usize) {
+/// Packs the values of `x` into `buf`, one every `s` bits. Returns the number of limbs they
+/// take (`buf` has a few more, all zero).
+fn pack<A: PolyArith>(a: &A, buf: &mut Vec<u64>, x: &[A::Elem], s: usize) -> usize {
     let limbs = a.limbs();
+    let size = (x.len() * s).div_ceil(64);
     buf.clear();
-    buf.resize((x.len() * s).div_ceil(64) + limbs + 1, 0);
+    buf.resize(size + limbs + 1, 0);
     let mut v = vec![0; limbs];
     for (i, x) in x.iter().enumerate() {
         a.write_limbs(x, &mut v);
@@ -101,48 +275,84 @@ fn pack<A: PolyArith>(a: &A, buf: &mut Vec<u64>, x: &[A::Elem], s: usize) {
             }
         }
     }
+    size
 }
 
-/// Kronecker substitution: `r = x*y` with one big integer product.
+/// Kronecker substitution: coefficients `from..from + out.len()` of `x*y` with slots of `s`
+/// bits, with one big integer product, or modulo `2^(64*rn) - 1` with `rn = Some(rn)` (then
+/// `s*L = 64*rn`: a wrap-around product modulo `X^L - 1`, see [`mul_wrap`]).
+#[allow(clippy::too_many_arguments)]
 fn kronecker<A: PolyArith>(
     a: &A,
     ws: &mut Workspace,
-    r: &mut [A::Elem],
-    x: &[A::Elem],
-    y: &[A::Elem],
+    out: &mut [A::Elem],
+    from: usize,
+    x: Operand<'_, '_, A::Elem>,
+    y: Operand<'_, '_, A::Elem>,
+    s: usize,
+    rn: Option<usize>,
 ) {
-    let s = slot_bits(a.modulus(), x.len().min(y.len()));
-    pack(a, &mut ws.limbs, x, s);
-    ws.x.assign_digits(&ws.limbs, Order::Lsf);
-    pack(a, &mut ws.limbs, y, s);
-    ws.y.assign_digits(&ws.limbs, Order::Lsf);
-    ws.product.assign(&ws.x * &ws.y);
+    let Workspace { x: bx, y: by, bufs, .. } = ws;
+    let xl = match x.cache {
+        Some(cache) => cache.get(a, x.coeffs, s),
+        None => {
+            let size = pack(a, bx, x.coeffs, s);
+            &bx[..size]
+        }
+    };
+    let yl = match y.cache {
+        Some(cache) => cache.get(a, y.coeffs, s),
+        None => {
+            let size = pack(a, by, y.coeffs, s);
+            &by[..size]
+        }
+    };
+    let (xl, yl) = if xl.len() >= yl.len() {
+        (xl, yl)
+    } else {
+        (yl, xl)
+    };
+
+    // The product, with room to read every requested coefficient.
+    let width = s.div_ceil(64);
+    let len = rn.unwrap_or(xl.len() + yl.len());
+    let room = ((from + out.len()) * s).div_ceil(64).max(len) + width + 1;
+    let product = &mut bufs.product;
+    product.clear();
+    product.resize(room, 0);
+    match rn {
+        Some(rn) => mpn::mulmod_bnm1(&mut product[..rn], xl, yl, &mut bufs.scratch),
+        None if mpn::ENABLED => mpn::mul_long(&mut product[..len], xl, yl),
+        None => {
+            let [ix, iy, ip] = &mut bufs.ints;
+            ix.assign_digits(xl, Order::Lsf);
+            iy.assign_digits(yl, Order::Lsf);
+            ip.assign(&*ix * &*iy);
+            let size = ip.significant_digits::<u64>();
+            ip.write_digits(&mut product[..size], Order::Lsf);
+        }
+    }
 
     // Unpack: coefficient k is the s bits at k*s.
-    let width = s.div_ceil(64);
-    let buf = &mut ws.limbs;
-    buf.clear();
-    buf.resize((r.len() * s).div_ceil(64) + width + 1, 0);
-    let len = ws.product.significant_digits::<u64>();
-    ws.product.write_digits(&mut buf[..len], Order::Lsf);
     let top_mask = if s.is_multiple_of(64) {
         u64::MAX
     } else {
         (1 << (s % 64)) - 1
     };
-    ws.acc.resize(width, 0);
-    for (k, r) in r.iter_mut().enumerate() {
+    let t = &mut bufs.acc;
+    t.resize(width, 0);
+    for (k, r) in (from..).zip(out.iter_mut()) {
         let (word, shift) = ((k * s) / 64, (k * s) % 64);
-        let t = &mut ws.acc;
         if shift == 0 {
-            t.copy_from_slice(&buf[word..word + width]);
+            t.copy_from_slice(&product[word..word + width]);
         } else {
             for j in 0..width {
-                t[j] = (buf[word + j] >> shift) | (buf[word + j + 1] << (64 - shift));
+                t[j] = (product[word + j] >> shift) | (product[word + j + 1] << (64 - shift));
             }
         }
         t[width - 1] &= top_mask;
-        a.redc_wide(r, t);
+        // The value is below 2^smin: at most 2*limbs + 1 limbs, even if the slot is wider.
+        a.redc_wide(r, &t[..width.min(2 * a.limbs() + 2)]);
     }
 }
 
@@ -262,16 +472,14 @@ pub fn inverse<A: PolyArith>(a: &A, ws: &mut Workspace, f: &[A::Elem], len: usiz
     while prec < len {
         let next = (2 * prec).min(len);
         let fl = next.min(f.len());
-        // f*g = 1 + X^prec * e (mod X^next).
-        e.resize(fl + prec - 1, a.zero());
-        mul(a, ws, &mut e, &f[..fl], &g[..prec]);
         let h = next - prec;
-        if e.len() < next {
-            e.resize(next, a.zero());
-        }
+        // f*g = 1 + X^prec * e (mod X^next).
+        e.resize(h, a.zero());
+        let x = Operand::new(&f[..fl]);
+        mul_part(a, ws, &mut e, prec, x, Operand::new(&g[..prec]));
         // g[prec..next] = -(g*e)[..h].
-        d.resize(2 * h - 1, a.zero());
-        mul(a, ws, &mut d, &g[..h], &e[prec..next]);
+        d.resize(h, a.zero());
+        mul_part(a, ws, &mut d, 0, Operand::new(&g[..h]), Operand::new(&e));
         let zero = a.zero();
         for (g, d) in g[prec..next].iter_mut().zip(&d) {
             a.sub(g, &zero, d);
@@ -293,38 +501,86 @@ pub fn reverse_monic<A: PolyArith>(a: &A, f: &[A::Elem], len: usize) -> Vec<A::E
     r
 }
 
-/// `h = h*g mod f`, with `f` monic of degree `d = h.len() = g.len()` (so `h`, `g` of degree
-/// `< d`), and `inv` the inverse of the reverse of `f` modulo `X^(d - 1)`.
+/// A monic modulus `f` of degree `d`, with what the reductions modulo `f` need: the inverse of
+/// its reverse modulo `X^d`, and both packed for the products that reuse them.
+pub struct Modulus<E> {
+    /// The `d + 1` coefficients of `f`, the leading 1 included.
+    f: Vec<E>,
+    /// Inverse of the reverse of `f` modulo `X^d`.
+    inv: Vec<E>,
+    packed_f: Packed,
+    packed_inv: Packed,
+}
+
+impl<E: Clone> Modulus<E> {
+    /// The modulus `f` (monic, the leading 1 implicit, degree `f.len() >= 1`).
+    pub fn new<A: PolyArith<Elem = E>>(a: &A, ws: &mut Workspace, f: &[E]) -> Self {
+        let d = f.len();
+        let inv = inverse(a, ws, &reverse_monic(a, f, d), d);
+        let mut full = f.to_vec();
+        full.push(a.poly_from(&Integer::from(1)));
+        Modulus {
+            f: full,
+            inv,
+            packed_f: Packed::default(),
+            packed_inv: Packed::default(),
+        }
+    }
+
+    /// Degree of `f`.
+    pub fn degree(&self) -> usize {
+        self.f.len() - 1
+    }
+}
+
+/// `h = h*g mod f`, with `f` monic of degree `d = h.len()` (so `h` of degree `< d`) and `g` of
+/// degree `< d` (`g.len() <= d`).
+///
+/// Quotient `q` from the high coefficients of `p = h*g` and the inverse of the reverse of `f`
+/// (a short product), then `p - q*f`: its degree is `< d` and the coefficients of `q*f` of
+/// degree `>= d` are those of `p`, so a wrap-around product modulo `X^L - 1` (`L > d`) is
+/// enough.
 pub fn mul_mod<A: PolyArith>(
     a: &A,
     ws: &mut Workspace,
     h: &mut [A::Elem],
     g: &[A::Elem],
-    f: &[A::Elem],
-    inv: &[A::Elem],
+    m: &mut Modulus<A::Elem>,
 ) {
-    let d = f.len();
-    let mut p = vec![a.zero(); 2 * d - 1];
+    let d = m.degree();
+    debug_assert!(h.len() == d && !g.is_empty() && g.len() <= d);
+    let len = d + g.len() - 1;
+    let mut p = vec![a.zero(); len];
     mul(a, ws, &mut p, h, g);
-    if d == 1 {
-        h[0].clone_from(&p[0]);
+    if len <= d {
+        h[..len].clone_from_slice(&p);
+        h[len..].fill(a.zero());
         return;
     }
-    // Quotient: reverse(q) = reverse(p) / reverse(f) mod X^(d - 1).
+    // Quotient, t coefficients: reverse(q) = reverse(p) / reverse(f) mod X^t.
+    let t = len - d;
     let rev_p: Vec<A::Elem> = p[d..].iter().rev().cloned().collect();
-    let mut rev_q = vec![a.zero(); 2 * (d - 1) - 1];
-    mul(a, ws, &mut rev_q, &rev_p, &inv[..d - 1]);
-    let q: Vec<A::Elem> = rev_q[..d - 1].iter().rev().cloned().collect();
-    // Remainder: p - q*f, whose degree is < d (q*X^d only has terms of degree >= d).
-    let mut qf = vec![a.zero(); 2 * d - 2];
-    mul(a, ws, &mut qf, &q, f);
-    for i in 0..d {
-        a.sub(&mut h[i], &p[i], &qf[i]);
+    let mut rev_q = vec![a.zero(); t];
+    let inv = Operand::cached(&m.inv[..t], &mut m.packed_inv);
+    mul_part(a, ws, &mut rev_q, 0, Operand::new(&rev_p), inv);
+    let q: Vec<A::Elem> = rev_q.into_iter().rev().collect();
+    // Remainder: coefficient k < d of p - q*f, with (q*f mod (X^L - 1))_k = c_k + c_(k + L)
+    // and c_(k + L) = p_(k + L) (degree >= d).
+    let mut w = vec![a.zero(); d];
+    let f = Operand::cached(&m.f, &mut m.packed_f);
+    let l = mul_wrap(a, ws, &mut w, 0, f, Operand::new(&q), d + 1);
+    let mut c = a.zero();
+    for (k, h) in h.iter_mut().enumerate() {
+        match p.get(k + l) {
+            Some(high) => a.sub(&mut c, &w[k], high),
+            None => c.clone_from(&w[k]),
+        }
+        a.sub(h, &p[k], &c);
     }
 }
 
 /// Values of `h` (degree `< d`) at the `d` roots of the product tree `tree` (in the order of the
-/// leaves), with `inv` the inverse of the reverse of the root of the tree modulo `X^d`.
+/// leaves), whose root is the modulus `m`.
 ///
 /// Transposed algorithm (Bostan, Lecerf and Schost, "Tellegen's principle into practice"): at a
 /// node `P`, keep the first `deg P` coefficients `c_1, c_2, ...` of `(h mod P)/P` as a series in
@@ -335,15 +591,15 @@ pub fn evaluate<A: PolyArith>(
     ws: &mut Workspace,
     h: &[A::Elem],
     tree: &ProductTree<A::Elem>,
-    inv: &[A::Elem],
+    m: &mut Modulus<A::Elem>,
 ) -> Vec<A::Elem> {
     let d = h.len();
+    debug_assert_eq!(d, m.degree());
     // Root: h/f = X^-1 * rev(h)(1/X) / rev(f)(1/X), so c_(t+1) = (rev(h) * inv)[t].
     let rev_h: Vec<A::Elem> = h.iter().rev().cloned().collect();
-    let mut prod = vec![a.zero(); 2 * d - 1];
-    mul(a, ws, &mut prod, &rev_h, &inv[..d]);
-    let mut series = prod;
-    series.truncate(d);
+    let mut series = vec![a.zero(); d];
+    let inv = Operand::cached(&m.inv[..d], &mut m.packed_inv);
+    mul_part(a, ws, &mut series, 0, Operand::new(&rev_h), inv);
     let mut next = vec![a.zero(); d];
     let mut t = a.zero();
     let (mut rev, mut buf) = (Vec::new(), Vec::new());
@@ -389,13 +645,14 @@ fn middle<A: PolyArith>(
 ) {
     let (l, m) = (out.len(), r.len());
     if l.min(m) <= SCHOOLBOOK {
-        ws.acc.resize(2 * a.limbs() + 2, 0);
+        let acc = &mut ws.bufs.acc;
+        acc.resize(2 * a.limbs() + 2, 0);
         for (k, out) in out.iter_mut().enumerate() {
-            ws.acc.fill(0);
+            acc.fill(0);
             for (r, s) in r.iter().zip(&s[k..]) {
-                a.mul_acc(&mut ws.acc, r, s);
+                a.mul_acc(acc, r, s);
             }
-            a.redc_wide(t, &ws.acc);
+            a.redc_wide(t, acc);
             a.add(out, t, &s[k + m]);
         }
         return;
@@ -404,10 +661,11 @@ fn middle<A: PolyArith>(
     rev.clear();
     rev.extend(r.iter().rev().cloned());
     let s_used = &s[..l + m - 1];
-    prod.resize(m + s_used.len() - 1, a.zero());
-    mul(a, ws, prod, rev, s_used);
+    prod.resize(l, a.zero());
+    let (x, y) = (Operand::new(&rev[..]), Operand::new(s_used));
+    mul_part(a, ws, prod, m - 1, x, y);
     for (i, out) in out.iter_mut().enumerate() {
-        a.add(out, &prod[i + m - 1], &s[i + m]);
+        a.add(out, &prod[i], &s[i + m]);
     }
 }
 
@@ -570,6 +828,31 @@ mod tests {
                 assert_eq!(*out, sum % &n, "{lx} {ly}");
             }
 
+            // Parts of the product, and wrap-around products (the same operands, packed once).
+            let full = naive_mul(&xv, &yv, &n);
+            let (mut px, mut py) = (Packed::default(), Packed::default());
+            for _ in 0..3 {
+                let from = below(lx + ly, rand);
+                let count = 1 + below(lx + ly + 3 - from, rand);
+                let mut out = vec![a.zero(); count];
+                let (ox, oy) = (Operand::cached(&x, &mut px), Operand::cached(&y, &mut py));
+                mul_part(a, &mut ws, &mut out, from, ox, oy);
+                for (k, out) in (from..).zip(values(a, &out)) {
+                    let expected = full.get(k).cloned().unwrap_or_default();
+                    assert_eq!(out, expected, "{lx} {ly} part {k}");
+                }
+                let lmin = lx.max(ly) + below(lx + ly, rand);
+                let from = below(lmin, rand);
+                let mut out = vec![a.zero(); 1 + below(lmin - from, rand)];
+                let (ox, oy) = (Operand::cached(&x, &mut px), Operand::new(&y));
+                let l = mul_wrap(a, &mut ws, &mut out, from, ox, oy, lmin);
+                assert!(l >= lmin);
+                for (k, out) in (from..).zip(values(a, &out)) {
+                    let expected = full.iter().skip(k).step_by(l).sum::<Integer>() % &n;
+                    assert_eq!(out, expected, "{lx} {ly} wrap {k} mod X^{l} - 1");
+                }
+            }
+
             // Inverse of a series given by fewer terms than the precision.
             let mut f = x;
             f[0] = a.poly_from(&Integer::from(1));
@@ -583,6 +866,26 @@ mod tests {
                     .all(|(k, p)| *p == (k == 0) as u32),
                 "{lx} {len}"
             );
+        }
+    }
+
+    #[test]
+    fn wrap_shapes() {
+        if !mpn::ENABLED {
+            return;
+        }
+        for lmin in [13, 14, 100, 129, 257, 481, 1000, 1441, 1921, 2048, 2881, 6000, 11521] {
+            for smin in [67, 130, 523, 1035, 2059, 2200] {
+                let shape = wrap_shape(lmin, smin).unwrap();
+                assert!(shape.l >= lmin && shape.s >= smin);
+                assert_eq!(shape.l * shape.s, 64 * shape.rn);
+                // Not much larger than needed (but for tiny products, which are never wrapped).
+                // Not much larger than needed, but for small products (rarely wrapped).
+                let waste = (shape.rn * 64) as f64 / (lmin * smin) as f64;
+                if lmin >= 1000 {
+                    assert!(waste < 1.2, "{lmin} {smin} {shape:?}");
+                }
+            }
         }
     }
 
@@ -648,17 +951,45 @@ mod tests {
             assert_eq!(pv[0], 1);
             assert!(pv[1..].iter().all(|v| *v == 0), "d = {d}");
 
-            // h*g mod f, then evaluation at the roots.
+            // h*g mod f (several times, reusing the packed f and inverse; with g shorter, and
+            // with the largest values), then evaluation at the roots.
+            let mut modulus = Modulus::new(a, &mut ws, tree.root());
+            assert_eq!(values(a, &modulus.inv), values(a, &inv));
             let mut h = random_poly(a, d, rand);
-            let g = random_poly(a, d, rand);
-            let (hv, gv) = (values(a, &h), values(a, &g));
-            mul_mod(a, &mut ws, &mut h, &g, tree.root(), &inv);
-            let got = evaluate(a, &mut ws, &h, &tree, &inv);
+            let mut expected_h = values(a, &h);
+            for (i, gl) in [d, d, 1 + d / 3, d, d].into_iter().enumerate() {
+                let g = if i == 3 {
+                    largest_poly(a, gl)
+                } else {
+                    random_poly(a, gl, rand)
+                };
+                if i == 3 {
+                    h = largest_poly(a, d);
+                    expected_h = values(a, &h);
+                }
+                mul_mod(a, &mut ws, &mut h, &g, &mut modulus);
+                expected_h = naive_rem(&naive_mul(&expected_h, &values(a, &g), &n), &f, &n);
+                assert_eq!(values(a, &h), expected_h, "d = {d}, {i}");
+            }
+            let got = evaluate(a, &mut ws, &h, &tree, &mut modulus);
             for (r, got) in roots.iter().zip(values(a, &got)) {
-                let expected = eval(&hv, r, &n) * eval(&gv, r, &n) % &n;
-                assert_eq!(got, expected, "d = {d}");
+                assert_eq!(got, eval(&expected_h, r, &n), "d = {d}");
             }
         }
+    }
+
+    /// Remainder of `x` modulo the monic `f` (all its coefficients, leading 1 included).
+    fn naive_rem(x: &[Integer], f: &[Integer], n: &Integer) -> Vec<Integer> {
+        let d = f.len() - 1;
+        let mut x = x.to_vec();
+        for k in (d..x.len()).rev() {
+            let q = x[k].clone();
+            for (i, f) in f.iter().enumerate() {
+                x[k - d + i] = Integer::from(&x[k - d + i] - &q * f) % n;
+            }
+        }
+        x.resize(d, Integer::new());
+        x.iter().map(|x| (Integer::from(x % n) + n) % n).collect()
     }
 
     #[test]

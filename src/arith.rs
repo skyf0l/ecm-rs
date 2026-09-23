@@ -460,8 +460,9 @@ impl<const N: usize> Arith for Mont<N> {
     }
 }
 
-/// GMP's low-level (`mpn`) functions on 64-bit limbs, for the large sizes of [`Mont`].
-mod mpn {
+/// GMP's low-level (`mpn`) functions on 64-bit limbs, for the large sizes of [`Mont`] and the
+/// Kronecker products of [`crate::poly`].
+pub(crate) mod mpn {
     use gmp_mpfr_sys::gmp;
 
     /// Whether GMP's limbs are our 64-bit limbs (and `mpn_redc_1` returns its carry, from GMP
@@ -488,6 +489,87 @@ mod mpn {
             n: gmp::size_t,
             invm: gmp::limb_t,
         ) -> gmp::limb_t;
+
+        /// `mpn_mulmod_bnm1(rp, rn, ap, an, bp, bn, tp)`: `{ap, an} * {bp, bn} mod (B^rn - 1)`
+        /// (`B = 2^64`) to the `min(rn, an + bn)` limbs `rp`, for `0 < bn <= an <= rn` and
+        /// `an + bn > rn/2`, with the scratch space `tp` of `2*rn + 4` limbs. A non-zero
+        /// multiple of `B^rn - 1` gives `B^rn - 1`. A wrap-around product: the half of the
+        /// FFT sizes of GMP's own multiplication (`mpn_mul` of large numbers is this with
+        /// `rn >= an + bn`), so about half the cost of a full product.
+        ///
+        /// Internal to GMP like `mpn_redc_1` (`__GMP_DECLSPEC` in `gmp-impl.h`), with this
+        /// signature since GMP 5.0; generic C code, so in every build.
+        #[link_name = "__gmpn_mulmod_bnm1"]
+        fn mpn_mulmod_bnm1(
+            rp: *mut gmp::limb_t,
+            rn: gmp::size_t,
+            ap: *const gmp::limb_t,
+            an: gmp::size_t,
+            bp: *const gmp::limb_t,
+            bn: gmp::size_t,
+            tp: *mut gmp::limb_t,
+        );
+
+        /// `mpn_mulmod_bnm1_next_size(n)`: the smallest `rn >= n` efficient for
+        /// `mpn_mulmod_bnm1` (internal, as `mpn_mulmod_bnm1`).
+        #[link_name = "__gmpn_mulmod_bnm1_next_size"]
+        fn mpn_mulmod_bnm1_next_size(n: gmp::size_t) -> gmp::size_t;
+    }
+
+    /// `r = a*b`, with `a.len() >= b.len() >= 1` and `r` of `a.len() + b.len()` limbs.
+    pub fn mul_long(r: &mut [u64], a: &[u64], b: &[u64]) {
+        assert!(ENABLED && a.len() >= b.len() && !b.is_empty() && r.len() == a.len() + b.len());
+        // SAFETY: the limbs are 64 bits (ENABLED), the sizes are those mpn_mul requires
+        // (checked above), `r` cannot overlap the operands (it is borrowed mutably).
+        unsafe {
+            gmp::mpn_mul(
+                r.as_mut_ptr().cast(),
+                a.as_ptr().cast(),
+                a.len() as gmp::size_t,
+                b.as_ptr().cast(),
+                b.len() as gmp::size_t,
+            );
+        }
+    }
+
+    /// `r = a*b mod (2^(64*rn) - 1)`, `rn = r.len()`, for `rn >= a.len() >= b.len() >= 1` and
+    /// `a.len() + b.len() > rn/2`: a non-zero multiple of `2^(64*rn) - 1` gives
+    /// `2^(64*rn) - 1`, so the result is exact if the product is known to be below it.
+    /// `scratch` is resized as needed.
+    pub fn mulmod_bnm1(r: &mut [u64], a: &[u64], b: &[u64], scratch: &mut Vec<u64>) {
+        let rn = r.len();
+        assert!(
+            ENABLED
+                && rn >= a.len()
+                && a.len() >= b.len()
+                && !b.is_empty()
+                && a.len() + b.len() > rn / 2
+        );
+        scratch.resize(2 * rn + 4, 0);
+        // SAFETY: the limbs are 64 bits (ENABLED), the sizes are those mpn_mulmod_bnm1
+        // requires (checked above), the scratch space has the 2rn + 4 limbs it needs, and the
+        // result cannot overlap the operands or the scratch space (all borrowed).
+        unsafe {
+            mpn_mulmod_bnm1(
+                r.as_mut_ptr().cast(),
+                rn as gmp::size_t,
+                a.as_ptr().cast(),
+                a.len() as gmp::size_t,
+                b.as_ptr().cast(),
+                b.len() as gmp::size_t,
+                scratch.as_mut_ptr().cast(),
+            );
+        }
+        // Only min(rn, an + bn) limbs are written.
+        let written = rn.min(a.len() + b.len());
+        r[written..].fill(0);
+    }
+
+    /// The smallest size `>= n` efficient for [`mulmod_bnm1`].
+    pub fn mulmod_bnm1_next_size(n: usize) -> usize {
+        assert!(ENABLED && n > 0);
+        // SAFETY: a pure function of n (ENABLED: the library has it with this signature).
+        unsafe { mpn_mulmod_bnm1_next_size(n as gmp::size_t) as usize }
     }
 
     /// `r = a*b`, with `r` of `2*a.len()` limbs.
