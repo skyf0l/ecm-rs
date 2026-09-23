@@ -20,11 +20,10 @@
 //! inversion gives a factor. This also checks the primes `l < d1/2`, which are baby steps.
 
 use crate::{
-    arith::PolyArith,
-    curve::Curve,
-    point::Point,
+    arith::{Arith, PolyArith},
+    curve::Xz,
     poly::{self, ProductTree, Workspace},
-    stage2::{baby_steps, phi, prime_factors, Normalizer},
+    stage2::{baby_steps, phi, prime_factors, Elem, Normalizer, XLine},
 };
 use rug::Integer;
 
@@ -108,22 +107,22 @@ impl PolyPlan {
 }
 
 /// Polynomial stage 2 on the residues of `arith`: `gcd(g, n)`, see [`crate::ecm::stage2`].
-pub fn stage2_with<A: PolyArith>(arith: A, q: &Point, plan: &PolyPlan) -> Integer {
-    let curve = Curve::new(arith, &q.a_24);
-    match accumulate(&curve, q, plan) {
-        Ok(g) => curve.arith.gcd(&g),
-        Err(g) => g,
-    }
+#[cfg(test)]
+pub fn stage2_with<A: PolyArith>(arith: A, q: &crate::point::Point, plan: &PolyPlan) -> Integer {
+    crate::stage2::stage2_with(arith, q, &crate::stage2::Stage2Plan::Poly(plan.clone()))
 }
 
 /// Product `g` (polynomial representation), or `Err(g)` with a factor found by a failed
 /// inversion.
-fn accumulate<A: PolyArith>(
-    curve: &Curve<A>,
-    q: &Point,
+pub(crate) fn accumulate<G: XLine>(
+    curve: &G,
+    q: &Xz<Elem<G>>,
     plan: &PolyPlan,
-) -> Result<A::Elem, Integer> {
-    let a = &curve.arith;
+) -> Result<Elem<G>, Integer>
+where
+    G::A: PolyArith,
+{
+    let a = curve.arith();
     let (d1, df) = (plan.d1, plan.df);
     let one = a.poly_from(&Integer::from(1));
     if plan.b2 <= plan.b1 {
@@ -139,14 +138,14 @@ fn accumulate<A: PolyArith>(
     let zero = a.zero();
     let mut t = a.zero();
     // Leaves of a product tree: the constant coefficients -x of X - x.
-    let leaf = |x: &A::Elem, t: &mut A::Elem| {
+    let leaf = |x: &Elem<G>, t: &mut Elem<G>| {
         let mut r = a.zero();
         a.to_poly(t, x);
         a.sub(&mut r, &zero, t);
         r
     };
     let mut ws = Workspace::new();
-    let leaves: Vec<A::Elem> = baby.iter().map(|x| leaf(x, &mut t)).collect();
+    let leaves: Vec<Elem<G>> = baby.iter().map(|x| leaf(x, &mut t)).collect();
     drop(baby);
     let tree = ProductTree::new(a, &mut ws, leaves);
     let f = tree.root();
@@ -154,16 +153,15 @@ fn accumulate<A: PolyArith>(
 
     // Giant steps m*d1*Q from m_lo on.
     let mut scratch = curve.scratch();
-    let (xq, zq) = (a.factor(&q.x_cord), a.factor(&q.z_cord));
-    let step = curve.ladder(&xq, &zq, &Integer::from(d1));
-    let mut r_prev = curve.ladder(&xq, &zq, &(Integer::from(plan.m_lo) * d1));
-    let mut r = curve.ladder(&xq, &zq, &(Integer::from(plan.m_lo + 1) * d1));
+    let step = curve.multiple(q, &Integer::from(d1));
+    let mut r_prev = curve.multiple(q, &(Integer::from(plan.m_lo) * d1));
+    let mut r = curve.multiple(q, &(Integer::from(plan.m_lo + 1) * d1));
     let mut r_next = curve.infinity();
     let mut giant_x = vec![a.zero(); df];
     let mut giant_z = vec![a.zero(); df];
     let mut g = Vec::with_capacity(df);
     let mut tmp = Vec::new();
-    let mut h: Vec<A::Elem> = Vec::new();
+    let mut h: Vec<Elem<G>> = Vec::new();
 
     for first in (0..plan.giants).step_by(df) {
         let len = df.min(plan.giants - first);
@@ -174,7 +172,7 @@ fn accumulate<A: PolyArith>(
             std::mem::swap(&mut r_prev, &mut r);
             std::mem::swap(&mut r, &mut r_next);
         }
-        normalizer.normalize(a, &mut giant_x[..len], &giant_z[..len])?;
+        curve.normalize(&mut normalizer, &mut giant_x[..len], &giant_z[..len])?;
         g.clear();
         g.extend(giant_x[..len].iter().map(|x| leaf(x, &mut t)));
         poly::from_roots(a, &mut ws, &mut g, &mut tmp);

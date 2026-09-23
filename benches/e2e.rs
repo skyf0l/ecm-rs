@@ -8,22 +8,18 @@
 //!
 //! Run with `cargo bench --features bench --bench e2e` (requires Valgrind and `gungraun-runner`).
 
-use ecm::bench::optimal_params;
+use ecm::bench::factor;
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use rug::{integer::IsPrime, ops::Pow, Integer};
 use std::{collections::HashMap, hint::black_box, str::FromStr};
 
-/// Factors `n` with the default parameters for its size, once per seed, and checks the results.
+/// Factors `n` as `ecm::ecm` does, once per seed, and checks the results.
 fn factor_with_seeds(n: &str, seeds: u64) -> Vec<HashMap<Integer, usize>> {
     let n = Integer::from_str(n).unwrap();
-    let (b1, b2, max_curve) = optimal_params(n.to_string().len());
     (0..seeds as usize)
         .map(|seed| {
-            let factors = ecm::ecm_with_params(
+            let factors = factor(
                 black_box(&n),
-                b1,
-                b2,
-                max_curve,
                 seed,
                 #[cfg(feature = "progress-bar")]
                 None,

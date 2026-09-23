@@ -9,7 +9,7 @@ mod common;
 
 use common::{prime_bits, semiprime_bits, GMP_ECM_BOUNDS, SEED, SIGMA};
 use ecm::bench::{
-    curve, stage1, stage1_multiplier, stage2, trial_division, Param, Point, Stage2Plan,
+    curve, stage1, stage1_multiplier, stage2, trial_division, Param, Pm1, Point, Stage2Plan,
 };
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use rug::{integer::IsPrime, Integer};
@@ -115,13 +115,22 @@ fn setup_stage2_plan(input: (Integer, usize, usize)) -> Stage2Plan {
     black_box(Stage2Plan::new(n, *b1, *b2))
 }
 
+// P-1 stage 1 as run by the driver before the curves of a level (B1 = 20 x the curves' B1).
+#[library_benchmark]
+#[bench::b1_40k((semiprime_bits(256, SEED), 20 * B1_15))]
+fn setup_pm1_stage1(input: (Integer, usize)) -> Integer {
+    let (n, b1) = black_box(&input);
+    black_box(Pm1::new().stage1(n, *b1))
+}
+
 library_benchmark_group!(
     name = setup,
     benchmarks = [
         setup_trial_division,
         setup_primality,
         setup_stage1_multiplier,
-        setup_stage2_plan
+        setup_stage2_plan,
+        setup_pm1_stage1
     ]
 );
 

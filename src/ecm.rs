@@ -210,11 +210,60 @@ pub fn run_curve(
 
 /// Stage 1 multiplier: product of the largest powers of all primes `p <= b1` that are `<= b1`.
 pub fn stage1_multiplier(b1: usize) -> Integer {
-    let mut k = Integer::from(1);
-    for p in Primes::all().take_while(|&p| p <= b1) {
-        k *= p.pow(b1.ilog(p));
+    prime_power_product(1, b1)
+}
+
+/// `E(hi)/E(lo)`, where `E(b)` is the product of the largest powers of the primes `p <= b` that
+/// are `<= b` (so `E(b) = stage1_multiplier(b)`), for `1 <= lo <= hi`.
+///
+/// Computed with a product tree: quasi-linear in the size of the result.
+pub(crate) fn prime_power_product(lo: usize, hi: usize) -> Integer {
+    product(prime_power_words(lo, hi).map(Integer::from).collect())
+}
+
+/// `E(hi)/E(lo)` (see [`prime_power_product`]) as a sequence of 64-bit factors, from the
+/// smallest primes to the largest.
+pub(crate) fn prime_power_words(lo: usize, hi: usize) -> impl Iterator<Item = u64> {
+    let lo = lo.max(1);
+    let mut word = 1u64;
+    let mut powers = Primes::all()
+        .take_while(move |&p| p <= hi)
+        // Above sqrt(hi), only the primes in (lo, hi] contribute (to the power 1).
+        .filter(move |&p| p > lo || p.saturating_mul(p) <= hi)
+        .flat_map(move |p| {
+            let old = if p <= lo { lo.ilog(p) } else { 0 };
+            std::iter::repeat_n(p as u64, (hi.ilog(p) - old) as usize)
+        });
+    let mut done = false;
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+        for q in powers.by_ref() {
+            match word.checked_mul(q) {
+                Some(w) => word = w,
+                None => return Some(std::mem::replace(&mut word, q)),
+            }
+        }
+        done = true;
+        Some(word)
+    })
+}
+
+/// Product of `values`, by a balanced product tree.
+pub(crate) fn product(mut values: Vec<Integer>) -> Integer {
+    while values.len() > 1 {
+        let mut next = Vec::with_capacity(values.len().div_ceil(2));
+        let mut it = values.into_iter();
+        while let Some(a) = it.next() {
+            next.push(match it.next() {
+                Some(b) => a * b,
+                None => a,
+            });
+        }
+        values = next;
     }
-    k
+    values.pop().unwrap_or_else(|| Integer::from(1))
 }
 
 /// Builds the starting point of a curve using Suyama's parametrization.
@@ -394,49 +443,41 @@ pub fn stage2(q: &Point, plan: &Stage2Plan) -> Integer {
     with_arith!(&q.modulus, |arith| stage2_with(arith, q, plan))
 }
 
-/// Removes the factors of `n` among the first 100 000 primes.
+/// Trial division removes the prime factors below this bound.
+const TRIAL_DIVISION_BOUND: usize = 1 << 16;
+
+/// Removes the prime factors of `n` below 2^16.
 ///
 /// Returns the found factors with their multiplicity, and the remaining cofactor.
 pub fn trial_division(n: &Integer) -> (HashMap<Integer, usize>, Integer) {
     let mut factors = HashMap::new();
     let mut n: Integer = n.clone();
-    for prime in Primes::all().take(100_000) {
+    for prime in Primes::all().take_while(|&p| p < TRIAL_DIVISION_BOUND) {
+        if n < prime * prime {
+            // n is 1 or a prime.
+            break;
+        }
         if n.is_divisible_u(prime as u32) {
-            let prime = Integer::from(prime);
-            while n.is_divisible(&prime) {
-                n /= &prime;
-                *factors.entry(prime.clone()).or_insert(0) += 1;
+            let mut multiplicity = 0;
+            while n.is_divisible_u(prime as u32) {
+                n.div_exact_u_mut(prime as u32);
+                multiplicity += 1;
             }
+            factors.insert(Integer::from(prime), multiplicity);
         }
     }
     (factors, n)
 }
 
-/// Default `(B1, B2, max_curve)` for a number of `digits` decimal digits.
-///
-/// Optimal params retrieved from <https://gitlab.inria.fr/zimmerma/ecm>
-pub fn optimal_params(digits: usize) -> (usize, usize, usize) {
-    match digits {
-        1..=10 => (2_000, 160_000, 35),
-        11..=15 => (5_000, 500_000, 500),
-        16..=20 => (11_000, 1_900_000, 74),
-        21..=25 => (50_000, 13_000_000, 214),
-        26..=30 => (250_000, 130_000_000, 430),
-        31..=35 => (1_000_000, 1_000_000_000, 904),
-        36..=40 => (3_000_000, 5_700_000_000, 2350),
-        41..=45 => (11_000_000, 35_000_000_000, 4480),
-        46..=50 => (44_000_000, 240_000_000_000, 7553),
-        51..=55 => (110_000_000, 780_000_000_000, 17769),
-        56..=60 => (260_000_000, 3_200_000_000_000, 42017),
-        _ => (850_000_000, 16_000_000_000_000, 69408),
-    }
-}
-
 /// Performs factorization using Lenstra's Elliptic curve method.
 ///
-/// This function repeatedly calls `ecm_one_factor` to compute the factors
-/// of n. First all the small factors are taken out using trial division.
-/// Then `ecm_one_factor` is used to compute one factor at a time.
+/// Small factors are removed by trial division, then the factors are found from the smallest
+/// to the largest, as GMP-ECM recommends: curves with a first bound `B1` optimal for factors of
+/// 10, 15, 20, ... digits in turn, each size for the expected number of curves to find such a
+/// factor, and Pollard's P-1 method with larger bounds before each size. The time to find a
+/// factor thus depends on its size much more than on the size of `n`.
+///
+/// Deterministic: the curves are drawn from a fixed seed.
 ///
 /// # Parameters
 ///
@@ -445,20 +486,15 @@ pub fn ecm(
     n: &Integer,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<HashMap<Integer, usize>, Error> {
-    let optimal_params = optimal_params(n.to_string().len());
-
-    ecm_with_params(
+    crate::driver::factor(
         n,
-        optimal_params.0,
-        optimal_params.1,
-        optimal_params.2,
         1234,
         #[cfg(feature = "progress-bar")]
         pb,
     )
 }
 
-/// Performs factorization using Lenstra's Elliptic curve method.
+/// Performs factorization using Lenstra's Elliptic curve method, with fixed bounds.
 ///
 /// This function repeatedly calls `ecm_one_factor` to compute the factors
 /// of n. First all the small factors are taken out using trial division.
@@ -493,9 +529,9 @@ pub fn ecm_with_params(
 
     // Composite factors left to split, with the multiplicity they have in the original number.
     let mut queue = Vec::new();
-    sort_factor(n, 1, &mut factors, &mut queue);
+    sort_factor(n, 1, (), &mut factors, &mut queue);
 
-    while let Some((n, exponent)) = queue.pop() {
+    while let Some((n, exponent, ())) = queue.pop() {
         let factor = ecm_one_factor(
             &n,
             b1,
@@ -513,20 +549,27 @@ pub fn ecm_with_params(
             cofactor /= &factor;
             multiplicity += 1;
         }
-        sort_factor(factor, exponent * multiplicity, &mut factors, &mut queue);
-        sort_factor(cofactor, exponent, &mut factors, &mut queue);
+        sort_factor(
+            factor,
+            exponent * multiplicity,
+            (),
+            &mut factors,
+            &mut queue,
+        );
+        sort_factor(cofactor, exponent, (), &mut factors, &mut queue);
     }
 
     Ok(factors)
 }
 
 /// Records `n^exponent`: a prime goes to `factors`, a perfect power is reduced to its root, and
-/// any other composite is queued for [`ecm_one_factor`].
-fn sort_factor(
+/// any other composite is queued for factorization, with `state`.
+pub(crate) fn sort_factor<T>(
     n: Integer,
     exponent: usize,
+    state: T,
     factors: &mut HashMap<Integer, usize>,
-    queue: &mut Vec<(Integer, usize)>,
+    queue: &mut Vec<(Integer, usize, T)>,
 ) {
     if n == 1 {
         return;
@@ -536,8 +579,8 @@ fn sort_factor(
         return;
     }
     match perfect_power(&n) {
-        Some((root, power)) => sort_factor(root, exponent * power as usize, factors, queue),
-        None => queue.push((n, exponent)),
+        Some((root, power)) => sort_factor(root, exponent * power as usize, state, factors, queue),
+        None => queue.push((n, exponent, state)),
     }
 }
 
@@ -668,6 +711,49 @@ mod tests {
         }
         let k = stage1_multiplier(200);
         assert_eq!(stage1(&p, &k), p.mont_ladder(&k));
+    }
+
+    #[test]
+    fn multipliers() {
+        let naive = |b1: usize| {
+            Primes::all()
+                .take_while(|&p| p <= b1)
+                .fold(Integer::from(1), |k, p| k * p.pow(b1.ilog(p)))
+        };
+        for b1 in [1, 2, 3, 4, 5, 10, 100, 1000, 12_345, 100_000] {
+            assert_eq!(stage1_multiplier(b1), naive(b1), "{b1}");
+        }
+        for (lo, hi) in [
+            (1, 1),
+            (2, 2),
+            (3, 100),
+            (100, 101),
+            (1000, 100_000),
+            (99, 12_345),
+        ] {
+            assert_eq!(
+                prime_power_product(lo, hi) * naive(lo),
+                naive(hi),
+                "{lo} {hi}"
+            );
+        }
+    }
+
+    #[test]
+    fn trial_division_bound() {
+        let (factors, cofactor) = trial_division(&Integer::from(2u64 * 2 * 3 * 65_521 * 65_537));
+        assert_eq!(
+            factors,
+            HashMap::from([
+                (Integer::from(2), 2),
+                (Integer::from(3), 1),
+                (Integer::from(65_521), 1)
+            ])
+        );
+        assert_eq!(cofactor, 65_537);
+        let (factors, cofactor) = trial_division(&Integer::from(1));
+        assert!(factors.is_empty());
+        assert_eq!(cofactor, 1);
     }
 
     #[test]

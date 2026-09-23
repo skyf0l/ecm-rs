@@ -15,7 +15,7 @@ pub struct Xz<E> {
 }
 
 /// Temporaries of the point operations, allocated once per ladder (or stage).
-pub struct Scratch<E>([E; 4]);
+pub struct Scratch<E>(pub [E; 4]);
 
 /// A Montgomery curve, given by `a24 = (a + 2)/4`, over the residues of `A`.
 pub struct Curve<A: Arith> {
