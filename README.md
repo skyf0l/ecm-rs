@@ -14,7 +14,7 @@ The implementation started as a translation of sympy's, and now uses the techniq
 [GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm) (whose code and papers it follows closely):
 
 - Montgomery modular arithmetic on fixed-size limb arrays (up to 1024 bits, with GMP's
-  low-level functions from 704 bits; GMP integers above).
+  low-level functions from 641 bits; GMP integers above).
 - GMP-ECM's curves with parametrization 2 (`-param 2`): small starting point, same torsion as
   Suyama's curves.
 - Stage 2: baby-step giant-step continuation with prime pairing for small `B2`, and the
