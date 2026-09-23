@@ -820,7 +820,9 @@ mod tests {
     #[test]
     fn mont_matches_integers() {
         let mut rand = RandState::new();
-        for bits in [2, 5, 63, 64, 65, 127, 128, 200, 256, 511, 512, 1000, 1024] {
+        for bits in [
+            2, 5, 63, 64, 65, 127, 128, 200, 256, 511, 512, 640, 641, 703, 704, 1000, 1024,
+        ] {
             for _ in 0..3 {
                 let mut n = Integer::from(Integer::random_bits(bits, &mut rand));
                 n.set_bit(0, true);
