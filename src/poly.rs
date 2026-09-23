@@ -956,7 +956,6 @@ mod tests {
                 let shape = wrap_shape(lmin, smin).unwrap();
                 assert!(shape.l >= lmin && shape.s >= smin);
                 assert_eq!(shape.l * shape.s, 64 * shape.rn);
-                // Not much larger than needed (but for tiny products, which are never wrapped).
                 // Not much larger than needed, but for small products (rarely wrapped).
                 let waste = (shape.rn * 64) as f64 / (lmin * smin) as f64;
                 if lmin >= 1000 {
