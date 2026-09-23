@@ -2,9 +2,9 @@
 //!
 //! Residues modulo an odd `n` of at most [`MAX_LIMBS`] 64-bit limbs are kept in Montgomery
 //! representation (`x` is stored as `x*R mod n` with `R = 2^(64*limbs)`), in fixed-size limb
-//! arrays: a modular multiplication is one interleaved multiply-and-reduce (CIOS) pass, with no
-//! division and no allocation. Larger (or even) moduli fall back to [`Plain`] big integer
-//! arithmetic.
+//! arrays: a modular multiplication is one interleaved multiply-and-reduce (CIOS) pass (from
+//! [`GMP_LIMBS`] limbs, GMP's product and Montgomery reduction), with no division and no
+//! allocation. Larger (or even) moduli fall back to [`Plain`] big integer arithmetic.
 //!
 //! The representation never leaks: values go in with [`Arith::residue`] and out with
 //! [`Arith::to_integer`], and [`Arith::gcd`] gives `gcd(x, n)` directly (`R` is coprime to an
@@ -14,6 +14,14 @@ use rug::{integer::Order, Assign, Integer};
 
 /// Largest number of 64-bit limbs handled by [`Mont`]; larger moduli use [`Plain`].
 pub const MAX_LIMBS: usize = 16;
+
+/// Smallest number of limbs from which [`Mont`] multiplies and squares with GMP's `mpn`
+/// functions (a product, then a Montgomery reduction) instead of its own code.
+///
+/// Measured in stage 1: GMP's squaring is faster from 11 limbs up, and the multiplications cost
+/// the same, but GMP's compiled code does not depend on the build profile, while our unrolled
+/// CIOS got up to 30% slower from 13 limbs up with `lto = "fat"` and `codegen-units = 1`.
+const GMP_LIMBS: usize = 11;
 
 /// Arithmetic modulo a fixed `n`, on residues of type [`Arith::Elem`].
 ///
@@ -267,6 +275,51 @@ impl<const N: usize> Mont<N> {
             r[j] = (t[j] & keep) | (d[j] & !keep);
         }
     }
+
+    /// Montgomery multiplication, CIOS method: `r = a*b/R mod n`.
+    #[inline(always)]
+    fn cios(&self, r: &mut [u64; N], a: &[u64; N], b: &[u64; N]) {
+        let m = &self.m;
+        // t = (t_hi, t_n, t[N-1..0]) < 2n at the end of every iteration.
+        let mut t = [0u64; N];
+        let mut t_n = 0u64;
+        for &bi in b.iter() {
+            let mut c = 0;
+            for j in 0..N {
+                (t[j], c) = mac(t[j], a[j], bi, c);
+            }
+            let (s, t_hi) = adc(t_n, c, 0);
+            // Add q*n, with q such that the low limb becomes 0, and shift down by one limb.
+            let q = t[0].wrapping_mul(self.ninv);
+            let (_, mut c) = mac(t[0], q, m[0], 0);
+            for j in 1..N {
+                (t[j - 1], c) = mac(t[j], q, m[j], c);
+            }
+            let carry;
+            (t[N - 1], carry) = adc(s, c, 0);
+            t_n = t_hi + carry;
+        }
+        self.reduce_once(r, &t, t_n);
+    }
+
+    /// `r = a*b/R mod n` (`r = a^2/R mod n` if `b` is `None`) with GMP: a product, then a
+    /// Montgomery reduction.
+    ///
+    /// Out of line: at these sizes, a call costs nothing next to the operation, and keeps the
+    /// (inlined) callers small.
+    #[inline(never)]
+    fn gmp_mul(&self, r: &mut [u64; N], a: &[u64; N], b: Option<&[u64; N]>) {
+        let mut wide = [[0u64; N]; 2];
+        let wide = wide.as_flattened_mut();
+        match b {
+            Some(b) => mpn::mul(wide, a, b),
+            None => mpn::sqr(wide, a),
+        }
+        let mut t = [0u64; N];
+        // a*b < n^2 < n*R, so t + carry*R = (a*b + q*n)/R < 2n.
+        let carry = mpn::redc(&mut t, wide, &self.m, self.ninv);
+        self.reduce_once(r, &t, carry);
+    }
 }
 
 impl<const N: usize> Arith for Mont<N> {
@@ -297,36 +350,23 @@ impl<const N: usize> Arith for Mont<N> {
         Integer::from_digits(x, Order::Lsf).gcd(&self.n)
     }
 
-    /// Montgomery multiplication, CIOS method: `r = a*b/R mod n`.
+    /// Montgomery multiplication: `r = a*b/R mod n`, with GMP from [`GMP_LIMBS`] limbs.
     #[inline(always)]
     fn mul(&self, r: &mut [u64; N], a: &[u64; N], b: &[u64; N]) {
-        let m = &self.m;
-        // t = (t_hi, t_n, t[N-1..0]) < 2n at the end of every iteration.
-        let mut t = [0u64; N];
-        let mut t_n = 0u64;
-        for &bi in b.iter() {
-            let mut c = 0;
-            for j in 0..N {
-                (t[j], c) = mac(t[j], a[j], bi, c);
-            }
-            let (s, t_hi) = adc(t_n, c, 0);
-            // Add q*n, with q such that the low limb becomes 0, and shift down by one limb.
-            let q = t[0].wrapping_mul(self.ninv);
-            let (_, mut c) = mac(t[0], q, m[0], 0);
-            for j in 1..N {
-                (t[j - 1], c) = mac(t[j], q, m[j], c);
-            }
-            let carry;
-            (t[N - 1], carry) = adc(s, c, 0);
-            t_n = t_hi + carry;
+        if mpn::ENABLED && N >= GMP_LIMBS {
+            self.gmp_mul(r, a, Some(b))
+        } else {
+            self.cios(r, a, b)
         }
-        self.reduce_once(r, &t, t_n);
     }
 
     /// For mid sizes, separate squaring (half the products of a multiplication) and reduction
-    /// are faster than CIOS.
+    /// are faster than CIOS; from [`GMP_LIMBS`], GMP's squaring and reduction are faster.
     #[inline(always)]
     fn sqr(&self, r: &mut [u64; N], a: &[u64; N]) {
+        if mpn::ENABLED && N >= GMP_LIMBS {
+            return self.gmp_mul(r, a, None);
+        }
         if !(3..=12).contains(&N) {
             return self.mul(r, a, a);
         }
@@ -417,6 +457,81 @@ impl<const N: usize> Arith for Mont<N> {
         let hi;
         (s[N - 1], hi) = adc(carry, c, 0);
         self.reduce_once(r, &s, hi);
+    }
+}
+
+/// GMP's low-level (`mpn`) functions on 64-bit limbs, for the large sizes of [`Mont`].
+mod mpn {
+    use gmp_mpfr_sys::gmp;
+
+    /// Whether GMP's limbs are our 64-bit limbs; if not, these functions must not be called.
+    pub const ENABLED: bool = gmp::LIMB_BITS == 64 && gmp::NAIL_BITS == 0;
+
+    extern "C" {
+        /// `mpn_redc_1(rp, up, mp, n, invm)`: Montgomery reduction by `n` limbs of the `2n`
+        /// limbs `up` (clobbered) modulo the `n` limbs `mp`, with `invm = -1/mp[0] mod 2^64`.
+        /// Writes `n` limbs to `rp` and returns the carry out of them.
+        ///
+        /// Internal to GMP (not in `gmp.h`), but exported with this signature by every build of
+        /// GMP since 5.0, including the one of `gmp-mpfr-sys`.
+        #[link_name = "__gmpn_redc_1"]
+        fn mpn_redc_1(
+            rp: *mut gmp::limb_t,
+            up: *mut gmp::limb_t,
+            mp: *const gmp::limb_t,
+            n: gmp::size_t,
+            invm: gmp::limb_t,
+        ) -> gmp::limb_t;
+    }
+
+    /// `r = a*b`, with `r` of `2*a.len()` limbs.
+    #[inline(always)]
+    pub fn mul(r: &mut [u64], a: &[u64], b: &[u64]) {
+        assert!(ENABLED && a.len() == b.len() && r.len() == 2 * a.len() && !a.is_empty());
+        // SAFETY: the limbs are 64 bits (ENABLED), `r` has room for the 2n limbs of the product
+        // and cannot overlap the operands (it is borrowed mutably), and n > 0.
+        unsafe {
+            gmp::mpn_mul_n(
+                r.as_mut_ptr().cast(),
+                a.as_ptr().cast(),
+                b.as_ptr().cast(),
+                a.len() as gmp::size_t,
+            )
+        }
+    }
+
+    /// `r = a^2`, with `r` of `2*a.len()` limbs.
+    #[inline(always)]
+    pub fn sqr(r: &mut [u64], a: &[u64]) {
+        assert!(ENABLED && r.len() == 2 * a.len() && !a.is_empty());
+        // SAFETY: as in `mul`.
+        unsafe {
+            gmp::mpn_sqr(
+                r.as_mut_ptr().cast(),
+                a.as_ptr().cast(),
+                a.len() as gmp::size_t,
+            )
+        }
+    }
+
+    /// `r + carry*2^(64*n) = (t + q*m)/2^(64*n)` for the `q < 2^(64*n)` that makes it exact:
+    /// Montgomery reduction of `t` (`2n` limbs, clobbered) modulo the odd `m` (`n` limbs), with
+    /// `ninv = -1/m mod 2^64`. Returns `carry`.
+    #[inline(always)]
+    pub fn redc(r: &mut [u64], t: &mut [u64], m: &[u64], ninv: u64) -> u64 {
+        let n = m.len();
+        assert!(ENABLED && r.len() == n && t.len() == 2 * n && n > 0 && m[0] & 1 == 1);
+        // SAFETY: the limbs are 64 bits (ENABLED), the buffers have the sizes mpn_redc_1
+        // expects (checked above) and are distinct (`r` and `t` are borrowed mutably).
+        unsafe {
+            mpn_redc_1(
+                r.as_mut_ptr().cast(),
+                t.as_mut_ptr().cast(),
+                m.as_ptr().cast(),
+                n as gmp::size_t,
+                ninv as gmp::limb_t,
+            ) as u64
+        }
     }
 }
 
@@ -816,6 +931,45 @@ mod tests {
                 assert_eq!(a.to_integer(&r), reduce(&Integer::from(x - y), &n));
             }
         }
+    }
+
+    /// The GMP path of [`Mont`] against its own CIOS, including the carry out of the reduction.
+    #[test]
+    fn gmp_matches_cios() {
+        fn check<const N: usize>(rand: &mut RandState<'_>) {
+            let r = Integer::from(Integer::u_pow_u(2, 64 * N as u32));
+            let mut moduli = vec![Integer::from(&r - 1), Integer::from(&r >> 1) + 1u32];
+            moduli.extend((0..6).map(|_| adversarial(64 * N as u32, rand) | 1u32));
+            for n in moduli
+                .into_iter()
+                .filter(|n| n.significant_bits() > 64 * N as u32 - 64)
+            {
+                let a = Mont::<N>::new(&n);
+                let mut values: Vec<[u64; N]> = vec![a.residue(&Integer::from(&n - 1))];
+                values.extend((0..6).map(|_| a.residue(&(adversarial(64 * N as u32, rand) % &n))));
+                let (mut r1, mut r2) = ([0; N], [0; N]);
+                for x in &values {
+                    a.cios(&mut r1, x, x);
+                    a.gmp_mul(&mut r2, x, None);
+                    assert_eq!(r1, r2, "square mod {n}");
+                    for y in &values {
+                        a.cios(&mut r1, x, y);
+                        a.gmp_mul(&mut r2, x, Some(y));
+                        assert_eq!(r1, r2, "product mod {n}");
+                    }
+                }
+            }
+        }
+        if !mpn::ENABLED {
+            return;
+        }
+        let mut rand = RandState::new();
+        check::<1>(&mut rand);
+        check::<4>(&mut rand);
+        check::<11>(&mut rand);
+        check::<12>(&mut rand);
+        check::<13>(&mut rand);
+        check::<16>(&mut rand);
     }
 
     /// `1/2^64 mod n`, or `1` if `n` is even.

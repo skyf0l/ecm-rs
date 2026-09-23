@@ -240,6 +240,7 @@ name = "ecm"
 version = "1.0.2"
 dependencies = [
  "criterion",
+ "gmp-mpfr-sys",
  "gungraun",
  "indicatif",
  "primal",
