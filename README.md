@@ -6,26 +6,59 @@
 
 Lenstra's Elliptic Curve Factorization Implementation with Big Integers.
 
-The code is based on the [sympy](https://github.com/sympy/sympy) implementation and translated to Rust.
-
 Based on [rug](https://crates.io/crates/rug), it can use [arbitrary-precision numbers (aka BigNum)](https://en.wikipedia.org/wiki/Arbitrary-precision_arithmetic).
+
+## Algorithm
+
+The implementation started as a translation of sympy's, and now uses the techniques of
+[GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm) (whose code and papers it follows closely):
+
+- Montgomery modular arithmetic on fixed-size limb arrays (up to 1024 bits, GMP integers above).
+- GMP-ECM's curves with parametrization 2 (`-param 2`): small starting point, same torsion as
+  Suyama's curves.
+- Stage 2: baby-step giant-step continuation with prime pairing for small `B2`, and the
+  polynomial ("FFT") continuation (product trees, multipoint evaluation, Kronecker substitution)
+  for large `B2`, chosen by a cost model.
+- `ecm` finds the factors from the smallest to the largest: after trial division by the primes
+  below 2^16, curves are run with GMP-ECM's optimal `B1` (and default `B2`) for factors of 10,
+  15, 20, ... digits in turn, each for the expected number of curves given by GMP-ECM's
+  probability model, and Pollard's P-1 method (with a `B1` 20 times larger) runs before each
+  size. The time to find a factor depends on its size, not on the size of the number.
+- `ecm_with_params` and `ecm_one_factor` run curves with fixed bounds.
 
 ## Performance
 
-Using a `Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz` CPU, the following results were obtained:
+Using a `Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz` CPU (one thread), time to factor completely
+with `ecm` (fixed seed, deterministic), and with GMP-ECM 7.0.7 (`ecm -c 100000 B1`, `B1` for the
+size of the second largest prime factor, mean of 5 runs, including about 2.4 ms of process
+startup):
 
-| Number                             | sympy   | ecm-rs | sympy / ecm-rs |
-| ---------------------------------- | ------- | ------ | -------------- |
-| 398883434337287                    | 0.074s  | 0.057s | 1.23x faster   |
-| 46167045131415113                  | 0.148s  | 0.039s | 3.8x faster    |
-| 64211816600515193                  | 0.552s  | 0.017s | 32.47x faster  |
-| 168541512131094651323              | 0.071s  | 0.038s | 1.87x faster   |
-| 631211032315670776841              | 0.081s  | 0.128s | 0.63x faster   |
-| 4132846513818654136451             | 0.266s  | 0.038s | 7.0x faster    |
-| 4516511326451341281684513          | 0.495s  | 0.038s | 13.03x faster  |
-| 3146531246531241245132451321       | 1.22s   | 0.22s  | 5.55x faster   |
-| 4269021180054189416198169786894227 | 1.916s  | 0.018s | 106.44x faster |
-| 7060005655815754299976961394452809 | 13.555s | 3.467s | 3.91x faster   |
+| Number                             | sympy   | ecm-rs 1.0.2 | ecm-rs  | GMP-ECM |
+| ---------------------------------- | ------- | ------------ | ------- | ------- |
+| 398883434337287                    | 0.074s  | 0.057s       | 0.0009s | 0.0036s |
+| 46167045131415113                  | 0.148s  | 0.039s       | 0.0009s | 0.0047s |
+| 64211816600515193                  | 0.552s  | 0.017s       | 0.0021s | 0.0039s |
+| 168541512131094651323              | 0.071s  | 0.038s       | 0.0010s | 0.0039s |
+| 631211032315670776841              | 0.081s  | 0.128s       | 0.0027s | 0.0085s |
+| 4132846513818654136451             | 0.266s  | 0.038s       | 0.0017s | 0.0047s |
+| 4516511326451341281684513          | 0.495s  | 0.038s       | 0.0009s | 0.0057s |
+| 3146531246531241245132451321       | 1.22s   | 0.22s        | 0.0025s | 0.0105s |
+| 4269021180054189416198169786894227 | 1.916s  | 0.018s       | 0.0037s | 0.0041s |
+| 7060005655815754299976961394452809 | 13.555s | 3.467s       | 0.013s  | 0.056s  |
+
+Numbers of 60 and 80 digits with one small prime factor (and a prime cofactor): mean time to
+factor completely with `ecm` (3 numbers, 5 seeds each for 60 digits, 3 for 80 digits), and
+to find the factor with GMP-ECM 7.0.7 given the optimal `B1` for its size (`ecm -c 100000 -one
+B1`, default parametrization, as many runs). The variance is large: single runs range from
+below 0.1x to 5x the mean. ecm-rs 1.0.2 chose its bounds from the size of the number
+(`B1 = 26e7` for 60 digits): more than an hour per curve.
+
+| Factor    | Number    | ecm-rs | GMP-ECM (`B1`)  |
+| --------- | --------- | ------ | --------------- |
+| 15 digits | 60 digits | 0.062s | 0.153s (2000)   |
+| 20 digits | 60 digits | 0.55s  | 1.10s (11000)   |
+| 25 digits | 60 digits | 7.3s   | 14.8s (50000)   |
+| 30 digits | 80 digits | 72s    | 138s (250000)   |
 
 ## Credits
 
