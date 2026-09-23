@@ -9,7 +9,8 @@
 //!
 //! When only some coefficients of a product are needed, a wrap-around product (modulo
 //! `X^L - 1`, a product of integers modulo `2^(L*s) - 1`: GMP's `mpn_mulmod_bnm1`, about half
-//! the cost of a full product) is often enough: for `q*f` in a reduction modulo `f`, whose high
+//! the cost of a full product) is often enough: for the middle products of the multipoint
+//! evaluation and of the Newton iteration, and for `q*f` in a reduction modulo `f`, whose high
 //! coefficients are known.
 //!
 //! A monic polynomial of degree `d` is stored as its `d` low coefficients, the leading `1` is
@@ -121,7 +122,13 @@ pub fn mul<A: PolyArith>(
 }
 
 /// `out[t]` = coefficient `from + t` of `x*y` (zero above its degree), unpacking and reducing
-/// only these: a short product when `from = 0`.
+/// only these: a short product when `from = 0`, a middle product otherwise.
+///
+/// For a middle product, the integer product modulo `2^N - 1` (GMP's `mpn_mulmod_bnm1`, about
+/// half the cost of a full product for `N` about half its size) is enough when `N` covers the
+/// needed coefficients and the part above `N`, which wraps around to the low bits, stays below
+/// the needed ones: with a spare bit per slot, the low coefficients and the wrapped part both
+/// are below `2^(from*s - 1)`, so their sum doesn't carry into the coefficient `from`.
 pub fn mul_part<A: PolyArith>(
     a: &A,
     ws: &mut Workspace,
@@ -137,6 +144,20 @@ pub fn mul_part<A: PolyArith>(
         return;
     }
     let s = slot_bits(a.modulus(), lx.min(ly));
+    let len = lx + ly - 1;
+    if from > 0 && mpn::ENABLED {
+        // With a spare bit: every coefficient is below 2^(s - 1).
+        let s = s + 1;
+        let to = from + out.len();
+        let bits = (to.max(lx).max(ly) * s).max((len.saturating_sub(from)) * s + 1);
+        let rn = mpn::mulmod_bnm1_next_size(bits.div_ceil(64));
+        let full = (len * s).div_ceil(64);
+        // GMP requires an + bn > rn/2.
+        if rn * 5 < full * 4 && ((lx + ly) * s) / 64 > rn / 2 {
+            kronecker(a, ws, out, from, x, y, s, Some(rn));
+            return;
+        }
+    }
     kronecker(a, ws, out, from, x, y, s, None);
 }
 
@@ -279,8 +300,9 @@ fn pack<A: PolyArith>(a: &A, buf: &mut Vec<u64>, x: &[A::Elem], s: usize) -> usi
 }
 
 /// Kronecker substitution: coefficients `from..from + out.len()` of `x*y` with slots of `s`
-/// bits, with one big integer product, or modulo `2^(64*rn) - 1` with `rn = Some(rn)` (then
-/// `s*L = 64*rn`: a wrap-around product modulo `X^L - 1`, see [`mul_wrap`]).
+/// bits, with one big integer product, or modulo `2^(64*rn) - 1` with `rn = Some(rn)` (a
+/// wrap-around product modulo `X^L - 1` if `s*L = 64*rn`, see [`mul_wrap`], or a middle product,
+/// see [`mul_part`]).
 #[allow(clippy::too_many_arguments)]
 fn kronecker<A: PolyArith>(
     a: &A,
@@ -473,7 +495,7 @@ pub fn inverse<A: PolyArith>(a: &A, ws: &mut Workspace, f: &[A::Elem], len: usiz
         let next = (2 * prec).min(len);
         let fl = next.min(f.len());
         let h = next - prec;
-        // f*g = 1 + X^prec * e (mod X^next).
+        // f*g = 1 + X^prec * e (mod X^next): a middle product.
         e.resize(h, a.zero());
         let x = Operand::new(&f[..fl]);
         mul_part(a, ws, &mut e, prec, x, Operand::new(&g[..prec]));
@@ -657,7 +679,7 @@ fn middle<A: PolyArith>(
         }
         return;
     }
-    // (reverse(r) * s)[t + m - 1] = sum_i r_i * s[t + i].
+    // (reverse(r) * s)[t + m - 1] = sum_i r_i * s[t + i]: a middle product.
     rev.clear();
     rev.extend(r.iter().rev().cloned());
     let s_used = &s[..l + m - 1];
