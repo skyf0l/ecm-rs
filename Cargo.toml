@@ -28,6 +28,13 @@ opt-level = 3
 opt-level = 3
 debug = true
 
+# Wall-clock benchmarks with the optimizations of a final build (`cargo bench --profile
+# bench-lto ...`): instruction counts don't see their effects (inlining, carry chain spills).
+[profile.bench-lto]
+inherits = "bench"
+lto = "fat"
+codegen-units = 1
+
 [features]
 default = []
 progress-bar = ["indicatif"]
@@ -55,19 +62,19 @@ serde_json = "1.0.151"
 [lib]
 bench = false
 
-# Instruction counts (Valgrind), deterministic: point ops, one curve, setup costs.
+# Instruction counts (Valgrind), deterministic: modular arithmetic, stages of one curve, setup.
 [[bench]]
 name = "ops"
 harness = false
 required-features = ["bench"]
 
-# Instruction counts (Valgrind), deterministic: end-to-end factorization of small numbers.
+# Instruction counts (Valgrind), deterministic: driver overhead, factorizations of small numbers.
 [[bench]]
 name = "e2e"
 harness = false
 required-features = ["bench"]
 
-# Wall-clock time (criterion), local use only: too noisy for shared CI runners.
+# Wall-clock time (criterion) of one curve's stages, local use only: too noisy for CI runners.
 [[bench]]
 name = "walltime"
 harness = false
@@ -76,4 +83,9 @@ required-features = ["bench"]
 # Curve success rate per factor size: expected curves to find a factor.
 [[example]]
 name = "success_rate"
+required-features = ["bench"]
+
+# Wall-clock time per curve, the input of scripts/compare_gmp_ecm.sh.
+[[example]]
+name = "per_curve"
 required-features = ["bench"]
