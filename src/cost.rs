@@ -9,9 +9,20 @@ use crate::stage2_poly::PolyPlan;
 
 /// Montgomery multiplication, by number of limbs (index 0 unused).
 const MUL_NS: [f64; 17] = [
-    0.0, 4.7, 9.8, 16.1, 25.8, 43.0, 58.6, 76.5, 101.6, 121.3, 148.8, 177.3, 201.8, 248.5, 275.0,
-    317.5, 349.2,
+    0.0, 3.7, 9.7, 16.8, 24.1, 43.6, 56.6, 74.6, 94.8, 120.5, 143.5, 200.0, 241.0, 274.0, 311.0,
+    355.0, 402.0,
 ];
+
+/// Packing and unpacking a coefficient of a Kronecker product, besides its share of a modular
+/// multiplication.
+const PACK_NS: f64 = 30.0;
+
+/// Overhead of a pair of the baby-step giant-step continuation, besides its modular
+/// multiplication.
+const PAIR_NS: f64 = 2.0;
+
+/// `b2` at which the cost of a pair was measured.
+const PAIRS_B2: f64 = 12.7e6;
 
 /// Product of two `2^(10 + i)`-bit integers by GMP.
 const GMP_MUL_NS: [f64; 16] = [
@@ -108,7 +119,7 @@ impl Costs {
         let slot = (2 * self.bits + (usize::BITS - lo.leading_zeros()) as usize) as f64;
         // GMP splits an unbalanced product into balanced ones.
         let gmp = Self::gmp(lo as f64 * slot) * hi as f64 / lo as f64;
-        gmp + out * self.redc + (la + lb) as f64 * self.mul * 0.05
+        gmp + out * self.redc + (la + lb) as f64 * (self.mul * 0.05 + PACK_NS)
     }
 
     /// Middle product of [`crate::poly`]: `l` outputs, by a monic polynomial of degree `m`.
@@ -206,7 +217,11 @@ impl Costs {
         let primes = prime_count(b2) - prime_count(b1);
         let giant = (b2 - b1) / d + 2;
         let points = 6 * (d / 3) + 4 * baby + 11 * giant;
-        (points as f64 + 0.77 * 1.1 * primes) * self.mul
+        // A pair also costs a subtraction and finding it in the table (a few nanoseconds), and
+        // a bit more as the table outgrows the caches (measured: +1.7% when b2 doubles).
+        let memory = (1.0 + 0.017 * (b2 as f64 / PAIRS_B2).log2()).max(0.9);
+        let pair = (1.07 * self.mul + PAIR_NS) * memory;
+        points as f64 * self.mul + 0.77 * primes * pair
     }
 }
 
