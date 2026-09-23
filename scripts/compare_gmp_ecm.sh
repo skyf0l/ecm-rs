@@ -21,13 +21,15 @@ if ! command -v "$ecm" > /dev/null; then
   echo "GMP-ECM not found ('$ecm'): pass its path as the first argument or in \$ECM." >&2
   exit 0
 fi
+# Absolute path: the script runs from the repository root.
+ecm=$(realpath "$(command -v "$ecm")")
 
 cd "$(dirname "$0")/.."
 profile=${PROFILE:-release}
 cargo build --quiet --profile "$profile" --features bench --example per_curve
 dir=$profile
 [ "$profile" = dev ] && dir=debug
-per_curve=target/$dir/examples/per_curve
+per_curve=${CARGO_TARGET_DIR:-target}/$dir/examples/per_curve
 
 ours=$(mktemp)
 "$per_curve" "$@" | grep -v '^#' > "$ours"
