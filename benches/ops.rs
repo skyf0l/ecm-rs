@@ -40,7 +40,7 @@ fn stage2_input(bits: u32, b1: usize, b2: usize, poly: bool) -> (Point, Stage2Pl
     (SIGMA..)
         .filter_map(|sigma| curve(&n, Param::default(), &Integer::from(sigma)).ok())
         .map(|p| stage1(&p, &k))
-        .find(|q| q.z_cord.clone().gcd(&n) == 1)
+        .find(|q| q.z.clone().gcd(&n) == 1)
         .map(|q| (q, plan))
         .unwrap()
 }

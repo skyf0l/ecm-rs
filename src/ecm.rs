@@ -1,7 +1,6 @@
 use crate::{
     arith::{with_arith, Arith, Factor},
-    curve::Curve,
-    point::Point,
+    curve::{Curve, Point},
     primes::primes,
     stage2::{stage2_with, Stage2Plan},
 };
@@ -49,8 +48,8 @@ const PRIMALITY_REPS: u32 = 25;
 /// Let q be an unknown factor of N. Then the order of the curve E, |E(FF(q))|,
 /// might be a smooth number that divides k. Then we have k = l * |E(FF(q))|
 /// for some l. For any point belonging to the curve E, |E(FF(q))|*P = O,
-/// hence k*P = l*|E(FF(q))|*P. Thus kP.z_cord = 0 (mod q), and the unknown factor of N (q)
-/// can be recovered by taking gcd(kP.z_cord, N).
+/// hence k*P = l*|E(FF(q))|*P. Thus kP.z = 0 (mod q), and the unknown factor of N (q)
+/// can be recovered by taking gcd(kP.z, N).
 ///
 /// Stage 2: This is a continuation of Stage 1 if k*P != O. The idea is to utilize
 /// the fact that even if kP != 0, the value of k might miss just one large prime divisor
@@ -211,7 +210,7 @@ pub fn run_curve(
     };
 
     let q = stage1(&q, k);
-    let g = q.z_cord.clone().gcd(n);
+    let g = q.z.clone().gcd(n);
 
     // Stage 1 factor
     if &g != n && g != 1 {
@@ -311,7 +310,12 @@ pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     };
 
     let v_3 = v.pow_mod(&three, n).unwrap();
-    Ok(Point::new(u_3, v_3, a24, n.clone()))
+    Ok(Point {
+        x: u_3,
+        z: v_3,
+        a24,
+        n: n.clone(),
+    })
 }
 
 /// Builds the starting point of a curve using GMP-ECM's parametrization 1
@@ -330,7 +334,7 @@ pub fn square_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     if d == 0 || d == 1 {
         return Err(n.clone());
     }
-    Ok(Point::new(2.into(), 1.into(), d, n.clone()))
+    Ok(Point::start(d, n))
 }
 
 /// Builds the starting point of a curve using GMP-ECM's parametrization 2
@@ -373,7 +377,7 @@ pub fn batch2_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     let numerator: Integer = x3_4 * 3u32 + Integer::from(&x3_2 * 6u32) - 1u32;
     let a = md(-numerator * inv(&md(4 * x3_2 * x3))?);
     let a24 = md((a + 2) * inv(&Integer::from(4))?);
-    Ok(Point::new(2.into(), 1.into(), a24, n.clone()))
+    Ok(Point::start(a24, n))
 }
 
 /// `sigma*(-3 : 3 : 1)` in Jacobian coordinates, on the curve `y^2 = x^3 + 36`.
@@ -441,21 +445,26 @@ fn batch2_multiple<A: Arith>(a: A, sigma: &Integer) -> (Integer, Integer, Intege
 
 /// Stage 1: computes `k*P`, for `k >= 1`.
 pub fn stage1(p: &Point, k: &Integer) -> Point {
-    with_arith!(&p.modulus, |arith| stage1_with(arith, p, k))
+    with_arith!(&p.n, |arith| stage1_with(arith, p, k))
 }
 
 fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer) -> Point {
-    let n: &Integer = &p.modulus;
+    let n: &Integer = &p.n;
     // Normalizing P to z = 1 saves a multiplication per ladder step. If z is not invertible, P
     // is the point at infinity modulo a factor of n, and so is k*P: P has the same gcd.
-    let Ok(z_inv) = p.z_cord.clone().invert(n) else {
+    let Ok(z_inv) = p.z.clone().invert(n) else {
         return p.clone();
     };
-    let x = Integer::from(&p.x_cord * &z_inv) % n;
+    let x = Integer::from(&p.x * &z_inv) % n;
 
-    let curve = Curve::new(arith, &p.a_24);
+    let curve = Curve::new(arith, &p.a24);
     let q = curve.ladder(&curve.arith.factor(&x), &Factor::One, k);
-    p.on_same_curve(curve.arith.to_integer(&q.x), curve.arith.to_integer(&q.z))
+    Point {
+        x: curve.arith.to_integer(&q.x),
+        z: curve.arith.to_integer(&q.z),
+        a24: p.a24.clone(),
+        n: n.clone(),
+    }
 }
 
 /// Stage 2: baby-step giant-step standard continuation, with baby and giant steps normalized
@@ -464,7 +473,7 @@ fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer) -> Point {
 /// Returns `gcd(g, n)` where `g` is the accumulated product over the primes in `(b1, b2]` of
 /// `plan` (or a factor found when normalizing the points, possibly `n`), and `1` if `b2 <= b1`.
 pub fn stage2(q: &Point, plan: &Stage2Plan) -> Integer {
-    with_arith!(&q.modulus, |arith| stage2_with(arith, q, plan))
+    with_arith!(&q.n, |arith| stage2_with(arith, q, plan))
 }
 
 /// Trial division removes the prime factors below this bound.
@@ -674,9 +683,9 @@ mod tests {
         // Reference values computed with sympy's `_ecm_one_factor` curve setup.
         let n = Integer::from(398_883_434_337_287u64);
         let p = suyama_curve(&n, &Integer::from(123_456_789)).unwrap();
-        assert_eq!(p.x_cord, 397_114_098_224_516u64);
-        assert_eq!(p.z_cord, 208_271_263_140_048u64);
-        assert_eq!(*p.a_24, 161_303_906_265_111u64);
+        assert_eq!(p.x, 397_114_098_224_516u64);
+        assert_eq!(p.z, 208_271_263_140_048u64);
+        assert_eq!(p.a24, 161_303_906_265_111u64);
     }
 
     #[test]
@@ -694,7 +703,7 @@ mod tests {
         ]);
         for sigma in 2..=40 {
             let p = square_curve(&n, &Integer::from(sigma)).unwrap();
-            let g = stage1(&p, &k).z_cord.gcd(&n);
+            let g = stage1(&p, &k).z.gcd(&n);
             match expected.get(&sigma) {
                 Some(&factor) => assert_eq!(g, factor, "sigma = {sigma}"),
                 None => assert_eq!(g, 1, "sigma = {sigma}"),
@@ -716,7 +725,7 @@ mod tests {
         expected.extend([(9, q.clone()), (17, q), (24, n.clone())]);
         for sigma in 2..=40 {
             let g = match batch2_curve(&n, &Integer::from(sigma)) {
-                Ok(p) => stage1(&p, &k).z_cord.gcd(&n),
+                Ok(p) => stage1(&p, &k).z.gcd(&n),
                 Err(g) => g,
             };
             assert_eq!(
@@ -731,19 +740,32 @@ mod tests {
         }
     }
 
-    /// Checks the Montgomery ladder of [`stage1`] against the reference [`Point::mont_ladder`].
+    /// `p` and `q` are the same projective point: `x_p * z_q = x_q * z_p (mod n)`.
+    fn same_point(p: &Point, q: &Point) -> bool {
+        Integer::from(&p.x * &q.z) % &p.n == Integer::from(&q.x * &p.z) % &p.n
+    }
+
+    /// Checks the ladder of [`stage1`] against the plain arithmetic, and the group law
+    /// `a*(b*P) = (a*b)*P` (`n` must be prime).
     fn check_stage1(n: &Integer, param: Param, sigma: u64) {
         let p = curve(n, param, &Integer::from(sigma)).unwrap();
-        for k in [1u32, 2, 3, 7, 1000, 123_456_789] {
-            let k = Integer::from(k);
-            assert_eq!(
-                stage1(&p, &k),
-                p.mont_ladder(&k),
-                "{n} {param:?} {sigma} {k}"
-            );
+        let plain = |k: &Integer| stage1_with(crate::arith::Plain::new(n), &p, k);
+        assert!(same_point(&stage1(&p, &Integer::from(1)), &p));
+        let ks = [2u32, 3, 7, 1000, 123_456_789].map(Integer::from);
+        for k in ks.iter().chain([stage1_multiplier(200)].iter()) {
+            assert!(same_point(&stage1(&p, k), &plain(k)), "{n} {param:?} {k}");
         }
-        let k = stage1_multiplier(200);
-        assert_eq!(stage1(&p, &k), p.mont_ladder(&k));
+        for a in &ks {
+            for b in &ks {
+                assert!(
+                    same_point(
+                        &stage1(&stage1(&p, b), a),
+                        &stage1(&p, &Integer::from(a * b))
+                    ),
+                    "{n} {param:?} {a} {b}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -876,11 +898,11 @@ mod tests {
                 continue;
             };
             let q = stage1(&p, &k);
-            if q.z_cord.clone().gcd(n) != 1 {
+            if q.z.clone().gcd(n) != 1 {
                 continue;
             }
             let expected = primes.iter().any(|l| {
-                let g = q.mont_ladder(l).z_cord.gcd(n);
+                let g = stage1(&q, l).z.gcd(n);
                 g != 1 && &g != n
             });
             for plan in &plans {
@@ -1084,116 +1106,62 @@ mod tests {
         ));
     }
 
+    /// Factorizations from sympy's ECM tests.
     #[test]
-    fn sympy_1() {
-        assert_eq!(
-            ecm(&Integer::from_str("398883434337287").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("99476569").unwrap(), 1),
-                (Integer::from_str("4009823").unwrap(), 1),
-            ])
-        );
-    }
-
-    #[test]
-    fn sympy_2() {
-        assert_eq!(
-            ecm(&Integer::from_str("46167045131415113").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("43").unwrap(), 1),
-                (Integer::from_str("2634823").unwrap(), 1),
-                (Integer::from_str("407485517").unwrap(), 1),
-            ])
-        );
-    }
-
-    #[test]
-    fn sympy_3() {
-        assert_eq!(
-            ecm(&Integer::from_str("64211816600515193").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("281719").unwrap(), 1),
-                (Integer::from_str("359641").unwrap(), 1),
-                (Integer::from_str("633767").unwrap(), 1),
-            ])
-        );
-    }
-
-    #[test]
-    fn sympy_4() {
-        assert_eq!(
-            ecm(&Integer::from_str("168541512131094651323").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("79").unwrap(), 1),
-                (Integer::from_str("113").unwrap(), 1),
-                (Integer::from_str("11011069").unwrap(), 1),
-                (Integer::from_str("1714635721").unwrap(), 1),
-            ])
-        );
-    }
-
-    #[test]
-    fn sympy_5() {
-        assert_eq!(
-            ecm(&Integer::from_str("631211032315670776841").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("9312934919").unwrap(), 1),
-                (Integer::from_str("67777885039").unwrap(), 1),
-            ])
-        );
-    }
-
-    #[test]
-    fn sympy_6() {
-        assert_eq!(
-            ecm(&Integer::from_str("4132846513818654136451").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("47").unwrap(), 1),
-                (Integer::from_str("160343").unwrap(), 1),
-                (Integer::from_str("2802377").unwrap(), 1),
-                (Integer::from_str("195692803").unwrap(), 1),
-            ])
-        );
-    }
-
-    #[test]
-    fn sympy_7() {
-        assert_eq!(
-            ecm(&Integer::from_str("4516511326451341281684513").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("3").unwrap(), 2),
-                (Integer::from_str("39869").unwrap(), 1),
-                (Integer::from_str("131743543").unwrap(), 1),
-                (Integer::from_str("95542348571").unwrap(), 1),
-            ])
-        );
-    }
-
-    #[test]
-    fn sympy_8() {
-        assert_eq!(
-            ecm(&Integer::from_str("3146531246531241245132451321").unwrap(),).unwrap(),
-            HashMap::from([
-                (Integer::from_str("3").unwrap(), 1),
-                (Integer::from_str("100327907731").unwrap(), 1),
-                (Integer::from_str("10454157497791297").unwrap(), 1),
-            ])
-        );
-    }
-
-    #[test]
-    fn sympy_9() {
-        assert_eq!(
-            ecm(&Integer::from_str("4269021180054189416198169786894227").unwrap()).unwrap(),
-            HashMap::from([
-                (Integer::from_str("184039").unwrap(), 1),
-                (Integer::from_str("241603").unwrap(), 1),
-                (Integer::from_str("333331").unwrap(), 1),
-                (Integer::from_str("477973").unwrap(), 1),
-                (Integer::from_str("618619").unwrap(), 1),
-                (Integer::from_str("974123").unwrap(), 1),
-            ])
-        );
+    fn sympy() {
+        let cases: [(&str, &[(&str, usize)]); 9] = [
+            ("398883434337287", &[("99476569", 1), ("4009823", 1)]),
+            (
+                "46167045131415113",
+                &[("43", 1), ("2634823", 1), ("407485517", 1)],
+            ),
+            (
+                "64211816600515193",
+                &[("281719", 1), ("359641", 1), ("633767", 1)],
+            ),
+            (
+                "168541512131094651323",
+                &[("79", 1), ("113", 1), ("11011069", 1), ("1714635721", 1)],
+            ),
+            (
+                "631211032315670776841",
+                &[("9312934919", 1), ("67777885039", 1)],
+            ),
+            (
+                "4132846513818654136451",
+                &[("47", 1), ("160343", 1), ("2802377", 1), ("195692803", 1)],
+            ),
+            (
+                "4516511326451341281684513",
+                &[("3", 2), ("39869", 1), ("131743543", 1), ("95542348571", 1)],
+            ),
+            (
+                "3146531246531241245132451321",
+                &[("3", 1), ("100327907731", 1), ("10454157497791297", 1)],
+            ),
+            (
+                "4269021180054189416198169786894227",
+                &[
+                    ("184039", 1),
+                    ("241603", 1),
+                    ("333331", 1),
+                    ("477973", 1),
+                    ("618619", 1),
+                    ("974123", 1),
+                ],
+            ),
+        ];
+        for (n, factors) in cases {
+            let expected = factors
+                .iter()
+                .map(|&(p, e)| (Integer::from_str(p).unwrap(), e))
+                .collect();
+            assert_eq!(
+                ecm(&Integer::from_str(n).unwrap()).unwrap(),
+                expected,
+                "{n}"
+            );
+        }
     }
 
     #[test]
