@@ -3,7 +3,8 @@ name: Benchmarks
 # - Pull requests:
 #   - the base branch and the PR are measured in the same job, the comparison is written to
 #     the job summary, and the job fails on an instruction count regression (exact);
-#   - one PR comment with both comparisons, worst changes first (updated on each push);
+#   - one PR comment with both comparisons, worst changes first (updated on each push), and
+#     the expected cost to find a factor (expected curves x instructions per curve);
 #   - github-action-benchmark compares with the last main results stored on gh-pages, in the
 #     job summary.
 # - Pushes to main: github-action-benchmark stores the results on the gh-pages branch, draws
@@ -39,6 +40,10 @@ jobs:
     name: Instruction counts
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # Halves the build time of the benchmarks (built twice, base and PR); debug info does not
+      # change the instruction counts.
+      CARGO_PROFILE_BENCH_DEBUG: 'false'
     outputs:
       # Results were uploaded (even with regressions): the report job can run.
       uploaded: ${{ steps.upload.outcome == 'success' }}
@@ -110,7 +115,10 @@ jobs:
         echo "regressed=$regressed" >> "$GITHUB_OUTPUT"
 
     - name: Convert results
-      run: .github/scripts/gungraun-to-benchmark.sh > instructions.json
+      run: |
+        .github/scripts/gungraun-to-benchmark.sh > instructions.json
+        # Instructions per curve, for the expected cost to find a factor (report job).
+        .github/scripts/gungraun-per-curve.sh > per_curve.json
 
     - name: Build PR comment
       if: github.event_name == 'pull_request'
@@ -123,6 +131,7 @@ jobs:
         path: |
           instructions.json
           instructions.md
+          per_curve.json
 
     - name: Fail on regressions
       if: steps.bench.outputs.regressed == 'true'
@@ -164,6 +173,10 @@ jobs:
         echo '## Curve success rate' >> "$GITHUB_STEP_SUMMARY"
         cargo run --locked --release --features bench --example success_rate -- "${args[@]}" \
           | tee -a "$GITHUB_STEP_SUMMARY"
+        # For the expected cost of the base branch (report job).
+        if [ -f "$RUNNER_TEMP/base.json" ]; then
+          cp "$RUNNER_TEMP/base.json" success_rate_base.json
+        fi
 
     - uses: actions/upload-artifact@v7
       with:
@@ -171,6 +184,7 @@ jobs:
         path: |
           success_rate.json
           success_rate.md
+          success_rate_base.json
 
   # Compares with the last results stored on gh-pages (from main) and, on main, stores the new
   # results there. A single job, to avoid concurrent pushes to gh-pages.
@@ -197,6 +211,13 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - uses: actions/download-artifact@v8
+
+    # Expected curves x instructions per curve, for the PR and its base branch.
+    - name: Expected cost to find a factor
+      run: |
+        .github/scripts/expected-cost.sh instructions/per_curve.json \
+          success-rate/success_rate.json success-rate/success_rate_base.json \
+          | tee expected_cost.md >> "$GITHUB_STEP_SUMMARY"
 
     # A single PR comment with both comparisons, worst changes first and unchanged benchmarks
     # collapsed (the action's own comment lists everything by name).
