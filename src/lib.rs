@@ -10,6 +10,7 @@ mod ecm;
 mod pm1;
 mod point;
 mod poly;
+mod primes;
 mod rho;
 mod stage2;
 mod stage2_poly;

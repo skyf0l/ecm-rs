@@ -2,12 +2,16 @@ use crate::{
     arith::{with_arith, Arith, Factor},
     curve::Curve,
     point::Point,
+    primes::primes,
     stage2::{stage2_with, Stage2Plan},
 };
 #[cfg(feature = "progress-bar")]
 use indicatif::ProgressBar;
-use primal::Primes;
-use rug::{integer::IsPrime, rand::RandState, Integer};
+use rug::{
+    integer::IsPrime,
+    rand::{RandGen, RandState},
+    Integer,
+};
 use std::collections::HashMap;
 
 /// Error occured during ecm factorization.
@@ -110,6 +114,27 @@ pub fn ecm_one_factor(
 
     // ECM failed, Increase the bounds
     Err(Error::ECMFailed)
+}
+
+/// Random state seeded with `seed`, to draw the curves.
+///
+/// Seeding GMP's default generator (a Mersenne Twister) costs about 0.26 ms, a modular
+/// exponentiation with a 20000-bit modulus, which is more than factoring a small number takes.
+pub(crate) fn rand_state(seed: usize) -> RandState<'static> {
+    RandState::new_custom_boxed(Box::new(SplitMix64(seed as u64)))
+}
+
+/// Steele, Lea and Flood's SplitMix64 generator: fast, and good enough to draw curves.
+struct SplitMix64(u64);
+
+impl RandGen for SplitMix64 {
+    fn gen(&mut self) -> u32 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        ((z ^ (z >> 31)) >> 32) as u32
+    }
 }
 
 /// Families of curves, named after GMP-ECM's `-param` values.
@@ -226,8 +251,7 @@ pub(crate) fn prime_power_product(lo: usize, hi: usize) -> Integer {
 pub(crate) fn prime_power_words(lo: usize, hi: usize) -> impl Iterator<Item = u64> {
     let lo = lo.max(1);
     let mut word = 1u64;
-    let mut powers = Primes::all()
-        .take_while(move |&p| p <= hi)
+    let mut powers = primes(hi)
         // Above sqrt(hi), only the primes in (lo, hi] contribute (to the power 1).
         .filter(move |&p| p > lo || p.saturating_mul(p) <= hi)
         .flat_map(move |p| {
@@ -452,7 +476,7 @@ const TRIAL_DIVISION_BOUND: usize = 1 << 16;
 pub fn trial_division(n: &Integer) -> (HashMap<Integer, usize>, Integer) {
     let mut factors = HashMap::new();
     let mut n: Integer = n.clone();
-    for prime in Primes::all().take_while(|&p| p < TRIAL_DIVISION_BOUND) {
+    for prime in primes(TRIAL_DIVISION_BOUND - 1) {
         if n < prime * prime {
             // n is 1 or a prime.
             break;
@@ -533,8 +557,7 @@ pub fn ecm_with_params(
 
     let (mut factors, n) = trial_division(n);
 
-    let mut rand_state = RandState::new();
-    rand_state.seed(&seed.into());
+    let mut rand_state = rand_state(seed);
 
     // Composite factors left to split, with the multiplicity they have in the original number.
     let mut queue = Vec::new();
@@ -598,7 +621,7 @@ fn perfect_power(n: &Integer) -> Option<(Integer, u32)> {
     if !n.is_perfect_power() {
         return None;
     }
-    for power in Primes::all().take_while(|&p| p as u32 <= n.significant_bits()) {
+    for power in primes(n.significant_bits() as usize) {
         let (root, remainder) = n.clone().root_rem(Integer::new(), power as u32);
         if remainder == 0 {
             return Some((root, power as u32));
@@ -609,6 +632,7 @@ fn perfect_power(n: &Integer) -> Option<(Integer, u32)> {
 
 #[cfg(test)]
 mod tests {
+    use primal::Primes;
     use rug::ops::Pow;
     use std::str::FromStr;
 

@@ -7,7 +7,7 @@
 //! rho function (in its "local" form, for numbers near `x`, from Alexander Kruppa's PhD thesis,
 //! equations (5.6) and (5.10)).
 
-use primal::Primes;
+use crate::primes::primes;
 use std::sync::OnceLock;
 
 /// Extra smoothness of the group orders of Suyama's curves (and GMP-ECM's parametrization 2,
@@ -171,9 +171,8 @@ fn local_i(ai: usize, x: f64) -> f64 {
 /// over these primes.
 fn mu_sum(b1: usize, b2: usize, x: f64) -> f64 {
     let (inv_log_b1, logx) = (1.0 / (b1 as f64).ln(), x.ln());
-    Primes::all()
+    primes(b2)
         .skip_while(|&p| p <= b1)
-        .take_while(|&p| p <= b2)
         .map(|p| {
             let p = p as f64;
             local((logx - p.ln()) * inv_log_b1, x / p) / p
