@@ -29,7 +29,7 @@
 #[path = "../benches/common/mod.rs"]
 mod common;
 
-use common::{prime_digits, GMP_ECM_BOUNDS, SEED};
+use common::{bounds, success_rate_number, SEED};
 use ecm::bench::{
     ecm_prob, random_sigma, run_curve, stage1_multiplier, CurveOutcome, Param, Stage2Plan,
 };
@@ -40,10 +40,6 @@ use std::{
     thread,
     time::Instant,
 };
-
-/// Decimal digits of the cofactor: larger than every target factor, so the factor found is
-/// (almost always) the target one.
-const COFACTOR_DIGITS: u32 = 40;
 
 struct Args {
     /// Factor sizes, with their curves per number if not `curves`.
@@ -117,7 +113,8 @@ impl Counts {
     }
 }
 
-/// Runs `curves` curves on each of `numbers` composites `p * q`, with `p` of `digits` digits.
+/// Runs `curves` curves on each of the first `numbers` composites `p * q` of
+/// [`success_rate_number`], with `p` of `digits` digits.
 fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64, param: Param) -> Counts {
     let k = stage1_multiplier(b1);
 
@@ -125,7 +122,7 @@ fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64, param: 
     let mut tasks = Vec::new();
     for i in 0..numbers {
         let seed = SEED + u64::from(digits) * 1_000_000 + i;
-        let n = prime_digits(digits, seed) * prime_digits(COFACTOR_DIGITS, seed + 500_000);
+        let n = success_rate_number(digits, i);
         let mut rand = RandState::new();
         rand.seed(&Integer::from(seed));
         let range = Integer::from(&n - 7);
@@ -192,10 +189,7 @@ fn main() {
     let mut results = Vec::new();
 
     for &(digits, curves) in &args.sizes {
-        let &(_, b1, b2) = GMP_ECM_BOUNDS
-            .iter()
-            .find(|(d, _, _)| *d == digits)
-            .unwrap_or_else(|| panic!("no bounds for {digits}-digit factors"));
+        let (b1, b2) = bounds(digits);
 
         let start = Instant::now();
         let counts = measure(

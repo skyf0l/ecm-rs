@@ -855,6 +855,66 @@ impl PolyArith for Plain {
     }
 }
 
+/// A chain of modular multiplications or squarings on fixed residues, dispatched like the curve
+/// code (Montgomery up to 16 limbs, plain integers above), for benchmarks: the setup
+/// (conversion to the internal representation) is done by [`ArithBatch::new`], and
+/// [`ArithBatch::run`] only computes.
+#[cfg(feature = "bench")]
+pub struct ArithBatch(Box<dyn BatchRun>);
+
+#[cfg(feature = "bench")]
+trait BatchRun {
+    fn run(&self, ops: usize, square: bool) -> Integer;
+}
+
+#[cfg(feature = "bench")]
+struct Batch<A: Arith> {
+    arith: A,
+    values: Vec<A::Elem>,
+}
+
+#[cfg(feature = "bench")]
+impl<A: Arith> BatchRun for Batch<A> {
+    fn run(&self, ops: usize, square: bool) -> Integer {
+        let a = &self.arith;
+        let mut acc = self.values[0].clone();
+        let mut t = a.zero();
+        for i in 0..ops {
+            if square {
+                a.sqr(&mut t, &acc);
+            } else {
+                a.mul(&mut t, &acc, &self.values[i % self.values.len()]);
+            }
+            std::mem::swap(&mut acc, &mut t);
+        }
+        a.to_integer(&acc)
+    }
+}
+
+#[cfg(feature = "bench")]
+impl ArithBatch {
+    /// Arithmetic modulo `n` (the implementation the curve code would use), on the residues of
+    /// `values` (at least one).
+    pub fn new(n: &Integer, values: &[Integer]) -> Self {
+        assert!(!values.is_empty());
+        with_arith!(n, |arith| {
+            let values = values.iter().map(|x| arith.residue(x)).collect();
+            ArithBatch(Box::new(Batch { arith, values }))
+        })
+    }
+
+    /// Number of limbs of the Montgomery implementation used, or `0` for plain integers.
+    pub fn limbs(n: &Integer) -> usize {
+        mont_limbs(n)
+    }
+
+    /// `ops` chained multiplications `acc = acc * values[i % len]` (or squarings `acc = acc^2`)
+    /// from `acc = values[0]`: returns the final `acc`.
+    pub fn run(&self, ops: usize, square: bool) -> Integer {
+        self.0.run(ops, square)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
