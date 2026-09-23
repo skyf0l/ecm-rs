@@ -252,8 +252,8 @@ pub enum Stage2Plan {
 }
 
 impl Stage2Plan {
-    /// Cheapest plan (according to [`Costs`]) for the primes in `(b1, b2]`, modulo numbers of the
-    /// size of `n`. Requires `b1 >= 3`.
+    /// Cheapest plan (according to the cost model) for the primes in `(b1, b2]`, modulo numbers
+    /// of the size of `n`. Requires `b1 >= 3`.
     pub fn new(n: &Integer, b1: usize, b2: usize) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
         let costs = Costs::new(n.significant_bits() as usize);
