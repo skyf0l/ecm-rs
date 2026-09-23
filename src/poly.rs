@@ -29,8 +29,8 @@ pub struct Workspace {
     x: Vec<u64>,
     y: Vec<u64>,
     bufs: Buffers,
-    /// Shapes of the wrap-around products, by `(lmin, smin)`: see [`wrap_shape`].
-    shapes: HashMap<(usize, usize), Option<Shape>>,
+    /// Shapes of the wrap-around products, by `(bits, lx, ly, lmin)`: see [`wrap_size`].
+    shapes: HashMap<(usize, usize, usize, usize), Option<Shape>>,
 }
 
 /// Buffers of a Kronecker product.
@@ -143,22 +143,36 @@ pub fn mul_part<A: PolyArith>(
         schoolbook(a, &mut ws.bufs.acc, out, from, x.coeffs, y.coeffs, None);
         return;
     }
-    let s = slot_bits(a.modulus(), lx.min(ly));
-    let len = lx + ly - 1;
-    if from > 0 && mpn::ENABLED {
-        // With a spare bit: every coefficient is below 2^(s - 1).
-        let s = s + 1;
-        let to = from + out.len();
-        let bits = (to.max(lx).max(ly) * s).max((len.saturating_sub(from)) * s + 1);
-        let rn = mpn::mulmod_bnm1_next_size(bits.div_ceil(64));
-        let full = (len * s).div_ceil(64);
-        // GMP requires an + bn > rn/2.
-        if rn * 5 < full * 4 && ((lx + ly) * s) / 64 > rn / 2 {
-            kronecker(a, ws, out, from, x, y, s, Some(rn));
-            return;
-        }
+    let bits = a.modulus().significant_bits() as usize;
+    if let Some((s, rn)) = middle_size(bits, lx, ly, from, from + out.len()) {
+        kronecker(a, ws, out, from, x, y, s, Some(rn));
+    } else {
+        kronecker(a, ws, out, from, x, y, slot_width(bits, lx.min(ly)), None);
     }
-    kronecker(a, ws, out, from, x, y, s, None);
+}
+
+/// The slot width `s` and the size `rn` of a middle product (see [`mul_part`]) of polynomials
+/// of `lx` and `ly > SCHOOLBOOK` coefficients modulo a number of `bits` bits, for the
+/// coefficients `from..to`, if cheaper than a full product.
+pub(crate) fn middle_size(
+    bits: usize,
+    lx: usize,
+    ly: usize,
+    from: usize,
+    to: usize,
+) -> Option<(usize, usize)> {
+    if from == 0 || !mpn::ENABLED {
+        return None;
+    }
+    // With a spare bit: every coefficient is below 2^(s - 1).
+    let s = slot_width(bits, lx.min(ly)) + 1;
+    let len = lx + ly - 1;
+    let n = (to.max(lx).max(ly) * s).max((len.saturating_sub(from)) * s + 1);
+    let rn = mpn::mulmod_bnm1_next_size(n.div_ceil(64));
+    let full = (len * s).div_ceil(64);
+    // Cheaper (a product modulo 2^N - 1 costs about that of a full product of N/2 bits), and
+    // valid for GMP: an + bn > rn/2.
+    (rn * 5 < full * 4 && ((lx + ly) * s) / 64 > rn / 2).then_some((s, rn))
 }
 
 /// Wrap-around product: `out[t]` = coefficient `from + t` of `x*y mod (X^L - 1)`, for some
@@ -177,41 +191,55 @@ pub fn mul_wrap<A: PolyArith>(
     let (lx, ly) = (x.len(), y.len());
     debug_assert!(lx > 0 && ly > 0 && lx.max(ly) <= lmin && from + out.len() <= lmin);
     if lx.min(ly) <= SCHOOLBOOK {
-        schoolbook(a, &mut ws.bufs.acc, out, from, x.coeffs, y.coeffs, Some(lmin));
+        schoolbook(
+            a,
+            &mut ws.bufs.acc,
+            out,
+            from,
+            x.coeffs,
+            y.coeffs,
+            Some(lmin),
+        );
         return lmin;
     }
-    // A wrapped coefficient is a sum of at most min(lx, ly) products (both are <= L), as in
-    // a full product.
-    let smin = slot_bits(a.modulus(), lx.min(ly));
-    let shape = *ws
+    let bits = a.modulus().significant_bits() as usize;
+    let key = (bits, lx, ly, lmin);
+    match *ws
         .shapes
-        .entry((lmin, smin))
-        .or_insert_with(|| wrap_shape(lmin, smin));
-    match shape {
-        // Cheaper than the full product, and valid for GMP: an + bn > rn/2.
-        Some(shape)
-            if shape.rn + 8 < (lx + ly) * shape.s / 64
-                && (lx + ly) * shape.s / 64 > shape.rn / 2 =>
-        {
+        .entry(key)
+        .or_insert_with(|| wrap_size(bits, lx, ly, lmin))
+    {
+        Some(shape) => {
             kronecker(a, ws, out, from, x, y, shape.s, Some(shape.rn));
             shape.l
         }
-        _ => {
+        None => {
             // Full product: exact, the same as a wrap-around at L >= its length.
-            let l = lmin.max(lx + ly - 1);
             mul_part(a, ws, out, from, x, y);
-            l
+            lmin.max(lx + ly - 1)
         }
     }
+}
+
+/// The wrap-around product of [`mul_wrap`] for polynomials of `lx` and `ly > SCHOOLBOOK`
+/// coefficients modulo a number of `bits` bits, if cheaper than a full product.
+pub(crate) fn wrap_size(bits: usize, lx: usize, ly: usize, lmin: usize) -> Option<Shape> {
+    // A wrapped coefficient is a sum of at most min(lx, ly) products (both are <= L), as in
+    // a full product.
+    let smin = slot_width(bits, lx.min(ly));
+    let shape = wrap_shape(lmin, smin)?;
+    let full = ((lx + ly) * smin).div_ceil(64);
+    // Cheaper, and valid for GMP: an + bn > rn/2.
+    (shape.rn * 5 < full * 4 && ((lx + ly) * shape.s) / 64 > shape.rn / 2).then_some(shape)
 }
 
 /// Size of a wrap-around product modulo `X^L - 1` and `2^(64*rn) - 1`, with slots of `s`
 /// bits: `L*s = 64*rn`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Shape {
-    l: usize,
-    s: usize,
-    rn: usize,
+pub(crate) struct Shape {
+    pub l: usize,
+    pub s: usize,
+    pub rn: usize,
 }
 
 /// The smallest wrap-around product with `L >= lmin` and slots of `s >= smin` bits, among the
@@ -225,11 +253,7 @@ fn wrap_shape(lmin: usize, smin: usize) -> Option<Shape> {
         let bits = 64 * rn;
         // L = bits/s >= lmin: s <= bits/lmin.
         if let Some(s) = (smin..=bits / lmin).find(|s| bits.is_multiple_of(*s)) {
-            return Some(Shape {
-                l: bits / s,
-                s,
-                rn,
-            });
+            return Some(Shape { l: bits / s, s, rn });
         }
         rn = mpn::mulmod_bnm1_next_size(rn + 1);
     }
@@ -269,9 +293,10 @@ fn schoolbook<A: PolyArith>(
 
 /// Bits per coefficient in a Kronecker product where the shorter factor has `len`
 /// coefficients: each coefficient of the product is a sum of at most `len` products of values
-/// `< n`.
-fn slot_bits(n: &Integer, len: usize) -> usize {
-    2 * n.significant_bits() as usize + (usize::BITS - len.leading_zeros()) as usize
+/// `< n`
+/// (`n` of `bits` bits).
+pub(crate) fn slot_width(bits: usize, len: usize) -> usize {
+    2 * bits + (usize::BITS - len.leading_zeros()) as usize
 }
 
 /// Packs the values of `x` into `buf`, one every `s` bits. Returns the number of limbs they
@@ -314,7 +339,9 @@ fn kronecker<A: PolyArith>(
     s: usize,
     rn: Option<usize>,
 ) {
-    let Workspace { x: bx, y: by, bufs, .. } = ws;
+    let Workspace {
+        x: bx, y: by, bufs, ..
+    } = ws;
     let xl = match x.cache {
         Some(cache) => cache.get(a, x.coeffs, s),
         None => {
@@ -896,7 +923,9 @@ mod tests {
         if !mpn::ENABLED {
             return;
         }
-        for lmin in [13, 14, 100, 129, 257, 481, 1000, 1441, 1921, 2048, 2881, 6000, 11521] {
+        for lmin in [
+            13, 14, 100, 129, 257, 481, 1000, 1441, 1921, 2048, 2881, 6000, 11521,
+        ] {
             for smin in [67, 130, 523, 1035, 2059, 2200] {
                 let shape = wrap_shape(lmin, smin).unwrap();
                 assert!(shape.l >= lmin && shape.s >= smin);

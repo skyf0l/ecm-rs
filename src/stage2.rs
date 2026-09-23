@@ -298,53 +298,80 @@ impl Stage2Plan {
     }
 }
 
-/// Giant steps `d1` of the polynomial continuation: the multiples of 6 with more baby steps
-/// (`phi(d1)/2`) than all the smaller ones (from GMP-ECM's `bestD`).
-pub(crate) const POLY_GIANT_STEPS: [usize; 90] = [
+/// Giant steps `d1` of the polynomial continuation: multiples of 6, each with more baby steps
+/// (`phi(d1)/2`) than the smaller ones (from GMP-ECM's `bestD`, both its lists).
+pub(crate) const POLY_GIANT_STEPS: [usize; 96] = [
     12, 18, 30, 42, 60, 90, 120, 150, 210, 240, 270, 330, 420, 510, 630, 840, 1050, 1260, 1470,
     1680, 1890, 2310, 2730, 3150, 3570, 3990, 4620, 5460, 6090, 6930, 8190, 9240, 10920, 12180,
-    13860, 16170, 18480, 20790, 23100, 30030, 34650, 39270, 43890, 48510, 60060, 66990, 78540,
-    90090, 99330, 120120, 133980, 150150, 180180, 210210, 240240, 270270, 300300, 334950, 371280,
-    420420, 510510, 570570, 600600, 630630, 746130, 870870, 1021020, 1141140, 1291290, 1531530,
-    1711710, 1891890, 2081310, 2312310, 2552550, 2852850, 3183180, 3573570, 3993990, 4594590,
-    5105100, 5705700, 6322470, 7147140, 7987980, 8978970, 10210200, 11741730, 13123110, 14804790,
+    13860, 16170, 18480, 19110, 20790, 23100, 30030, 34650, 39270, 43890, 48510, 60060, 66990,
+    78540, 79170, 90090, 99330, 120120, 133980, 150150, 158340, 180180, 210210, 240240, 270270,
+    300300, 324870, 334950, 371280, 420420, 510510, 570570, 600600, 630630, 690690, 746130, 870870,
+    1021020, 1141140, 1291290, 1345890, 1531530, 1711710, 1891890, 2081310, 2312310, 2552550,
+    2852850, 3183180, 3573570, 3993990, 4594590, 5105100, 5705700, 6322470, 7147140, 7987980,
+    8978970, 10210200, 11741730, 13123110, 14804790,
 ];
 
 /// Largest memory (in bytes) used by the polynomial continuation.
 const MAX_POLY_MEMORY: f64 = 256.0 * 1024.0 * 1024.0;
 
-/// Cheapest polynomial continuation and its cost: the best giant step `d1`.
+/// Cheapest polynomial continuation and its cost.
 fn best_poly_plan(costs: &Costs, b1: usize, b2: usize) -> (PolyPlan, f64) {
-    let (d1, cost) = best_poly_shape(costs, b1, b2);
-    (PolyPlan::new(b1, b2, d1), cost)
+    let ((d1, d2, blocks), cost) = best_poly_shape(costs, b1, b2);
+    (PolyPlan::new(b1, b2, d1, d2, blocks), cost)
 }
 
-/// Best giant step `d1` of the polynomial continuation, and its cost.
-fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> (usize, f64) {
-    let mut best = (PolyPlan::shape_only(b1, b2, 6), f64::INFINITY);
+/// Best shape `(d1, d2, blocks)` of the polynomial continuation (see [`PolyPlan::new`]), and
+/// its cost: the giant step `d1` from GMP-ECM's list, with or without `d2`, and blocks of
+/// `phi(d1)/2` giant steps (the last one partial) or fewer larger blocks, all full (with `F`
+/// padded).
+fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> ((usize, usize, usize), f64) {
+    let mut best = ((6, 1, 0), f64::INFINITY);
+    let fits = |df: usize| {
+        // The product tree of F (a coefficient per leaf and level), and at the peak (measured)
+        // about 52 more coefficients per leaf: the other polynomials, F and its inverse packed
+        // for the products, the Kronecker products and GMP's scratch space.
+        let coeffs = (usize::BITS - df.leading_zeros()) as f64 + 52.0;
+        coeffs * df as f64 * costs.elem_bytes() <= MAX_POLY_MEMORY
+    };
     for d1 in [6].into_iter().chain(POLY_GIANT_STEPS) {
         if prime_factors(d1).iter().any(|&p| p > b1) {
             continue;
         }
-        let plan = PolyPlan::shape_only(b1, b2, d1);
-        let (_, df, giants) = plan.shape();
-        // The product tree of F (a coefficient per leaf and level), and at the peak (measured)
-        // about 44 more coefficients per leaf: the other polynomials, the Kronecker products
-        // and GMP's scratch space.
-        let coeffs = (usize::BITS - df.leading_zeros()) as f64 + 44.0;
-        if coeffs * df as f64 * costs.elem_bytes() > MAX_POLY_MEMORY {
+        let babies = phi(d1) / 2;
+        if !fits(babies) {
             break;
         }
-        let cost = costs.poly_stage2(&plan);
-        if cost < best.1 {
-            best = (plan, cost);
+        let d2 = stage2_poly::default_d2(b1, d1);
+        for d2 in [1, d2].into_iter().take(if d2 > 1 { 2 } else { 1 }) {
+            let plan = PolyPlan::shape_only(b1, b2, d1, d2, 0);
+            let giants = plan.shape().2;
+            // Blocks of dF = babies, the last one partial, or k whole blocks of fewer than
+            // twice as many giant steps.
+            let k = giants.div_ceil(babies);
+            for blocks in [0, k.saturating_sub(1), k.saturating_sub(2)] {
+                if blocks > 0 && giants > 2 * babies * blocks {
+                    continue;
+                }
+                let plan = match blocks {
+                    0 => plan.clone(),
+                    _ => PolyPlan::shape_only(b1, b2, d1, d2, blocks),
+                };
+                if !fits(plan.shape().1) {
+                    continue;
+                }
+                let cost = costs.poly_stage2(&plan);
+                if cost < best.1 {
+                    best = ((d1, d2, blocks), cost);
+                }
+            }
         }
-        if giants < df / 4 {
+        let giants = PolyPlan::shape_only(b1, b2, d1, 1, 0).shape().2;
+        if giants < babies / 4 {
             // Larger giant steps only make F larger.
             break;
         }
     }
-    (best.0.shape().0, best.1)
+    best
 }
 
 /// Stage 2 on the residues of `arith` with `plan`: returns `gcd(g, n)`, see
@@ -751,8 +778,19 @@ mod tests {
             );
             assert!(plan.b2() >= b2);
             if let Stage2Plan::Poly(plan) = &plan {
-                assert!(plan.b2_covered() < b2 + plan.shape().0);
+                // Not much more: whole blocks add less than a giant step per block.
+                let (d1, df, giants) = plan.shape();
+                assert!(plan.b2_covered() < b2 + 2 * d1 * (giants.div_ceil(df) + 1));
             }
+        }
+    }
+
+    #[test]
+    fn poly_giant_steps() {
+        // The plan search stops at the first one too large for the memory.
+        for w in POLY_GIANT_STEPS.windows(2) {
+            assert!(w[0] < w[1] && w[0].is_multiple_of(6));
+            assert!(phi(w[0]) < phi(w[1]), "{w:?}");
         }
     }
 
