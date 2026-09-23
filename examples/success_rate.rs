@@ -15,9 +15,10 @@
 //! ```
 //!
 //! - `--sizes`: factor sizes in digits, each optionally with its own number of curves per
-//!   number (`--curves` otherwise). The default, `15,20,25:100`, keeps the CI job (run on both
-//!   the base and the PR) under 5 minutes: 10000 curves for 15 and 20 digits, 5000 for 25
-//!   digits (each curve costs 5x more there, so fewer successes and a wider interval).
+//!   number (`--curves` otherwise). The default, `15,20,25:100`, runs 10000 curves for 15 and
+//!   20 digits, 5000 for 25 digits (each curve costs 5x more there, so fewer successes and a
+//!   wider interval): about 85 s on 4 cores, so about 2 minutes on a CI runner, run on both the
+//!   base and the PR.
 //! - `--param`: family of curves, as GMP-ECM's `-param`: `0` (Suyama), `1` or `2` (default:
 //!   the one of `ecm_one_factor`).
 //! - `--json`: writes results in the `customSmallerIsBetter` format of
