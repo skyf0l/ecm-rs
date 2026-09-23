@@ -23,6 +23,16 @@ use std::collections::HashMap;
 /// Products with a factor of at most this many coefficients are schoolbook.
 pub const SCHOOLBOOK: usize = 12;
 
+/// Whether the Kronecker products use GMP's low-level functions ([`mpn::ENABLED`]), without
+/// which there are only full products (of `Integer`s). Tests also check them without.
+fn low_level() -> bool {
+    #[cfg(test)]
+    if tests::NO_LOW_LEVEL.get() {
+        return false;
+    }
+    mpn::ENABLED
+}
+
 /// Reusable buffers of the polynomial products.
 pub struct Workspace {
     /// The packed operands.
@@ -161,18 +171,28 @@ pub(crate) fn middle_size(
     from: usize,
     to: usize,
 ) -> Option<(usize, usize)> {
-    if from == 0 || !mpn::ENABLED {
+    if from == 0 || !low_level() {
         return None;
     }
+    let (s, n) = middle_bits(bits, lx, ly, from, to);
+    let rn = mpn::mulmod_bnm1_next_size(n.div_ceil(64));
+    let full = ((lx + ly - 1) * s).div_ceil(64);
+    // Cheaper (a product modulo 2^N - 1 costs about that of a full product of N/2 bits), and
+    // valid for GMP: an + bn > rn/2.
+    (rn * 5 < full * 4 && ((lx + ly) * s) / 64 > rn / 2).then_some((s, rn))
+}
+
+/// The slot width `s` of a middle product (see [`mul_part`]) and the fewest bits `N` of its
+/// product modulo `2^N - 1`: `N` covers the operands and the coefficients `from..to`, and the
+/// part above `N` (below `2^(len*s - 1 - N)`, `len = lx + ly - 1`) wraps around below
+/// `2^(from*s - 2)`, so that adding it to the coefficients below `from` (below
+/// `2^(from*s - 1)`) doesn't carry into the coefficient `from`.
+fn middle_bits(bits: usize, lx: usize, ly: usize, from: usize, to: usize) -> (usize, usize) {
     // With a spare bit: every coefficient is below 2^(s - 1).
     let s = slot_width(bits, lx.min(ly)) + 1;
     let len = lx + ly - 1;
     let n = (to.max(lx).max(ly) * s).max((len.saturating_sub(from)) * s + 1);
-    let rn = mpn::mulmod_bnm1_next_size(n.div_ceil(64));
-    let full = (len * s).div_ceil(64);
-    // Cheaper (a product modulo 2^N - 1 costs about that of a full product of N/2 bits), and
-    // valid for GMP: an + bn > rn/2.
-    (rn * 5 < full * 4 && ((lx + ly) * s) / 64 > rn / 2).then_some((s, rn))
+    (s, n)
 }
 
 /// Wrap-around product: `out[t]` = coefficient `from + t` of `x*y mod (X^L - 1)`, for some
@@ -245,7 +265,7 @@ pub(crate) struct Shape {
 /// The smallest wrap-around product with `L >= lmin` and slots of `s >= smin` bits, among the
 /// sizes `rn` efficient for GMP (`None` without GMP's low-level functions).
 fn wrap_shape(lmin: usize, smin: usize) -> Option<Shape> {
-    if !mpn::ENABLED {
+    if !low_level() {
         return None;
     }
     let mut rn = mpn::mulmod_bnm1_next_size((lmin * smin).div_ceil(64));
@@ -371,7 +391,7 @@ fn kronecker<A: PolyArith>(
     product.resize(room, 0);
     match rn {
         Some(rn) => mpn::mulmod_bnm1(&mut product[..rn], xl, yl, &mut bufs.scratch),
-        None if mpn::ENABLED => mpn::mul_long(&mut product[..len], xl, yl),
+        None if low_level() => mpn::mul_long(&mut product[..len], xl, yl),
         None => {
             let [ix, iy, ip] = &mut bufs.ints;
             ix.assign_digits(xl, Order::Lsf);
@@ -723,6 +743,12 @@ mod tests {
     use super::*;
     use crate::arith::{with_arith, Arith};
     use rug::rand::RandState;
+    use std::cell::Cell;
+
+    thread_local! {
+        /// Products without GMP's low-level functions in this thread (see [`low_level`]).
+        pub(super) static NO_LOW_LEVEL: Cell<bool> = const { Cell::new(false) };
+    }
 
     /// Plain integer polynomial helpers modulo `n`, on values.
     fn values<A: PolyArith>(a: &A, x: &[A::Elem]) -> Vec<Integer> {
@@ -953,6 +979,265 @@ mod tests {
             ] {
                 with_arith!(&n, |a| check_random_products(&a, &mut rand));
             }
+        }
+    }
+
+    #[test]
+    fn products_without_low_level() {
+        // The products (full ones only) and reductions without GMP's low-level functions.
+        NO_LOW_LEVEL.set(true);
+        assert!(middle_size(1024, 100, 100, 50, 150).is_none());
+        assert!(wrap_size(1024, 100, 100, 150).is_none());
+        let mut rand = RandState::new();
+        for limbs in [1, 4, 11, 16u32] {
+            let n = (Integer::from(1) << (64 * limbs)) - 1u32;
+            with_arith!(&n, |a| {
+                check_random_products(&a, &mut rand);
+                check_tree(&a, &mut rand);
+            });
+        }
+        NO_LOW_LEVEL.set(false);
+    }
+
+    /// Coefficients of `x*y` (values), or of `x*y mod (X^l - 1)` with `wrap = Some(l)`.
+    fn naive_product(
+        x: &[Integer],
+        y: &[Integer],
+        n: &Integer,
+        wrap: Option<usize>,
+    ) -> Vec<Integer> {
+        let full = naive_mul(x, y, n);
+        match wrap {
+            None => full,
+            Some(l) => (0..l)
+                .map(|k| full.iter().skip(k).step_by(l).sum::<Integer>() % n)
+                .collect(),
+        }
+    }
+
+    /// Middle and wrap-around products at the tightest sizes: the fewest bits for a middle
+    /// product (not rounded up by `mulmod_bnm1_next_size`), slots of exactly `slot_width` bits
+    /// for a wrap-around product with `lx = ly = L`, the largest coefficients (all `n - 1`,
+    /// for `n = 2^(64*limbs) - 1`: the largest sums in a slot), then the same by `mul_part` and
+    /// `mul_wrap`.
+    fn check_tight<A: PolyArith>(a: &A, rand: &mut RandState<'_>) {
+        if !mpn::ENABLED {
+            return;
+        }
+        let n = a.modulus().clone();
+        let bits = n.significant_bits() as usize;
+        let mut ws = Workspace::new();
+        let limbs = |len: usize, s: usize| (len * s).div_ceil(64);
+        for (lx, ly) in [
+            (13, 13),
+            (13, 14),
+            (15, 13),
+            (16, 16),
+            (17, 40),
+            (31, 32),
+            (33, 31),
+            (64, 64),
+            (63, 65),
+            (100, 29),
+            (127, 128),
+        ] {
+            let len = lx + ly - 1;
+            for kind in 0..3 {
+                let (x, y) = match kind {
+                    0 => (largest_poly(a, lx), largest_poly(a, ly)),
+                    1 => (random_poly(a, lx, rand), largest_poly(a, ly)),
+                    _ => (random_poly(a, lx, rand), random_poly(a, ly, rand)),
+                };
+                let (xv, yv) = (values(a, &x), values(a, &y));
+                let full = naive_product(&xv, &yv, &n, None);
+                let min = lx.min(ly);
+                for from in [
+                    1,
+                    2,
+                    min - 1,
+                    min,
+                    min + 1,
+                    len / 2,
+                    len - min,
+                    len - 2,
+                    len - 1,
+                ] {
+                    for to in [from + 1, from + min, len - 1, len, len + 2] {
+                        if to <= from {
+                            continue;
+                        }
+                        let (s, nbits) = middle_bits(bits, lx, ly, from, to);
+                        let rn = nbits.div_ceil(64);
+                        // GMP's requirements (an + bn > rn/2, larger operand at most rn).
+                        if limbs(lx, s) + limbs(ly, s) <= rn / 2 || limbs(lx.max(ly), s) > rn {
+                            continue;
+                        }
+                        let mut out = vec![a.zero(); to - from];
+                        let (ox, oy) = (Operand::new(&x[..]), Operand::new(&y[..]));
+                        kronecker(a, &mut ws, &mut out, from, ox, oy, s, Some(rn));
+                        for (k, out) in (from..).zip(values(a, &out)) {
+                            let expected = full.get(k).cloned().unwrap_or_default();
+                            assert_eq!(out, expected, "{bits}: {lx} {ly} {from}..{to} rn = {rn}");
+                        }
+                        let (ox, oy) = (Operand::new(&x[..]), Operand::new(&y[..]));
+                        mul_part(a, &mut ws, &mut out, from, ox, oy);
+                        for (k, out) in (from..).zip(values(a, &out)) {
+                            let expected = full.get(k).cloned().unwrap_or_default();
+                            assert_eq!(out, expected, "{bits}: {lx} {ly} part {from}..{to}");
+                        }
+                    }
+                }
+
+                // Wrap-around, L = lx = ly: min(lx, ly) terms in every coefficient.
+                let l = lx.max(ly);
+                let (x, y, xv, yv) = if lx == ly {
+                    (x, y, xv, yv)
+                } else {
+                    let (x, y) = (largest_poly(a, l), largest_poly(a, l));
+                    let (xv, yv) = (values(a, &x), values(a, &y));
+                    (x, y, xv, yv)
+                };
+                let wrapped = naive_product(&xv, &yv, &n, Some(l));
+                let s = slot_width(bits, l);
+                // L*s bits must be whole limbs: L a multiple of 64/gcd(s, 64).
+                if (l * s).is_multiple_of(64) {
+                    let mut out = vec![a.zero(); l];
+                    let (ox, oy) = (Operand::new(&x[..]), Operand::new(&y[..]));
+                    kronecker(a, &mut ws, &mut out, 0, ox, oy, s, Some(l * s / 64));
+                    assert_eq!(values(a, &out), wrapped, "{bits}: wrap {l} slots of {s}");
+                }
+                let mut out = vec![a.zero(); l];
+                let (ox, oy) = (Operand::new(&x[..]), Operand::new(&y[..]));
+                let lw = mul_wrap(a, &mut ws, &mut out, 0, ox, oy, l);
+                let expected = naive_product(&xv, &yv, &n, Some(lw));
+                assert_eq!(values(a, &out)[..], expected[..l], "{bits}: {l}");
+            }
+        }
+        // Wrap-around products with slots of exactly slot_width bits: the smallest L >= 13
+        // with L*s a multiple of 64.
+        for m in [13, 15, 31, 63, 127] {
+            let s = slot_width(bits, m);
+            let l = (m..).find(|l| (l * s).is_multiple_of(64)).unwrap();
+            if l > 400 {
+                continue;
+            }
+            let (x, y) = (largest_poly(a, l), largest_poly(a, m));
+            let wrapped = naive_product(&values(a, &x), &values(a, &y), &n, Some(l));
+            let mut out = vec![a.zero(); l];
+            let (ox, oy) = (Operand::new(&x[..]), Operand::new(&y[..]));
+            kronecker(a, &mut ws, &mut out, 0, ox, oy, s, Some(l * s / 64));
+            assert_eq!(
+                values(a, &out),
+                wrapped,
+                "{bits}: wrap {l} x {m}, slots of {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn tight_products() {
+        let mut rand = RandState::new();
+        for limbs in 1..=16u32 {
+            let n = (Integer::from(1) << (64 * limbs)) - 1u32;
+            with_arith!(&n, |a| check_tight(&a, &mut rand));
+        }
+        // Odd sizes, and Plain.
+        for n in [
+            (Integer::from(1) << 100) - 3u32,
+            (Integer::from(1) << 700) - 1u32,
+            (Integer::from(1) << 1100) - 1u32,
+            (Integer::from(1) << 256) - 2u32,
+        ] {
+            with_arith!(&n, |a| check_tight(&a, &mut rand));
+        }
+    }
+
+    #[test]
+    fn product_sizes() {
+        // The sizes of the middle and wrap-around products satisfy the bounds and GMP's
+        // requirements, including where mulmod_bnm1_next_size rounds up (FFT sizes).
+        if !mpn::ENABLED {
+            return;
+        }
+        let limbs = |len: usize, s: usize| (len * s).div_ceil(64);
+        let mut lens: Vec<usize> = (13..80).collect();
+        for p in 6..16 {
+            lens.extend([
+                (1 << p) - 1,
+                1 << p,
+                (1 << p) + 1,
+                3 << (p - 1),
+                5 << (p - 2),
+            ]);
+        }
+        lens.extend([1440, 1920, 2880, 5760, 11520, 23040]);
+        for bits in [2, 64, 65, 128, 300, 640, 641, 1024, 1100] {
+            for &lx in &lens {
+                for &ly in &[13, 14, 64, 100, lx / 2 + 13, lx, lx + 1] {
+                    let (min, len) = (lx.min(ly), lx + ly - 1);
+                    let smin = slot_width(bits, min);
+                    // A coefficient is a sum of at most min products of values < 2^bits.
+                    let max = (Integer::from(1) << bits as u32) - 1u32;
+                    assert!((max.square() * min) >> smin as u32 == 0);
+                    for from in [1, min - 1, len / 3, len - min, len - 1] {
+                        for to in [from + 1, len.min(from + lx), len] {
+                            if let Some((s, rn)) = middle_size(bits, lx, ly, from, to) {
+                                assert!(s > smin && 64 * rn >= to.max(lx).max(ly) * s);
+                                assert!(64 * rn > (len - from) * s);
+                                assert!(limbs(lx, s) + limbs(ly, s) > rn / 2);
+                                assert!(limbs(lx.max(ly), s) <= rn);
+                            }
+                        }
+                    }
+                    for lmin in [lx.max(ly), lx.max(ly) + 1, len - 1, len] {
+                        if let Some(shape) = wrap_size(bits, lx, ly, lmin) {
+                            assert!(shape.s >= smin && shape.l >= lmin);
+                            assert_eq!(shape.l * shape.s, 64 * shape.rn);
+                            assert!(limbs(lx, shape.s) + limbs(ly, shape.s) > shape.rn / 2);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn large_middle_and_wrap_products() {
+        // Sizes where GMP multiplies by FFT and mulmod_bnm1_next_size rounds up: middle and
+        // wrap-around products against the full product.
+        let mut rand = RandState::new();
+        for (bits, lens) in [(64, &[1000, 2100, 4099][..]), (1024, &[700, 1921][..])] {
+            let n = (Integer::from(1) << bits) - 1u32;
+            with_arith!(&n, |a| {
+                let mut ws = Workspace::new();
+                for &l in lens {
+                    for (lx, ly) in [(l, l), (l, l / 2 + 7), (l / 3 + 1, l)] {
+                        let (x, y) = if l % 2 == 0 {
+                            (largest_poly(&a, lx), largest_poly(&a, ly))
+                        } else {
+                            (random_poly(&a, lx, &mut rand), largest_poly(&a, ly))
+                        };
+                        let len = lx + ly - 1;
+                        let mut full = vec![a.zero(); len];
+                        mul(&a, &mut ws, &mut full, &x, &y);
+                        let full = values(&a, &full);
+                        for from in [1, lx.min(ly) - 1, len / 2, len - lx.min(ly)] {
+                            let mut out = vec![a.zero(); lx.max(ly).min(len - from)];
+                            let (ox, oy) = (Operand::new(&x[..]), Operand::new(&y[..]));
+                            mul_part(&a, &mut ws, &mut out, from, ox, oy);
+                            assert_eq!(values(&a, &out)[..], full[from..from + out.len()]);
+                        }
+                        let lmin = lx.max(ly) + 1;
+                        let mut out = vec![a.zero(); lmin];
+                        let (ox, oy) = (Operand::new(&x[..]), Operand::new(&y[..]));
+                        let lw = mul_wrap(&a, &mut ws, &mut out, 0, ox, oy, lmin);
+                        for (k, out) in values(&a, &out).into_iter().enumerate() {
+                            let expected = full.iter().skip(k).step_by(lw).sum::<Integer>() % &n;
+                            assert_eq!(out, expected, "{bits}: {lx} {ly} wrap {k} mod X^{lw} - 1");
+                        }
+                    }
+                }
+            });
         }
     }
 
