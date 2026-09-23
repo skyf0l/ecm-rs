@@ -12,10 +12,12 @@ pub const SIGMA: u64 = 1_234_567;
 
 /// Stage bounds recommended by GMP-ECM for a factor of `digits` decimal digits:
 /// `(digits, B1, B2)`, with `B2` rounded to an even number.
-pub const GMP_ECM_BOUNDS: [(u32, usize, usize); 3] = [
+pub const GMP_ECM_BOUNDS: [(u32, usize, usize); 5] = [
     (15, 2_000, 147_396),
     (20, 11_000, 1_873_422),
     (25, 50_000, 12_746_592),
+    (30, 250_000, 128_992_510),
+    (35, 1_000_000, 1_045_563_762),
 ];
 
 /// Random prime of exactly `bits` bits, derived from `seed`.
