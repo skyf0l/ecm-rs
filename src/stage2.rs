@@ -290,7 +290,6 @@ impl Stage2Plan {
     }
 
     /// Largest `b2' >= b2` such that stage 2 checks every prime in `(b1, b2']`.
-    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn b2(&self) -> usize {
         match self {
             Stage2Plan::Pairs(plan) => plan.b2,

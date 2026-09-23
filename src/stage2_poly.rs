@@ -89,7 +89,6 @@ impl PolyPlan {
     }
 
     /// Largest `b2' >= b2` such that every prime in `(b1, b2']` is checked.
-    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn b2_covered(&self) -> usize {
         if self.giants == 0 {
             return self.b2.max(self.d1 / 2);
