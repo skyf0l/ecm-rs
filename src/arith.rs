@@ -464,16 +464,22 @@ impl<const N: usize> Arith for Mont<N> {
 mod mpn {
     use gmp_mpfr_sys::gmp;
 
-    /// Whether GMP's limbs are our 64-bit limbs; if not, these functions must not be called.
-    pub const ENABLED: bool = gmp::LIMB_BITS == 64 && gmp::NAIL_BITS == 0;
+    /// Whether GMP's limbs are our 64-bit limbs (and `mpn_redc_1` returns its carry, from GMP
+    /// 5.1); if not, these functions must not be called.
+    pub const ENABLED: bool = gmp::LIMB_BITS == 64
+        && gmp::NAIL_BITS == 0
+        && (gmp::VERSION > 5 || (gmp::VERSION == 5 && gmp::VERSION_MINOR >= 1));
 
     extern "C" {
         /// `mpn_redc_1(rp, up, mp, n, invm)`: Montgomery reduction by `n` limbs of the `2n`
         /// limbs `up` (clobbered) modulo the `n` limbs `mp`, with `invm = -1/mp[0] mod 2^64`.
         /// Writes `n` limbs to `rp` and returns the carry out of them.
         ///
-        /// Internal to GMP (not in `gmp.h`), but exported with this signature by every build of
-        /// GMP since 5.0, including the one of `gmp-mpfr-sys`.
+        /// Internal to GMP (not in `gmp.h`, declared `__GMP_DECLSPEC` in `gmp-impl.h`), but
+        /// exported with this signature by every build of GMP since 5.1 (before, it returned
+        /// nothing), fat builds included. `gmp-mpfr-sys` builds GMP 6.3, or links a system GMP 6
+        /// of minor version at least 3. A public equivalent (a loop of `mpn_addmul_1`, then
+        /// `mpn_add_n`) makes stage 1 6-10% slower from 11 limbs.
         #[link_name = "__gmpn_redc_1"]
         fn mpn_redc_1(
             rp: *mut gmp::limb_t,
