@@ -148,7 +148,7 @@ where
     drop(baby);
     let tree = ProductTree::new(a, &mut ws, leaves);
     let f = tree.root();
-    let inv = poly::inverse(a, &mut ws, &poly::reverse_monic(a, f, df), df);
+    let mut modulus = poly::Modulus::new(a, &mut ws, f);
 
     // Giant steps m*d1*Q from m_lo on.
     let mut scratch = curve.scratch();
@@ -184,17 +184,17 @@ where
         } else {
             // G mod F = G, with its leading coefficient.
             g.push(one.clone());
-            g.resize(df, a.zero());
         }
         if first == 0 {
+            g.resize(df, a.zero());
             std::mem::swap(&mut h, &mut g);
         } else {
-            poly::mul_mod(a, &mut ws, &mut h, &g, f, &inv);
+            poly::mul_mod(a, &mut ws, &mut h, &g, &mut modulus);
         }
     }
 
     // g = prod_j H(x_j).
-    let values = poly::evaluate(a, &mut ws, &h, &tree, &inv);
+    let values = poly::evaluate(a, &mut ws, &h, &tree, &mut modulus);
     let mut acc = one;
     for v in &values {
         a.poly_mul(&mut t, &acc, v);
