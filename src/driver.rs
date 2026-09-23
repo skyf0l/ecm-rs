@@ -164,11 +164,16 @@ impl Context<'_> {
 }
 
 /// Factors `n` (see [`crate::ecm()`]), with the random state seeded by `seed`.
+///
+/// # Panics
+///
+/// If `n` is not positive.
 pub fn factor(
     n: &Integer,
     seed: usize,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<HashMap<Integer, usize>, Error> {
+    assert!(*n > 0, "only positive numbers can be factored");
     let (mut factors, n) = trial_division(n);
     let mut rand = RandState::new();
     rand.seed(&seed.into());

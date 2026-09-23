@@ -482,6 +482,10 @@ pub fn trial_division(n: &Integer) -> (HashMap<Integer, usize>, Integer) {
 /// # Parameters
 ///
 /// - `n`: Number to be factored.
+///
+/// # Panics
+///
+/// If `n` is not positive.
 pub fn ecm(
     n: &Integer,
     #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
@@ -507,6 +511,10 @@ pub fn ecm(
 /// - `B2`: Stage 2 Bound.
 /// - `max_curve`: Maximum number of curves generated.
 /// - `seed`: Initialize pseudorandom generator.
+///
+/// # Panics
+///
+/// If `n` is not positive.
 pub fn ecm_with_params(
     n: &Integer,
     b1: usize,
@@ -521,6 +529,7 @@ pub fn ecm_with_params(
     if b1 < 6 || b2 < 4 {
         return Err(Error::BoundsTooSmall);
     }
+    assert!(*n > 0, "only positive numbers can be factored");
 
     let (mut factors, n) = trial_division(n);
 
@@ -975,6 +984,26 @@ mod tests {
             ecm_with_params(&semiprime(), 4, 100, 10),
             Err(Error::BoundsTooSmall)
         ));
+    }
+
+    #[test]
+    fn small_numbers() {
+        assert!(ecm(&Integer::from(1)).unwrap().is_empty());
+        for n in 2u32..3000 {
+            let factors = ecm(&Integer::from(n)).unwrap();
+            let mut product = Integer::from(1);
+            for (p, &e) in &factors {
+                assert_ne!(p.is_probably_prime(30), IsPrime::No, "{n}: {p}");
+                product *= p.clone().pow(e as u32);
+            }
+            assert_eq!(product, n);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "only positive numbers")]
+    fn zero() {
+        let _ = ecm(&Integer::ZERO);
     }
 
     #[test]
