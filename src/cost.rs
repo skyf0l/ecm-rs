@@ -6,6 +6,7 @@
 //! costs mirror the operations of [`crate::poly`] one product at a time.
 
 use crate::{poly, stage2_poly::PolyPlan};
+use std::collections::HashMap;
 
 /// Montgomery multiplication, by number of limbs (index 0 unused).
 const MUL_NS: [f64; 17] = [
@@ -236,8 +237,9 @@ impl Costs {
         (4 * len + 100) as f64 * self.mul
     }
 
-    /// Polynomial stage 2 of `plan`.
-    pub fn poly_stage2(&self, plan: &PolyPlan) -> f64 {
+    /// Polynomial stage 2 of `plan`. `cache` keeps the costs that only depend on `dF`, for
+    /// the next plans with the same `dF`.
+    pub fn poly_stage2(&self, plan: &PolyPlan, cache: &mut HashMap<usize, [f64; 3]>) -> f64 {
         let (d1, df, giants) = plan.shape();
         let (d2, babies) = plan.baby_shape();
         // Baby steps: two chains of point additions (6M) up to d1/2, then normalized.
@@ -245,18 +247,26 @@ impl Costs {
         if giants == 0 {
             return cost;
         }
-        cost += self.tree(df) + self.inverse(df) + self.evaluate(df) + df as f64 * self.mul;
+        let [tree, fixed, mul_mod] = *cache.entry(df).or_insert_with(|| {
+            let tree = self.tree(df);
+            let fixed = tree + self.inverse(df) + self.evaluate(df);
+            [tree, fixed, self.mul_mod(df)]
+        });
+        cost += fixed + df as f64 * self.mul;
         // Each block: giant steps (6M, and the skipped multiples of d2) and their
         // normalization, the polynomial G, then H*G mod F (but for the first block). The last
         // block may be shorter.
         let step = 6.0 * d2 as f64 / (d2 - 1).max(1) as f64 + 1.0;
         let block = |len: usize| match len {
             0 => 0.0,
-            _ => len as f64 * step * self.mul + self.normalize(len) + self.tree(len),
+            _ => {
+                let g = if len == df { tree } else { self.tree(len) };
+                len as f64 * step * self.mul + self.normalize(len) + g
+            }
         };
         let (full, rest) = (giants / df, giants % df);
         cost += full as f64 * block(df) + block(rest);
-        cost + (giants.div_ceil(df) - 1) as f64 * self.mul_mod(df)
+        cost + (giants.div_ceil(df) - 1) as f64 * mul_mod
     }
 
     /// Baby-step giant-step stage 2 with the giant step `d` (see [`crate::stage2`]): about
