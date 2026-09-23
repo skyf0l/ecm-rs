@@ -17,8 +17,8 @@
 use crate::{
     cost::Costs,
     ecm::{
-        random_sigma, run_curve, sort_factor, stage1_multiplier, trial_division, CurveOutcome,
-        Error, Param,
+        rand_state, random_sigma, run_curve, sort_factor, stage1_multiplier, trial_division,
+        CurveOutcome, Error, Param,
     },
     pm1::Pm1,
     rho::ecm_prob,
@@ -175,10 +175,8 @@ pub fn factor(
 ) -> Result<HashMap<Integer, usize>, Error> {
     assert!(*n > 0, "only positive numbers can be factored");
     let (mut factors, n) = trial_division(n);
-    let mut rand = RandState::new();
-    rand.seed(&seed.into());
     let mut ctx = Context {
-        rand,
+        rand: rand_state(seed),
         multipliers: HashMap::new(),
         plans: HashMap::new(),
         #[cfg(feature = "progress-bar")]

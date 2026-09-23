@@ -16,6 +16,7 @@
 //! modulo a factor of `n`: that factor is returned right away. This also checks the primes
 //! `l < D`, which are baby steps.
 
+use crate::primes::{primes, PrimesUpTo};
 use crate::{
     arith::{Arith, Factor, PolyArith},
     cost::Costs,
@@ -23,7 +24,6 @@ use crate::{
     point::Point,
     stage2_poly::{self, PolyPlan},
 };
-use primal::Primes;
 use rug::Integer;
 use std::iter::Peekable;
 
@@ -152,7 +152,7 @@ struct Pairing {
     d: usize,
     b2: usize,
     /// The primes in `(max(b1, D - 1), b2]` not yet visited.
-    primes: Peekable<Primes>,
+    primes: Peekable<PrimesUpTo>,
     /// Multiplier `m` of the current prime (the nearest multiple of `D` is `m*D`), and the
     /// largest number with this multiplier.
     m: usize,
@@ -169,7 +169,7 @@ struct Pairing {
 impl Pairing {
     fn new(wheel: &Wheel, b1: usize, b2: usize) -> Self {
         let (d, half) = (wheel.d, wheel.d / 2);
-        let mut primes = Primes::all().peekable();
+        let mut primes = primes(b2).peekable();
         // The primes l < D are baby steps.
         let lo = b1.max(d - 1);
         while primes.next_if(|&l| l <= lo).is_some() {}
@@ -717,6 +717,7 @@ mod tests {
         arith::Mont,
         ecm::{curve, stage1, stage1_multiplier, Param},
     };
+    use primal::Primes;
 
     #[test]
     fn wheel() {
