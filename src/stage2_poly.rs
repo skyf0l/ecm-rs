@@ -176,7 +176,7 @@ impl PolyPlan {
 
 /// Polynomial stage 2 on the residues of `arith`: `gcd(g, n)`, see [`crate::ecm::stage2`].
 #[cfg(test)]
-pub fn stage2_with<A: PolyArith>(arith: A, q: &crate::point::Point, plan: &PolyPlan) -> Integer {
+pub fn stage2_with<A: PolyArith>(arith: A, q: &crate::curve::Point, plan: &PolyPlan) -> Integer {
     crate::stage2::stage2_with(arith, q, &crate::stage2::Stage2Plan::Poly(plan.clone()))
 }
 
@@ -460,13 +460,13 @@ mod tests {
                         &curve(&n, Param::Batch2, &Integer::from(sigma)).unwrap(),
                         &k,
                     );
-                    if q.z_cord.clone().gcd(&n) != 1 {
+                    if q.z.clone().gcd(&n) != 1 {
                         continue;
                     }
                     let g = stage2_with(Mont::<1>::new(&n), &q, &plan);
                     assert_eq!(g, stage2_with(Plain::new(&n), &q, &plan));
                     let expected = primes.iter().any(|l| {
-                        let g = q.mont_ladder(l).z_cord.gcd(&n);
+                        let g = stage1(&q, l).z.gcd(&n);
                         g != 1 && g != n
                     });
                     if expected {
@@ -503,7 +503,7 @@ mod tests {
                         &curve(&n, Param::Batch2, &Integer::from(sigma)).unwrap(),
                         &k,
                     );
-                    if q.z_cord.clone().gcd(&n) != 1 {
+                    if q.z.clone().gcd(&n) != 1 {
                         continue;
                     }
                     let g = with_arith!(&n, |a| stage2_with(a, &q, &plan));

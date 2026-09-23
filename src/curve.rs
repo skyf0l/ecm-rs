@@ -1,11 +1,36 @@
 //! Fast `(X : Z)` arithmetic on Montgomery curves `b*y^2 = x^3 + a*x^2 + x`, on residues of any
 //! [`Arith`] implementation.
 //!
-//! This is the hot path of both stages: [`Point`](crate::point::Point) is only the interface
+//! This is the hot path of both stages: [`Point`] is only the interface
 //! type, converted to and from this representation once per stage.
 
 use crate::arith::{Arith, Factor};
 use rug::Integer;
+
+/// Point `(x : z)` of the Montgomery curve with parameter `a24 = (a + 2)/4`, modulo `n`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Point {
+    /// `x` coordinate.
+    pub x: Integer,
+    /// `z` coordinate.
+    pub z: Integer,
+    /// Parameter `a24 = (a + 2)/4` of the curve.
+    pub a24: Integer,
+    /// Modulus.
+    pub n: Integer,
+}
+
+impl Point {
+    /// Point `(2 : 1)`, the starting point of GMP-ECM's parametrizations 1 and 2.
+    pub fn start(a24: Integer, n: &Integer) -> Point {
+        Point {
+            x: 2.into(),
+            z: 1.into(),
+            a24,
+            n: n.clone(),
+        }
+    }
+}
 
 /// Projective point `(x : z)` (the `y` coordinate is never needed).
 #[derive(Debug, Clone)]

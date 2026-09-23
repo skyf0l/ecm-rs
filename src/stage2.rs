@@ -20,8 +20,7 @@ use crate::primes::{primes, PrimesUpTo};
 use crate::{
     arith::{Arith, Factor, PolyArith},
     cost::Costs,
-    curve::{Curve, Scratch, Xz},
-    point::Point,
+    curve::{Curve, Point, Scratch, Xz},
     stage2_poly::{self, PolyPlan},
 };
 use rug::Integer;
@@ -387,8 +386,8 @@ fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> ((usize, usize, usize
 /// Stage 2 on the residues of `arith` with `plan`: returns `gcd(g, n)`, see
 /// [`crate::ecm::stage2`].
 pub fn stage2_with<A: PolyArith>(arith: A, q: &Point, plan: &Stage2Plan) -> Integer {
-    let curve = Curve::new(arith, &q.a_24);
-    let start = curve.point(&q.x_cord, &q.z_cord);
+    let curve = Curve::new(arith, &q.a24);
+    let start = curve.point(&q.x, &q.z);
     stage2_group(&curve, &start, plan)
 }
 
@@ -989,13 +988,13 @@ mod tests {
                     &curve(&n, Param::Batch2, &Integer::from(sigma)).unwrap(),
                     &k,
                 );
-                if q.z_cord.clone().gcd(&n) != 1 {
+                if q.z.clone().gcd(&n) != 1 {
                     continue;
                 }
                 let g = pairs_stage2_with(Mont::<1>::new(&n), &q, &plan);
                 assert_eq!(g, pairs_stage2_with(Mont::<1>::new(&n), &q, &streamed));
                 let expected = primes.iter().any(|l| {
-                    let g = q.mont_ladder(l).z_cord.gcd(&n);
+                    let g = stage1(&q, l).z.gcd(&n);
                     g != 1 && g != n
                 });
                 if expected {
@@ -1052,8 +1051,8 @@ mod tests {
                 &curve(&n, Param::Batch2, &Integer::from(sigma)).unwrap(),
                 &k,
             );
-            let curve = Curve::new(Mont::<1>::new(&n), &q.a_24);
-            let q = curve.point(&q.x_cord, &q.z_cord);
+            let curve = Curve::new(Mont::<1>::new(&n), &q.a24);
+            let q = curve.point(&q.x, &q.z);
             assert_eq!(
                 accumulate(&curve, &q, &plan),
                 accumulate(&curve, &q, &streamed)
