@@ -50,6 +50,11 @@ pub struct Costs {
 }
 
 impl Costs {
+    /// Cost of a modular multiplication.
+    pub fn mul(&self) -> f64 {
+        self.mul
+    }
+
     /// Size of a residue in memory.
     pub fn elem_bytes(&self) -> f64 {
         (self.bits.div_ceil(64).max(1) * 8) as f64

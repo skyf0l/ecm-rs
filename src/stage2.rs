@@ -17,9 +17,9 @@
 //! `l < D`, which are baby steps.
 
 use crate::{
-    arith::{Arith, PolyArith},
+    arith::{Arith, Factor, PolyArith},
     cost::Costs,
-    curve::{Curve, Xz},
+    curve::{Curve, Scratch, Xz},
     point::Point,
     stage2_poly::{self, PolyPlan},
 };
@@ -267,6 +267,15 @@ impl Stage2Plan {
         }
     }
 
+    /// Estimated cost (in nanoseconds, see [`Costs`]) of stage 2 with the plan [`Stage2Plan::new`]
+    /// would choose, modulo a number of `bits` bits, without building the plan.
+    pub(crate) fn cost(bits: usize, b1: usize, b2: usize) -> f64 {
+        let costs = Costs::new(bits);
+        let d = giant_step(b1, b2);
+        let pairs = costs.pairs_stage2(b1, b2, d, phi(d));
+        pairs.min(best_poly_shape(&costs, b1, b2).1)
+    }
+
     /// Plan of the baby-step giant-step continuation. Requires `b1 >= 3`.
     pub fn pairs(b1: usize, b2: usize) -> Self {
         Stage2Plan::Pairs(PairPlan::new(b1, b2))
@@ -307,6 +316,12 @@ const MAX_POLY_MEMORY: f64 = 256.0 * 1024.0 * 1024.0;
 
 /// Cheapest polynomial continuation and its cost: the best giant step `d1`.
 fn best_poly_plan(costs: &Costs, b1: usize, b2: usize) -> (PolyPlan, f64) {
+    let (d1, cost) = best_poly_shape(costs, b1, b2);
+    (PolyPlan::new(b1, b2, d1), cost)
+}
+
+/// Best giant step `d1` of the polynomial continuation, and its cost.
+fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> (usize, f64) {
     let mut best = (PolyPlan::shape_only(b1, b2, 6), f64::INFINITY);
     for d1 in [6].into_iter().chain(POLY_GIANT_STEPS) {
         if prime_factors(d1).iter().any(|&p| p > b1) {
@@ -330,17 +345,117 @@ fn best_poly_plan(costs: &Costs, b1: usize, b2: usize) -> (PolyPlan, f64) {
             break;
         }
     }
-    let (_, cost) = best;
-    let d1 = best.0.shape().0;
-    (PolyPlan::new(b1, b2, d1), cost)
+    (best.0.shape().0, best.1)
 }
 
 /// Stage 2 on the residues of `arith` with `plan`: returns `gcd(g, n)`, see
 /// [`crate::ecm::stage2`].
 pub fn stage2_with<A: PolyArith>(arith: A, q: &Point, plan: &Stage2Plan) -> Integer {
-    match plan {
-        Stage2Plan::Pairs(plan) => pairs_stage2_with(arith, q, plan),
-        Stage2Plan::Poly(plan) => stage2_poly::stage2_with(arith, q, plan),
+    let curve = Curve::new(arith, &q.a_24);
+    let start = curve.point(&q.x_cord, &q.z_cord);
+    stage2_group(&curve, &start, plan)
+}
+
+/// Stage 2 in `group` from the element `start`: `gcd(g, n)`, where `g` is the accumulated
+/// product (or a factor found by a failed normalization, possibly `n`).
+pub(crate) fn stage2_group<G: XLine>(group: &G, start: &Xz<Elem<G>>, plan: &Stage2Plan) -> Integer
+where
+    G::A: PolyArith,
+{
+    let product = match plan {
+        Stage2Plan::Pairs(plan) => accumulate(group, start, plan),
+        Stage2Plan::Poly(plan) => stage2_poly::accumulate(group, start, plan),
+    };
+    match product {
+        Ok(g) => group.arith().gcd(&g),
+        Err(g) => g,
+    }
+}
+
+/// Residues of the arithmetic of `G`.
+pub(crate) type Elem<G> = <<G as XLine>::A as Arith>::Elem;
+
+/// A group whose elements are known up to sign by an "x-coordinate" `(x : z)`, with
+/// differential additions: all that stage 2 needs. Stage 2 checks the primes `l` with
+/// `x(m*D*Q) = x(j*Q)` for `l = m*D +- j`.
+///
+/// Montgomery curves for ECM ([`Curve`]), and for P-1 the Lucas sequences
+/// `V_k = a^k + a^-k` ([`crate::pm1`]).
+pub(crate) trait XLine {
+    /// Arithmetic of the coordinates.
+    type A: Arith;
+
+    /// The arithmetic.
+    fn arith(&self) -> &Self::A;
+    /// A placeholder element.
+    fn infinity(&self) -> Xz<Elem<Self>>;
+    /// Temporaries for the group operations.
+    fn scratch(&self) -> Scratch<Elem<Self>>;
+    /// `r = 2*p`.
+    fn double(&self, r: &mut Xz<Elem<Self>>, p: &Xz<Elem<Self>>, scratch: &mut Scratch<Elem<Self>>);
+    /// `r = p + q`, where `diff = p - q`.
+    fn add(
+        &self,
+        r: &mut Xz<Elem<Self>>,
+        p: &Xz<Elem<Self>>,
+        q: &Xz<Elem<Self>>,
+        diff: &Xz<Elem<Self>>,
+        scratch: &mut Scratch<Elem<Self>>,
+    );
+    /// `k*p`, for `k >= 1`.
+    fn multiple(&self, p: &Xz<Elem<Self>>, k: &Integer) -> Xz<Elem<Self>>;
+    /// Replaces each `x[i]` by the normalized x-coordinate of `(x[i] : z[i])`, or returns
+    /// `Err(g)` with a factor `g` of `n` (possibly `n`) when some `z[i]` is not invertible
+    /// (the element is the identity modulo a factor of `n`).
+    fn normalize(
+        &self,
+        normalizer: &mut Normalizer<Elem<Self>>,
+        x: &mut [Elem<Self>],
+        z: &[Elem<Self>],
+    ) -> Result<(), Integer>;
+}
+
+impl<A: Arith> XLine for Curve<A> {
+    type A = A;
+
+    fn arith(&self) -> &A {
+        &self.arith
+    }
+
+    fn infinity(&self) -> Xz<A::Elem> {
+        Curve::infinity(self)
+    }
+
+    fn scratch(&self) -> Scratch<A::Elem> {
+        Curve::scratch(self)
+    }
+
+    fn double(&self, r: &mut Xz<A::Elem>, p: &Xz<A::Elem>, scratch: &mut Scratch<A::Elem>) {
+        Curve::double(self, r, p, scratch)
+    }
+
+    fn add(
+        &self,
+        r: &mut Xz<A::Elem>,
+        p: &Xz<A::Elem>,
+        q: &Xz<A::Elem>,
+        diff: &Xz<A::Elem>,
+        scratch: &mut Scratch<A::Elem>,
+    ) {
+        Curve::add(self, r, p, q, diff, scratch)
+    }
+
+    fn multiple(&self, p: &Xz<A::Elem>, k: &Integer) -> Xz<A::Elem> {
+        self.ladder(&Factor::Full(p.x.clone()), &Factor::Full(p.z.clone()), k)
+    }
+
+    fn normalize(
+        &self,
+        normalizer: &mut Normalizer<A::Elem>,
+        x: &mut [A::Elem],
+        z: &[A::Elem],
+    ) -> Result<(), Integer> {
+        normalizer.normalize(&self.arith, x, z)
     }
 }
 
@@ -453,30 +568,27 @@ impl<E: Clone> Normalizer<E> {
 }
 
 /// Baby-step giant-step stage 2 on the residues of `arith`: returns `gcd(g, n)`.
-fn pairs_stage2_with<A: Arith>(arith: A, q: &Point, plan: &PairPlan) -> Integer {
-    let curve = Curve::new(arith, &q.a_24);
-    match accumulate(&curve, q, plan) {
-        Ok(g) => curve.arith.gcd(&g),
-        Err(g) => g,
-    }
+#[cfg(test)]
+fn pairs_stage2_with<A: PolyArith>(arith: A, q: &Point, plan: &PairPlan) -> Integer {
+    stage2_with(arith, q, &Stage2Plan::Pairs(plan.clone()))
 }
 
 /// Normalized x-coordinates of the baby steps `j*Q` for `j < limit`, `j = +-1 mod 6`, with
 /// `index[j] != u32::MAX` (their position in the result, of length `len`), or `Err(g)` with a
 /// factor found by a failed inversion.
-pub(crate) fn baby_steps<A: Arith>(
-    curve: &Curve<A>,
-    q: &Point,
+pub(crate) fn baby_steps<G: XLine>(
+    curve: &G,
+    q: &Xz<Elem<G>>,
     limit: usize,
     index: &[u32],
     len: usize,
-    normalizer: &mut Normalizer<A::Elem>,
-) -> Result<Vec<A::Elem>, Integer> {
-    let a = &curve.arith;
+    normalizer: &mut Normalizer<Elem<G>>,
+) -> Result<Vec<Elem<G>>, Integer> {
+    let a = curve.arith();
     let mut scratch = curve.scratch();
     let mut xs = vec![a.zero(); len];
     let mut zs = vec![a.zero(); len];
-    let mut store = |j: usize, p: &Xz<A::Elem>| {
+    let mut store = |j: usize, p: &Xz<Elem<G>>| {
         let i = index[j];
         if i != u32::MAX {
             xs[i as usize].clone_from(&p.x);
@@ -486,7 +598,7 @@ pub(crate) fn baby_steps<A: Arith>(
 
     // Q, 5Q and 6Q, then the two chains j = 1 and j = 5 mod 6: (j + 6)*Q = j*Q + 6*Q, with
     // difference (j - 6)*Q, which has the x-coordinate of (6 - j)*Q for the first step.
-    let q1 = curve.point(&q.x_cord, &q.z_cord);
+    let q1 = q.clone();
     let mut q2 = curve.infinity();
     curve.double(&mut q2, &q1, &mut scratch);
     let mut q3 = curve.infinity();
@@ -509,13 +621,13 @@ pub(crate) fn baby_steps<A: Arith>(
             j += 6;
         }
     }
-    normalizer.normalize(a, &mut xs, &zs)?;
+    curve.normalize(normalizer, &mut xs, &zs)?;
     Ok(xs)
 }
 
 /// Product `g` of stage 2, or `Err(g)` with a factor found by a failed inversion.
-fn accumulate<A: Arith>(curve: &Curve<A>, q: &Point, plan: &PairPlan) -> Result<A::Elem, Integer> {
-    let a = &curve.arith;
+fn accumulate<G: XLine>(curve: &G, q: &Xz<Elem<G>>, plan: &PairPlan) -> Result<Elem<G>, Integer> {
+    let a = curve.arith();
     let wheel = &plan.wheel;
     let (d, words) = (wheel.d, wheel.words);
     let mut normalizer = Normalizer::new(a, wheel.len.max(GIANT_BATCH));
@@ -532,10 +644,9 @@ fn accumulate<A: Arith>(curve: &Curve<A>, q: &Point, plan: &PairPlan) -> Result<
     }
 
     let mut scratch = curve.scratch();
-    let (xq, zq) = (a.factor(&q.x_cord), a.factor(&q.z_cord));
-    let step = curve.ladder(&xq, &zq, &Integer::from(d));
-    let mut r_prev = curve.ladder(&xq, &zq, &(Integer::from(m_lo) * d));
-    let mut r = curve.ladder(&xq, &zq, &(Integer::from(m_lo + 1) * d));
+    let step = curve.multiple(q, &Integer::from(d));
+    let mut r_prev = curve.multiple(q, &(Integer::from(m_lo) * d));
+    let mut r = curve.multiple(q, &(Integer::from(m_lo + 1) * d));
     let mut r_next = curve.infinity();
 
     let batch = GIANT_BATCH.min(m_hi - m_lo + 1);
@@ -549,7 +660,7 @@ fn accumulate<A: Arith>(curve: &Curve<A>, q: &Point, plan: &PairPlan) -> Result<
         )
     });
 
-    let mut acc: [A::Elem; ACCUMULATORS] = std::array::from_fn(|_| one.clone());
+    let mut acc: [Elem<G>; ACCUMULATORS] = std::array::from_fn(|_| one.clone());
     let (mut diff, mut prod) = (a.zero(), a.zero());
     let mut turn = 0;
 
@@ -564,7 +675,7 @@ fn accumulate<A: Arith>(curve: &Curve<A>, q: &Point, plan: &PairPlan) -> Result<
             std::mem::swap(&mut r_prev, &mut r);
             std::mem::swap(&mut r, &mut r_next);
         }
-        normalizer.normalize(a, &mut giant_x[..len], &giant_z[..len])?;
+        curve.normalize(&mut normalizer, &mut giant_x[..len], &giant_z[..len])?;
 
         let rows = match (&plan.table, &mut pairing) {
             (Some(table), _) => &table[(m0 - m_lo) * words..(m0 - m_lo + len) * words],
@@ -894,6 +1005,7 @@ mod tests {
                 &k,
             );
             let curve = Curve::new(Mont::<1>::new(&n), &q.a_24);
+            let q = curve.point(&q.x_cord, &q.z_cord);
             assert_eq!(
                 accumulate(&curve, &q, &plan),
                 accumulate(&curve, &q, &streamed)

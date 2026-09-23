@@ -5,9 +5,12 @@
 mod arith;
 mod cost;
 mod curve;
+mod driver;
 mod ecm;
+mod pm1;
 mod point;
 mod poly;
+mod rho;
 mod stage2;
 mod stage2_poly;
 
@@ -17,10 +20,13 @@ pub use crate::ecm::{ecm, ecm_one_factor, ecm_with_params, Error};
 #[cfg(feature = "bench")]
 #[doc(hidden)]
 pub mod bench {
+    pub use crate::driver::factor;
     pub use crate::ecm::{
-        batch2_curve, curve, optimal_params, random_sigma, run_curve, square_curve, stage1,
-        stage1_multiplier, stage2, suyama_curve, trial_division, CurveOutcome, Param,
+        batch2_curve, curve, random_sigma, run_curve, square_curve, stage1, stage1_multiplier,
+        stage2, suyama_curve, trial_division, CurveOutcome, Param,
     };
+    pub use crate::pm1::Pm1;
     pub use crate::point::Point;
+    pub use crate::rho::{ecm_prob, pm1_prob};
     pub use crate::stage2::Stage2Plan;
 }

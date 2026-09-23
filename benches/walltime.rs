@@ -9,13 +9,13 @@
 //! curves drawn.
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use ecm::bench::optimal_params;
+use ecm::bench::factor;
 use rug::Integer;
 use std::{hint::black_box, str::FromStr};
 
 const SEEDS: usize = 3;
 
-/// `(name, number)`, factored with the default parameters for its size.
+/// `(name, number)`, factored as by `ecm::ecm` (with other seeds).
 const NUMBERS: [(&str, &str); 3] = [
     ("digits_21", "631211032315670776841"),
     ("digits_22", "4132846513818654136451"),
@@ -27,16 +27,12 @@ fn factorize(c: &mut Criterion) {
     group.sample_size(10);
 
     for (name, n) in NUMBERS {
-        let (b1, b2, max_curve) = optimal_params(n.len());
         let n = Integer::from_str(n).unwrap();
         group.bench_function(name, |b| {
             b.iter(|| {
                 for seed in 0..SEEDS {
-                    black_box(ecm::ecm_with_params(
+                    black_box(factor(
                         black_box(&n),
-                        b1,
-                        b2,
-                        max_curve,
                         seed,
                         #[cfg(feature = "progress-bar")]
                         None,

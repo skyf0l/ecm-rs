@@ -5,7 +5,7 @@ random. So these three measures are kept separate:
 
 | What | Where | Measure | CI |
 |---|---|---|---|
-| Cost: stage 1 / stage 2 of one curve, setup (trial division, primality test, stage 1 multiplier) | `ops.rs` | Instruction counts (Valgrind), deterministic | ✅ |
+| Cost: stage 1 / stage 2 of one curve, setup (trial division, primality test, stage 1 multiplier, P-1 stage 1) | `ops.rs` | Instruction counts (Valgrind), deterministic | ✅ |
 | Complete factorizations of small numbers, over several seeds | `e2e.rs` | Instruction counts (Valgrind), deterministic | ✅ |
 | Effectiveness: expected curves to find a 15/20/25-digit factor | `examples/success_rate.rs` | Curves tried / factors found, deterministic | ✅ |
 | Complete factorizations of larger numbers | `walltime.rs` | Wall-clock time (criterion) | ❌ too noisy on shared runners |
