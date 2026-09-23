@@ -10,10 +10,14 @@
 //!
 //! ```text
 //! cargo run --release --features bench --example success_rate -- \
-//!     [--sizes 15,20,25] [--numbers 20] [--curves 50] [--param 1] [--json out.json] \
+//!     [--sizes 15,20,25:100,30] [--numbers 50] [--curves 200] [--param 1] [--json out.json] \
 //!     [--compare base.json] [--markdown comparison.md]
 //! ```
 //!
+//! - `--sizes`: factor sizes in digits, each optionally with its own number of curves per
+//!   number (`--curves` otherwise). The default, `15,20,25:100`, keeps the CI job (run on both
+//!   the base and the PR) under 5 minutes: 10000 curves for 15 and 20 digits, 5000 for 25
+//!   digits (each curve costs 5x more there, so fewer successes and a wider interval).
 //! - `--param`: family of curves, as GMP-ECM's `-param`: `0` (Suyama), `1` or `2` (default:
 //!   the one of `ecm_one_factor`).
 //! - `--json`: writes results in the `customSmallerIsBetter` format of
@@ -26,7 +30,9 @@
 mod common;
 
 use common::{prime_digits, GMP_ECM_BOUNDS, SEED};
-use ecm::bench::{random_sigma, run_curve, stage1_multiplier, CurveOutcome, Param, Stage2Plan};
+use ecm::bench::{
+    ecm_prob, random_sigma, run_curve, stage1_multiplier, CurveOutcome, Param, Stage2Plan,
+};
 use rug::{rand::RandState, Integer};
 use serde_json::{json, Value};
 use std::{
@@ -39,12 +45,9 @@ use std::{
 /// (almost always) the target one.
 const COFACTOR_DIGITS: u32 = 40;
 
-/// Approximate expected curves from GMP-ECM's documentation for the same bounds. For reference
-/// only: GMP-ECM uses a much stronger stage 2.
-const GMP_ECM_EXPECTED_CURVES: [(u32, u32); 3] = [(15, 25), (20, 90), (25, 300)];
-
 struct Args {
-    sizes: Vec<u32>,
+    /// Factor sizes, with their curves per number if not `curves`.
+    sizes: Vec<(u32, Option<u64>)>,
     numbers: u64,
     curves: u64,
     param: Param,
@@ -55,9 +58,9 @@ struct Args {
 
 fn parse_args() -> Args {
     let mut args = Args {
-        sizes: vec![15, 20],
-        numbers: 20,
-        curves: 50,
+        sizes: vec![(15, None), (20, None), (25, Some(100))],
+        numbers: 50,
+        curves: 200,
         param: Param::default(),
         json: None,
         compare: None,
@@ -71,7 +74,15 @@ fn parse_args() -> Args {
         };
         match arg.as_str() {
             "--sizes" => {
-                args.sizes = value().split(',').map(|s| s.parse().unwrap()).collect();
+                args.sizes = value()
+                    .split(',')
+                    .map(|s| match s.split_once(':') {
+                        Some((digits, curves)) => {
+                            (digits.parse().unwrap(), Some(curves.parse().unwrap()))
+                        }
+                        None => (s.parse().unwrap(), None),
+                    })
+                    .collect();
             }
             "--numbers" => args.numbers = value().parse().unwrap(),
             "--curves" => args.curves = value().parse().unwrap(),
@@ -180,14 +191,21 @@ fn main() {
     let args = parse_args();
     let mut results = Vec::new();
 
-    for &digits in &args.sizes {
+    for &(digits, curves) in &args.sizes {
         let &(_, b1, b2) = GMP_ECM_BOUNDS
             .iter()
             .find(|(d, _, _)| *d == digits)
             .unwrap_or_else(|| panic!("no bounds for {digits}-digit factors"));
 
         let start = Instant::now();
-        let counts = measure(digits, b1, b2, args.numbers, args.curves, args.param);
+        let counts = measure(
+            digits,
+            b1,
+            b2,
+            args.numbers,
+            curves.unwrap_or(args.curves),
+            args.param,
+        );
         let elapsed = start.elapsed().as_secs_f64();
 
         let found = counts.found();
@@ -204,15 +222,13 @@ fn main() {
         } else {
             format!("{:.0}..{:.0}", 1.0 / high, 1.0 / low)
         };
-        let reference = GMP_ECM_EXPECTED_CURVES
-            .iter()
-            .find(|(d, _)| *d == digits)
-            .map_or(0, |(_, c)| *c);
+        // GMP-ECM's model (`ecm -v -param 2`) for the same bounds.
+        let model = 1.0 / ecm_prob(b1 as f64, b2 as f64, f64::from(digits));
 
         println!(
             "{digits}-digit factor (B1={b1}, B2={b2}): found {found}/{} curves \
              (stage 1: {}, stage 2: {}, setup: {}), expected curves {expected:.1} \
-             (95% CI {interval}), GMP-ECM ~{reference}, {elapsed:.1}s",
+             (95% CI {interval}), model {model:.0}, {elapsed:.1}s",
             counts.curves, counts.stage1, counts.stage2, counts.setup
         );
 
@@ -222,7 +238,7 @@ fn main() {
             "value": expected,
             "extra": format!(
                 "found {found}/{} curves (stage 1: {}, stage 2: {}, setup: {})\n\
-                 95% CI: {interval} curves{}\nGMP-ECM reference: ~{reference} curves",
+                 95% CI: {interval} curves{}\nGMP-ECM model: {model:.0} curves",
                 counts.curves,
                 counts.stage1,
                 counts.stage2,
