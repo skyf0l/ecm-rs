@@ -308,7 +308,7 @@ fn pm1_b2(n: &Integer, b1: usize) -> usize {
     let bits = n.significant_bits() as usize;
     let budget = PM1_STAGE2_RATIO * 1.44 * b1 as f64 * 1.3 * Costs::new(bits).mul();
     let mut b2 = b1;
-    while b2 < usize::MAX / 4 && Stage2Plan::cost(bits, b1, 2 * b2) <= budget {
+    while b2 < usize::MAX / 4 && Stage2Plan::cost_at_most(bits, b1, 2 * b2, budget) {
         b2 *= 2;
     }
     b2

@@ -267,13 +267,15 @@ impl Stage2Plan {
         }
     }
 
-    /// Estimated cost (in nanoseconds, see [`Costs`]) of stage 2 with the plan [`Stage2Plan::new`]
-    /// would choose, modulo a number of `bits` bits, without building the plan.
-    pub(crate) fn cost(bits: usize, b1: usize, b2: usize) -> f64 {
+    /// Whether the estimated cost (in nanoseconds, see [`Costs`]) of stage 2 with the plan
+    /// [`Stage2Plan::new`] would choose, modulo a number of `bits` bits, is at most `budget`,
+    /// without building the plan (nor searching the polynomial ones if the baby-step giant-step
+    /// continuation is cheap enough).
+    pub(crate) fn cost_at_most(bits: usize, b1: usize, b2: usize, budget: f64) -> bool {
         let costs = Costs::new(bits);
         let d = giant_step(b1, b2);
-        let pairs = costs.pairs_stage2(b1, b2, d, phi(d));
-        pairs.min(best_poly_shape(&costs, b1, b2).1)
+        costs.pairs_stage2(b1, b2, d, phi(d)) <= budget
+            || best_poly_shape(&costs, b1, b2).1 <= budget
     }
 
     /// Plan of the baby-step giant-step continuation. Requires `b1 >= 3`.
@@ -348,7 +350,14 @@ fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> ((usize, usize, usize
             // Blocks of dF = babies, the last one partial, or k whole blocks of fewer than
             // twice as many giant steps.
             let k = giants.div_ceil(babies);
-            for blocks in [0, k.saturating_sub(1), k.saturating_sub(2)] {
+            for (i, blocks) in [0, k.saturating_sub(1), k.saturating_sub(2)]
+                .into_iter()
+                .enumerate()
+            {
+                // Each shape once (0, k - 1 and k - 2 coincide for small k).
+                if i > 0 && (blocks == 0 || (i == 2 && blocks == k - 1)) {
+                    continue;
+                }
                 if blocks > 0 && giants > 2 * babies * blocks {
                     continue;
                 }
