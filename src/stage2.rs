@@ -25,7 +25,7 @@ use crate::{
     stage2_poly::{self, PolyPlan},
 };
 use rug::Integer;
-use std::iter::Peekable;
+use std::{collections::HashMap, iter::Peekable};
 
 /// Number of giant steps normalized with the same inversion.
 const GIANT_BATCH: usize = 256;
@@ -328,6 +328,7 @@ fn best_poly_plan(costs: &Costs, b1: usize, b2: usize) -> (PolyPlan, f64) {
 /// padded).
 fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> ((usize, usize, usize), f64) {
     let mut best = ((6, 1, 0), f64::INFINITY);
+    let mut cache = HashMap::new();
     let fits = |df: usize| {
         // The product tree of F (a coefficient per leaf and level), and at the peak (measured)
         // about 52 more coefficients per leaf: the other polynomials, F and its inverse packed
@@ -368,7 +369,7 @@ fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> ((usize, usize, usize
                 if !fits(plan.shape().1) {
                     continue;
                 }
-                let cost = costs.poly_stage2(&plan);
+                let cost = costs.poly_stage2(&plan, &mut cache);
                 if cost < best.1 {
                     best = ((d1, d2, blocks), cost);
                 }
