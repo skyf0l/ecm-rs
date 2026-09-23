@@ -107,7 +107,9 @@ fn stage1_b1_11k(input: (Point, Integer)) -> Point {
 #[bench::bits_256_b2_12_7m(stage2_input(256, B1_25, B2_25, false))]
 fn stage2_pairs(input: (Point, Stage2Plan)) -> Integer {
     let (q, plan) = black_box(&input);
-    black_box(stage2(q, plan))
+    let g = stage2(q, plan);
+    assert_eq!(g, 1, "stage 2 must run completely");
+    black_box(g)
 }
 
 #[library_benchmark]
@@ -115,7 +117,9 @@ fn stage2_pairs(input: (Point, Stage2Plan)) -> Integer {
 #[bench::bits_1024_b2_12_7m(stage2_input(1024, B1_25, B2_25, true))]
 fn stage2_poly(input: (Point, Stage2Plan)) -> Integer {
     let (q, plan) = black_box(&input);
-    black_box(stage2(q, plan))
+    let g = stage2(q, plan);
+    assert_eq!(g, 1, "stage 2 must run completely");
+    black_box(g)
 }
 
 /// Everything one curve of the `success_rate` example needs for `digits`-digit factors: its
