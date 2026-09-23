@@ -849,7 +849,22 @@ mod tests {
         b2: usize,
     ) -> usize {
         let k = stage1_multiplier(b1);
-        let plans = [Stage2Plan::pairs(b1, b2), Stage2Plan::poly(n, b1, b2)];
+        let mut plans = vec![Stage2Plan::pairs(b1, b2), Stage2Plan::poly(n, b1, b2)];
+        // And polynomial plans with d2 > 1: the default d2 with F padded to fill two whole
+        // blocks, and the largest prime d2 <= b1 with partial blocks.
+        let d1 = [2310, 210, 30, 6]
+            .into_iter()
+            .find(|&d1| crate::stage2::prime_factors(d1).iter().all(|&p| p <= b1))
+            .unwrap();
+        let d2 = crate::stage2_poly::default_d2(b1, d1);
+        let other = [29, 23, 19, 17, 13, 11, 7, 5]
+            .into_iter()
+            .find(|&p| p <= b1 && !d1.is_multiple_of(p));
+        for (d2, blocks) in [(d2, 2)].into_iter().chain(other.map(|p| (p, 0))) {
+            let plan = crate::stage2_poly::PolyPlan::new(b1, b2, d1, d2, blocks);
+            assert!(plan.b2_covered() >= b2);
+            plans.push(Stage2Plan::Poly(plan));
+        }
         let primes: Vec<Integer> = Primes::all()
             .skip_while(|&l| l <= b1)
             .take_while(|&l| l <= b2)
