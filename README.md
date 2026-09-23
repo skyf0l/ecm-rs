@@ -13,7 +13,8 @@ Based on [rug](https://crates.io/crates/rug), it can use [arbitrary-precision nu
 The implementation started as a translation of sympy's, and now uses the techniques of
 [GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm) (whose code and papers it follows closely):
 
-- Montgomery modular arithmetic on fixed-size limb arrays (up to 1024 bits, GMP integers above).
+- Montgomery modular arithmetic on fixed-size limb arrays (up to 1024 bits, with GMP's
+  low-level functions from 704 bits; GMP integers above).
 - GMP-ECM's curves with parametrization 2 (`-param 2`): small starting point, same torsion as
   Suyama's curves.
 - Stage 2: baby-step giant-step continuation with prime pairing for small `B2`, and the
@@ -35,16 +36,16 @@ startup):
 
 | Number                             | sympy   | ecm-rs 1.0.2 | ecm-rs  | GMP-ECM |
 | ---------------------------------- | ------- | ------------ | ------- | ------- |
-| 398883434337287                    | 0.074s  | 0.057s       | 0.0009s | 0.0036s |
-| 46167045131415113                  | 0.148s  | 0.039s       | 0.0009s | 0.0047s |
-| 64211816600515193                  | 0.552s  | 0.017s       | 0.0021s | 0.0039s |
-| 168541512131094651323              | 0.071s  | 0.038s       | 0.0010s | 0.0039s |
-| 631211032315670776841              | 0.081s  | 0.128s       | 0.0027s | 0.0085s |
-| 4132846513818654136451             | 0.266s  | 0.038s       | 0.0017s | 0.0047s |
-| 4516511326451341281684513          | 0.495s  | 0.038s       | 0.0009s | 0.0057s |
-| 3146531246531241245132451321       | 1.22s   | 0.22s        | 0.0025s | 0.0105s |
-| 4269021180054189416198169786894227 | 1.916s  | 0.018s       | 0.0037s | 0.0041s |
-| 7060005655815754299976961394452809 | 13.555s | 3.467s       | 0.013s  | 0.056s  |
+| 398883434337287                    | 0.074s  | 0.057s       | 0.0002s | 0.0036s |
+| 46167045131415113                  | 0.148s  | 0.039s       | 0.0002s | 0.0047s |
+| 64211816600515193                  | 0.552s  | 0.017s       | 0.0006s | 0.0039s |
+| 168541512131094651323              | 0.071s  | 0.038s       | 0.0002s | 0.0039s |
+| 631211032315670776841              | 0.081s  | 0.128s       | 0.0046s | 0.0085s |
+| 4132846513818654136451             | 0.266s  | 0.038s       | 0.0005s | 0.0047s |
+| 4516511326451341281684513          | 0.495s  | 0.038s       | 0.0002s | 0.0057s |
+| 3146531246531241245132451321       | 1.22s   | 0.22s        | 0.0083s | 0.0105s |
+| 4269021180054189416198169786894227 | 1.916s  | 0.018s       | 0.0011s | 0.0041s |
+| 7060005655815754299976961394452809 | 13.555s | 3.467s       | 0.0067s | 0.056s  |
 
 Numbers of 60 and 80 digits with one small prime factor (and a prime cofactor): mean time to
 factor completely with `ecm` (3 numbers, 5 seeds each for 60 digits, 3 for 80 digits), and
