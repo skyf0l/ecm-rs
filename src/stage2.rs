@@ -290,6 +290,14 @@ impl Stage2Plan {
         Stage2Plan::Poly(best_poly_plan(&costs, b1, b2).0)
     }
 
+    /// Stage 1 bound: stage 2 checks the primes above it.
+    pub fn b1(&self) -> usize {
+        match self {
+            Stage2Plan::Pairs(plan) => plan.b1,
+            Stage2Plan::Poly(plan) => plan.b1(),
+        }
+    }
+
     /// Largest `b2' >= b2` such that stage 2 checks every prime in `(b1, b2']`.
     pub fn b2(&self) -> usize {
         match self {
