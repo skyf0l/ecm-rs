@@ -4,7 +4,10 @@
 //! This is the hot path of both stages: [`Point`] is only the interface
 //! type, converted to and from this representation once per stage.
 
-use crate::arith::{Arith, Factor};
+use crate::{
+    arith::{Arith, Factor},
+    stop::{STOP_INTERVAL, Stop},
+};
 use rug::Integer;
 
 /// Point `(x : z)` of the Montgomery curve with parameter `a24 = (a + 2)/4`, modulo `n`.
@@ -164,21 +167,34 @@ impl<A: Arith> Curve<A> {
         a.mul_factor(&mut q.z, w, xd);
     }
 
-    /// `k*P` with the Montgomery ladder, where `P = (xp : zp)`, for `k >= 1`.
-    pub fn ladder(&self, xp: &Factor<A::Elem>, zp: &Factor<A::Elem>, k: &Integer) -> Xz<A::Elem> {
+    /// `k*P` with the Montgomery ladder, where `P = (xp : zp)`, for `k >= 1`: stops early (with
+    /// a meaningless point) if `stop` is requested.
+    pub fn ladder(
+        &self,
+        xp: &Factor<A::Elem>,
+        zp: &Factor<A::Elem>,
+        k: &Integer,
+        stop: Stop<'_>,
+    ) -> Xz<A::Elem> {
         #[cfg(target_arch = "x86_64")]
         if crate::arith::has_bmi2_adx() {
             // SAFETY: the CPU has the features `ladder_bmi2` is compiled for.
-            return unsafe { self.ladder_bmi2(xp, zp, k) };
+            return unsafe { self.ladder_bmi2(xp, zp, k, stop) };
         }
-        self.ladder_generic(xp, zp, k)
+        self.ladder_generic(xp, zp, k, stop)
     }
 
     /// [`Curve::ladder`] compiled with BMI2 and ADX (see [`crate::arith::has_bmi2_adx`]).
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "bmi2,adx")]
-    fn ladder_bmi2(&self, xp: &Factor<A::Elem>, zp: &Factor<A::Elem>, k: &Integer) -> Xz<A::Elem> {
-        self.ladder_generic(xp, zp, k)
+    fn ladder_bmi2(
+        &self,
+        xp: &Factor<A::Elem>,
+        zp: &Factor<A::Elem>,
+        k: &Integer,
+        stop: Stop<'_>,
+    ) -> Xz<A::Elem> {
+        self.ladder_generic(xp, zp, k, stop)
     }
 
     #[inline(always)]
@@ -187,6 +203,7 @@ impl<A: Arith> Curve<A> {
         xp: &Factor<A::Elem>,
         zp: &Factor<A::Elem>,
         k: &Integer,
+        stop: Stop<'_>,
     ) -> Xz<A::Elem> {
         let a = &self.arith;
         let mut scratch = self.scratch();
@@ -197,11 +214,20 @@ impl<A: Arith> Curve<A> {
         };
         let mut q = self.infinity();
         self.double(&mut q, &p, &mut scratch);
-        for bit in (0..k.significant_bits().saturating_sub(1)).rev() {
-            if k.get_bit(bit) {
-                self.dup_add(&mut q, &mut p, xp, zp, &mut scratch);
-            } else {
-                self.dup_add(&mut p, &mut q, xp, zp, &mut scratch);
+        // By segments of STOP_INTERVAL bits, checking `stop` in between.
+        let mut end = k.significant_bits().saturating_sub(1);
+        while end > 0 {
+            let start = end.saturating_sub(STOP_INTERVAL);
+            for bit in (start..end).rev() {
+                if k.get_bit(bit) {
+                    self.dup_add(&mut q, &mut p, xp, zp, &mut scratch);
+                } else {
+                    self.dup_add(&mut p, &mut q, xp, zp, &mut scratch);
+                }
+            }
+            end = start;
+            if end > 0 && stop.requested() {
+                break;
             }
         }
         p

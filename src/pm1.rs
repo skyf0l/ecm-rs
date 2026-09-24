@@ -17,15 +17,21 @@ use crate::{
     curve::{Scratch, Xz},
     ecm::{prime_power_words, product},
     stage2::{Normalizer, Stage2Plan, XLine, stage2_group},
+    stop::Stop,
 };
 use rug::Integer;
 
 /// Starting value `x0` of stage 1 (the choice barely matters: `E` has a large power of 2).
 const X0: u32 = 3;
 
-/// 64-bit factors of the exponent multiplied together before each modular exponentiation (about
-/// 2^20 bits): bounds the memory used.
+/// 64-bit factors of the exponent multiplied together before each modular exponentiation
+/// (about 2^20 bits): bounds the memory used.
 const CHUNK_WORDS: usize = 1 << 14;
+
+/// [`CHUNK_WORDS`] when stage 1 may have to stop (see [`Stop`]), divided by the number of limbs
+/// of the number: an exponentiation takes a few milliseconds. GMP then uses smaller windows,
+/// which costs about 2% more instructions at 1024 bits.
+const STOP_CHUNK_WORDS: usize = 1 << 13;
 
 /// State of P-1 on a number: stage 1 done up to `b1`.
 #[derive(Debug, Clone)]
@@ -59,36 +65,62 @@ impl Pm1 {
 
     /// Extends stage 1 to `b1` modulo `n` (a divisor of the previous numbers, if any): returns
     /// `gcd(x - 1, n)`.
+    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn stage1(&mut self, n: &Integer, b1: usize) -> Integer {
+        self.stage1_until(n, b1, Stop::NEVER)
+    }
+
+    /// [`Pm1::stage1`], stopping early if `stop` is requested: the bound reached is then not
+    /// updated, and `x` stays valid (a power of the previous one).
+    pub(crate) fn stage1_until(&mut self, n: &Integer, b1: usize, stop: Stop<'_>) -> Integer {
         self.x %= n;
         if self.b1 < b1 {
-            // The exponent by chunks of about CHUNK_BITS bits.
+            let chunk_words = if stop.is_never() {
+                CHUNK_WORDS
+            } else {
+                (STOP_CHUNK_WORDS / n.significant_digits::<u64>().max(1)).max(16)
+            };
+            // The exponent by chunks of chunk_words words.
             let mut words = prime_power_words(self.b1, b1).peekable();
+            let mut stopped = false;
             while words.peek().is_some() {
+                if stop.requested() {
+                    stopped = true;
+                    break;
+                }
                 let chunk: Vec<Integer> = words
                     .by_ref()
-                    .take(CHUNK_WORDS)
+                    .take(chunk_words)
                     .map(Integer::from)
                     .collect();
                 self.x
                     .pow_mod_mut(&product(chunk), n)
                     .expect("positive exponent");
             }
-            self.b1 = b1;
+            if !stopped {
+                self.b1 = b1;
+            }
         }
         Integer::from(&self.x - 1u32).gcd(n)
     }
 
     /// Stage 2 modulo `n` with `plan`, whose `b1` must be at most the stage 1 bound: returns
     /// `gcd(g, n)` (see [`crate::ecm::stage2`]).
+    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     #[must_use]
     pub fn stage2(&self, n: &Integer, plan: &Stage2Plan) -> Integer {
+        self.stage2_until(n, plan, Stop::NEVER)
+    }
+
+    /// [`Pm1::stage2`], stopping early (with the gcd of a partial product) if `stop` is
+    /// requested.
+    pub(crate) fn stage2_until(&self, n: &Integer, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
         let x = Integer::from(&self.x % n);
-        with_arith!(n, |arith| stage2_with(arith, &x, plan))
+        with_arith!(n, |arith| stage2_with(arith, &x, plan, stop))
     }
 }
 
-fn stage2_with<A: PolyArith>(arith: A, x: &Integer, plan: &Stage2Plan) -> Integer {
+fn stage2_with<A: PolyArith>(arith: A, x: &Integer, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
     let n = arith.modulus();
     let Ok(inv) = x.clone().invert(n) else {
         return x.clone().gcd(n);
@@ -96,7 +128,7 @@ fn stage2_with<A: PolyArith>(arith: A, x: &Integer, plan: &Stage2Plan) -> Intege
     let v1 = (inv + x) % n;
     let lucas = Lucas::new(arith);
     let start = lucas.element(&v1);
-    stage2_group(&lucas, &start, plan)
+    stage2_group(&lucas, &start, plan, stop)
 }
 
 /// Lucas sequences `V_k = x^k + x^-k` modulo `n`, as elements `(V_k : V_k - 2)`: the second

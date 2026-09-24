@@ -16,6 +16,7 @@ mod primes;
 mod rho;
 mod stage2;
 mod stage2_poly;
+mod stop;
 
 pub use crate::{
     ecm::{Error, Param, ecm, ecm_one_factor, ecm_with_params},

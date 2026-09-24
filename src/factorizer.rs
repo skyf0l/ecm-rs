@@ -5,15 +5,22 @@ use crate::{
     ecm::{Error, Param, rand_state},
     events::{Event, EventHandler, NoEvents},
     stage2::MAX_POLY_MEMORY,
+    stop::Stop,
 };
 use rug::Integer;
-use std::{collections::HashMap, ops::ControlFlow};
+use std::{
+    collections::HashMap,
+    ops::ControlFlow,
+    sync::{Arc, atomic::AtomicBool},
+    time::{Duration, Instant},
+};
 
 /// Seed of [`crate::ecm()`], and of a [`Factorizer`] by default.
 pub(crate) const DEFAULT_SEED: u64 = 1234;
 
-/// Factorization with options: seed, fixed bounds, curves, P-1 only, stage 2 memory, and a
-/// callback receiving the [`Event`]s of the factorization, which can interrupt it.
+/// Factorization with options: seed, fixed bounds, curves, P-1 only, stage 2 memory, a
+/// callback receiving the [`Event`]s of the factorization, which can interrupt it, and an
+/// interruption flag or a timeout, which interrupt it even during a curve.
 ///
 /// By default, the factors are found from the smallest to the largest, as with [`crate::ecm()`]
 /// (which is `Factorizer::new().factor(n)`). With fixed bounds ([`Factorizer::b1`]), each
@@ -52,6 +59,8 @@ pub struct Factorizer<H = NoEvents> {
     sigma: Option<Integer>,
     pm1: bool,
     max_memory: usize,
+    interrupt: Option<Arc<AtomicBool>>,
+    timeout: Option<Duration>,
     handler: H,
 }
 
@@ -74,6 +83,8 @@ impl Factorizer {
             sigma: None,
             pm1: false,
             max_memory: MAX_POLY_MEMORY,
+            interrupt: None,
+            timeout: None,
             handler: NoEvents,
         }
     }
@@ -145,11 +156,34 @@ impl<H: EventHandler> Factorizer<H> {
         self
     }
 
+    /// Interrupts the factorizations when `flag` is set (from another thread, or a signal
+    /// handler): they return [`Error::Interrupted`] soon after, even in the middle of a curve
+    /// (see [`Factorizer::factor_partial`] for what was found so far). The flag is checked
+    /// every few milliseconds, but for the largest polynomial products of stage 2, which take
+    /// up to a few tenths of a second for a 1024-bit number with the bounds of 35-digit factors.
+    /// The flag is never reset: a factorization started while it is set is interrupted at
+    /// once.
+    #[must_use]
+    pub fn interrupt_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.interrupt = Some(flag);
+        self
+    }
+
+    /// Interrupts each factorization after `timeout` (from the call to [`Factorizer::factor`],
+    /// [`Factorizer::factor_partial`] or [`Factorizer::find_factor`]), as
+    /// [`Factorizer::interrupt_flag`] does.
+    #[must_use]
+    pub const fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
     /// Calls `f` with each [`Event`] of the factorizations: returning [`ControlFlow::Break`]
     /// interrupts the factorization, which returns [`Error::Interrupted`] (see
     /// [`Factorizer::factor_partial`] for what was found so far). The events come between
     /// curves and stages: an interruption takes effect at the next event, at most a curve or
-    /// a stage of P-1 later.
+    /// a stage of P-1 later (use [`Factorizer::interrupt_flag`] or [`Factorizer::timeout`] to
+    /// interrupt the factorization during a curve). No event comes after an interruption.
     ///
     /// Without it, the events are not even built.
     #[must_use]
@@ -163,6 +197,8 @@ impl<H: EventHandler> Factorizer<H> {
             sigma: self.sigma,
             pm1: self.pm1,
             max_memory: self.max_memory,
+            interrupt: self.interrupt,
+            timeout: self.timeout,
             handler: f,
         }
     }
@@ -173,8 +209,8 @@ impl<H: EventHandler> Factorizer<H> {
     /// # Errors
     ///
     /// [`Error::BoundsNotEven`], [`Error::BoundsTooSmall`] and [`Error::InvalidOption`] for
-    /// invalid options, [`Error::Interrupted`] if the callback interrupts the factorization,
-    /// and [`Error::ECMFailed`] if a composite part is not split (with fixed bounds, after the
+    /// invalid options, [`Error::Interrupted`] if the callback, the interruption flag or the
+    /// timeout interrupts the factorization, and [`Error::ECMFailed`] if a composite part is not split (with fixed bounds, after the
     /// maximum number of curves; otherwise, as [`crate::ecm()`]).
     ///
     /// # Panics
@@ -226,6 +262,10 @@ impl<H: EventHandler> Factorizer<H> {
         mode: Mode,
         rand: &'a mut rug::rand::RandState<'r>,
     ) -> Engine<'a, 'r, H> {
+        let deadline = self
+            .timeout
+            .and_then(|timeout| Instant::now().checked_add(timeout));
+        let stop = Stop::new(self.interrupt.as_deref(), deadline);
         Engine::new(
             mode,
             self.param,
@@ -234,6 +274,7 @@ impl<H: EventHandler> Factorizer<H> {
             self.max_memory,
             rand,
             &mut self.handler,
+            stop,
         )
     }
 

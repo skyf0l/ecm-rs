@@ -6,6 +6,11 @@ use std::{
     collections::HashMap,
     ops::ControlFlow,
     str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
     time::{Duration, Instant},
 };
 
@@ -526,4 +531,143 @@ fn factor_zero() {
 #[should_panic(expected = "greater than 1")]
 fn find_factor_of_one() {
     let _ = Factorizer::new().find_factor(&Integer::from(1));
+}
+
+/// A 1024-bit semiprime, far too hard for ECM.
+fn rsa1024() -> Integer {
+    let p = (Integer::from(1) << 511u32) + 1_000u32;
+    let q = (Integer::from(3) << 510u32) + 1_000u32;
+    p.next_prime() * q.next_prime()
+}
+
+/// Factors `n` with `factorizer`, setting its interruption flag after `delay`: returns the
+/// result, and the time the factorization took to return after the flag was set.
+fn interrupt_after(
+    n: &Integer,
+    factorizer: Factorizer,
+    delay: Duration,
+) -> (Factorization, Duration) {
+    let flag = Arc::new(AtomicBool::new(false));
+    let setter = {
+        let flag = Arc::clone(&flag);
+        thread::spawn(move || {
+            thread::sleep(delay);
+            flag.store(true, Ordering::Relaxed);
+            Instant::now()
+        })
+    };
+    let result = factorizer.interrupt_flag(flag).factor_partial(n);
+    let returned = Instant::now();
+    let set = setter.join().unwrap();
+    (result, returned.saturating_duration_since(set))
+}
+
+/// The interruption flag stops the factorization during a curve or P-1, a few milliseconds
+/// after it is set (much less than the bound checked here), with the bounds of 35-digit factors
+/// (larger bounds make the largest polynomial products of stage 2 take longer).
+#[test]
+fn interrupt_flag_is_prompt() {
+    let n = rsa1024();
+    let prompt = Duration::from_millis(100);
+    let b2 = 1_045_563_762;
+    for (factorizer, delay) in [
+        // Stage 1 of the first curve (about 5 s).
+        (Factorizer::new().b1(1_000_000), 300),
+        // The polynomial stage 2 of the first curve (about 1.5 s), after a short stage 1.
+        (Factorizer::new().b1(11_000).b2(b2), 400),
+        (Factorizer::new().b1(11_000).b2(b2), 900),
+        // Stage 1 of P-1, then stage 2.
+        (Factorizer::new().pm1(true).b1(20_000_000), 300),
+        (Factorizer::new().pm1(true).b1(100_000).b2(b2), 300),
+        // The first level: P-1, then curves.
+        (Factorizer::new(), 300),
+    ] {
+        let case = format!("{factorizer:?}, {delay} ms");
+        let (result, latency) = interrupt_after(&n, factorizer, Duration::from_millis(delay));
+        assert!(latency < prompt, "{case}: {latency:?}");
+        assert_eq!(result.error, Some(Error::Interrupted));
+        assert_eq!(result.unfactored, [(n.clone(), 1)]);
+    }
+}
+
+#[test]
+fn interrupt_flag_and_timeout() {
+    // Set before: interrupted after trial division, with its factors.
+    let n = hard() * 12u32;
+    let flag = Arc::new(AtomicBool::new(true));
+    let mut events = Vec::new();
+    let result = Factorizer::new()
+        .interrupt_flag(flag)
+        .on_event(|e| {
+            events.push(owned(e));
+            ControlFlow::Continue(())
+        })
+        .factor_partial(&n);
+    assert_eq!(result.error, Some(Error::Interrupted));
+    check_partial(&n, &result);
+    assert_eq!(result.primes[&Integer::from(2)], 2);
+    assert_eq!(result.unfactored.len(), 1);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Owned::Curve(..) | Owned::Pm1(..)))
+    );
+
+    // Timeout, for each call.
+    let n = rsa1024() * 7u32;
+    let mut factorizer = Factorizer::new().timeout(Duration::from_millis(200));
+    for _ in 0..2 {
+        let start = Instant::now();
+        let result = factorizer.factor_partial(&n);
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(200), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(300), "{elapsed:?}");
+        assert_eq!(result.error, Some(Error::Interrupted));
+        check_partial(&n, &result);
+        assert_eq!(result.primes, HashMap::from([(Integer::from(7), 1)]));
+    }
+    assert_eq!(factorizer.find_factor(&rsa1024()), Err(Error::Interrupted));
+
+    // Neither changes the results when it does not interrupt.
+    let n = sample();
+    let flag = Arc::new(AtomicBool::new(false));
+    assert_eq!(
+        Factorizer::new()
+            .interrupt_flag(flag)
+            .timeout(Duration::from_secs(3600))
+            .factor(&n),
+        ecm(&n)
+    );
+}
+
+#[test]
+fn interrupt_at_every_event() {
+    // Wherever the callback interrupts, the primes and the unfactored parts multiply to n, and
+    // they are the ones of the events so far.
+    let n = sample() * Integer::from(4_009_823u32).pow(3);
+    for factorizer in [Factorizer::new(), Factorizer::new().b1(2_000).curves(500)] {
+        let (_, all) = record(factorizer.clone(), &n, |_| false);
+        for stop in 1..=all.len() {
+            let mut count = 0;
+            let (result, events) = record(factorizer.clone(), &n, |_| {
+                count += 1;
+                count == stop
+            });
+            assert_eq!(events[..], all[..stop]);
+            assert_eq!(result.error, Some(Error::Interrupted));
+            check_partial(&n, &result);
+            let mut primes = HashMap::new();
+            for event in &events {
+                if let Owned::Prime(p, e) = event {
+                    *primes.entry(p.clone()).or_insert(0) += e;
+                }
+            }
+            for (p, e) in &primes {
+                assert!(result.primes[p] >= *e);
+            }
+            for (m, _) in &result.unfactored {
+                assert!(*m > 1 && !result.primes.contains_key(m));
+            }
+        }
+    }
 }

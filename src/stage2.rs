@@ -22,6 +22,7 @@ use crate::{
     cost::Costs,
     curve::{Curve, Point, Scratch, Xz},
     stage2_poly::{self, PolyPlan},
+    stop::Stop,
 };
 use rug::Integer;
 use std::{collections::HashMap, iter::Peekable};
@@ -448,22 +449,34 @@ fn best_poly_shape(
 }
 
 /// Stage 2 on the residues of `arith` with `plan`: returns `gcd(g, n)`, see
-/// [`crate::ecm::stage2`].
-pub fn stage2_with<A: PolyArith>(arith: A, q: &Point, plan: &Stage2Plan) -> Integer {
+/// [`crate::ecm::stage2`]. Stops early if `stop` is requested, with the gcd of a partial
+/// product (still a divisor of `n`).
+pub fn stage2_with<A: PolyArith>(
+    arith: A,
+    q: &Point,
+    plan: &Stage2Plan,
+    stop: Stop<'_>,
+) -> Integer {
     let curve = Curve::new(arith, &q.a24);
     let start = curve.point(&q.x, &q.z);
-    stage2_group(&curve, &start, plan)
+    stage2_group(&curve, &start, plan, stop)
 }
 
 /// Stage 2 in `group` from the element `start`: `gcd(g, n)`, where `g` is the accumulated
-/// product (or a factor found by a failed normalization, possibly `n`).
-pub(crate) fn stage2_group<G: XLine>(group: &G, start: &Xz<Elem<G>>, plan: &Stage2Plan) -> Integer
+/// product (or a factor found by a failed normalization, possibly `n`), partial if `stop` is
+/// requested.
+pub(crate) fn stage2_group<G: XLine>(
+    group: &G,
+    start: &Xz<Elem<G>>,
+    plan: &Stage2Plan,
+    stop: Stop<'_>,
+) -> Integer
 where
     G::A: PolyArith,
 {
     let product = match plan {
-        Stage2Plan::Pairs(plan) => accumulate(group, start, plan),
-        Stage2Plan::Poly(plan) => stage2_poly::accumulate(group, start, plan),
+        Stage2Plan::Pairs(plan) => accumulate(group, start, plan, stop),
+        Stage2Plan::Poly(plan) => stage2_poly::accumulate(group, start, plan, stop),
     };
     match product {
         Ok(g) => group.arith().gcd(&g),
@@ -547,7 +560,12 @@ impl<A: Arith> XLine for Curve<A> {
     }
 
     fn multiple(&self, p: &Xz<A::Elem>, k: &Integer) -> Xz<A::Elem> {
-        self.ladder(&Factor::Full(p.x.clone()), &Factor::Full(p.z.clone()), k)
+        self.ladder(
+            &Factor::Full(p.x.clone()),
+            &Factor::Full(p.z.clone()),
+            k,
+            Stop::NEVER,
+        )
     }
 
     fn normalize(
@@ -671,7 +689,7 @@ impl<E: Clone> Normalizer<E> {
 /// Baby-step giant-step stage 2 on the residues of `arith`: returns `gcd(g, n)`.
 #[cfg(test)]
 fn pairs_stage2_with<A: PolyArith>(arith: A, q: &Point, plan: &PairPlan) -> Integer {
-    stage2_with(arith, q, &Stage2Plan::Pairs(plan.clone()))
+    stage2_with(arith, q, &Stage2Plan::Pairs(plan.clone()), Stop::NEVER)
 }
 
 /// Normalized x-coordinates of the baby steps `j*Q` for `j < limit`, `j = +-1 mod 6`, with
@@ -726,14 +744,20 @@ pub(crate) fn baby_steps<G: XLine>(
     Ok(xs)
 }
 
-/// Product `g` of stage 2, or `Err(g)` with a factor found by a failed inversion.
-fn accumulate<G: XLine>(curve: &G, q: &Xz<Elem<G>>, plan: &PairPlan) -> Result<Elem<G>, Integer> {
+/// Product `g` of stage 2 (partial if `stop` is requested), or `Err(g)` with a factor found by
+/// a failed inversion.
+fn accumulate<G: XLine>(
+    curve: &G,
+    q: &Xz<Elem<G>>,
+    plan: &PairPlan,
+    stop: Stop<'_>,
+) -> Result<Elem<G>, Integer> {
     #[cfg(target_arch = "x86_64")]
     if crate::arith::has_bmi2_adx() {
         // SAFETY: the CPU has the features `accumulate_bmi2` is compiled for.
-        return unsafe { accumulate_bmi2(curve, q, plan) };
+        return unsafe { accumulate_bmi2(curve, q, plan, stop) };
     }
-    accumulate_generic(curve, q, plan)
+    accumulate_generic(curve, q, plan, stop)
 }
 
 /// [`accumulate`] compiled with BMI2 and ADX (see [`crate::arith::has_bmi2_adx`]).
@@ -743,8 +767,9 @@ fn accumulate_bmi2<G: XLine>(
     curve: &G,
     q: &Xz<Elem<G>>,
     plan: &PairPlan,
+    stop: Stop<'_>,
 ) -> Result<Elem<G>, Integer> {
-    accumulate_generic(curve, q, plan)
+    accumulate_generic(curve, q, plan, stop)
 }
 
 #[inline(always)]
@@ -752,6 +777,7 @@ fn accumulate_generic<G: XLine>(
     curve: &G,
     q: &Xz<Elem<G>>,
     plan: &PairPlan,
+    stop: Stop<'_>,
 ) -> Result<Elem<G>, Integer> {
     let a = curve.arith();
     let wheel = &plan.wheel;
@@ -791,6 +817,9 @@ fn accumulate_generic<G: XLine>(
     let mut turn = 0;
 
     for m0 in (m_lo..=m_hi).step_by(batch) {
+        if stop.requested() {
+            break;
+        }
         let len = batch.min(m_hi + 1 - m0);
 
         // Giant steps m0*D*Q, ..., (m0 + len - 1)*D*Q.
@@ -1164,7 +1193,8 @@ mod tests {
     {
         let curve = Curve::new(arith, &q.a24);
         let q = curve.point(&q.x, &q.z);
-        let (generic, dispatched) = generic_and_dispatched(|| accumulate(&curve, &q, plan));
+        let (generic, dispatched) =
+            generic_and_dispatched(|| accumulate(&curve, &q, plan, Stop::NEVER));
         assert_eq!(generic, dispatched);
     }
 
@@ -1209,8 +1239,8 @@ mod tests {
             let curve = Curve::new(Mont::<1>::new(&n), &q.a24);
             let q = curve.point(&q.x, &q.z);
             assert_eq!(
-                accumulate(&curve, &q, &plan),
-                accumulate(&curve, &q, &streamed)
+                accumulate(&curve, &q, &plan, Stop::NEVER),
+                accumulate(&curve, &q, &streamed, Stop::NEVER)
             );
         }
     }

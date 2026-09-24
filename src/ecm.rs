@@ -6,6 +6,7 @@ use crate::{
     factorizer::Factorizer,
     primes::primes,
     stage2::{MAX_POLY_MEMORY, Stage2Plan, stage2_with},
+    stop::Stop,
 };
 use rug::{
     Integer,
@@ -104,6 +105,7 @@ pub fn ecm_one_factor(
         MAX_POLY_MEMORY,
         rgen,
         &mut NoEvents,
+        Stop::NEVER,
     )
     .find_one(n, false)
 }
@@ -232,17 +234,19 @@ pub fn run_curve(
     k: &Integer,
     plan: &Stage2Plan,
 ) -> CurveOutcome {
-    run_curve_timed::<false>(n, param, sigma, k, plan).0
+    run_curve_timed::<false>(n, param, sigma, k, plan, Stop::NEVER).0
 }
 
 /// [`run_curve`], with the durations of the setup and stage 1, and of stage 2 if `TIMED` (zero
-/// otherwise).
+/// otherwise). If `stop` is requested, the curve stops early: the outcome is then
+/// [`CurveOutcome::Failed`], unless a factor was found anyway.
 pub(crate) fn run_curve_timed<const TIMED: bool>(
     n: &Integer,
     param: Param,
     sigma: &Integer,
     k: &Integer,
     plan: &Stage2Plan,
+    stop: Stop<'_>,
 ) -> (CurveOutcome, [Duration; 2]) {
     let start = TIMED.then(Instant::now);
     let since = |start: Option<Instant>| start.map_or(Duration::ZERO, |start| start.elapsed());
@@ -255,7 +259,7 @@ pub(crate) fn run_curve_timed<const TIMED: bool>(
         Err(g) if &g == n && param == Param::Batch2 && *n > 6 => {
             let sigma = sigma % Integer::from(n - 6u32) + 6u32;
             let (outcome, [_, stage2]) =
-                run_curve_timed::<TIMED>(n, Param::Suyama, &sigma, k, plan);
+                run_curve_timed::<TIMED>(n, Param::Suyama, &sigma, k, plan, stop);
             return (outcome, [since(start) - stage2, stage2]);
         }
         // If g = 1 or n, try another curve
@@ -265,7 +269,7 @@ pub(crate) fn run_curve_timed<const TIMED: bool>(
         Err(g) => return (CurveOutcome::Setup(g), [since(start), Duration::ZERO]),
     };
 
-    let q = stage1(&p, k);
+    let q = stage1_until(&p, k, stop);
     let g = q.z.clone().gcd(n);
 
     // Stage 1 factor
@@ -276,14 +280,17 @@ pub(crate) fn run_curve_timed<const TIMED: bool>(
     // Stage 1 found all the factors at once (frequent when they are small compared to `b1`):
     // look for the point where it finds only some of them.
     if &g == n {
-        let outcome =
-            stage1_backoff(n, &p, plan.b1()).map_or(CurveOutcome::Failed, CurveOutcome::Stage1);
+        let outcome = stage1_backoff(n, &p, plan.b1(), stop)
+            .map_or(CurveOutcome::Failed, CurveOutcome::Stage1);
         return (outcome, [since(start), Duration::ZERO]);
     }
 
     let stage1 = since(start);
+    if stop.requested() {
+        return (CurveOutcome::Failed, [stage1, Duration::ZERO]);
+    }
     let start = TIMED.then(Instant::now);
-    let g = stage2(&q, plan);
+    let g = stage2_until(&q, plan, stop);
     let stage2 = since(start);
 
     // Stage 2 Factor found
@@ -302,13 +309,16 @@ pub(crate) fn run_curve_timed<const TIMED: bool>(
 /// during stage 1 when asked to). Returns a proper factor, or `None` if the orders of the
 /// point modulo the factors of `n` are completed by the same prime power: this curve cannot
 /// separate them. Only runs after a failure, so its cost (about one more stage 1 and a gcd per
-/// prime of a segment) does not matter.
-fn stage1_backoff(n: &Integer, p: &Point, b1: usize) -> Option<Integer> {
+/// prime of a segment) does not matter. Gives up if `stop` is requested.
+fn stage1_backoff(n: &Integer, p: &Point, b1: usize, stop: Stop<'_>) -> Option<Integer> {
     let mut q = p.clone();
     let mut lo = 1;
     while lo < b1 {
         let hi = lo.saturating_mul(2).min(b1);
-        let next = stage1(&q, &prime_power_product(lo, hi));
+        let next = stage1_until(&q, &prime_power_product(lo, hi), stop);
+        if stop.requested() {
+            return None;
+        }
         let g = next.z.clone().gcd(n);
         if g == 1 {
             (q, lo) = (next, hi);
@@ -319,6 +329,9 @@ fn stage1_backoff(n: &Integer, p: &Point, b1: usize) -> Option<Integer> {
         }
         // The gcd goes from 1 to n in (lo, hi]: one prime power at a time.
         for prime in primes(hi) {
+            if stop.requested() {
+                return None;
+            }
             let old = if prime <= lo { lo.ilog(prime) } else { 0 };
             for _ in old..hi.ilog(prime) {
                 q = stage1(&q, &Integer::from(prime));
@@ -568,10 +581,15 @@ fn batch2_multiple<A: Arith>(a: &A, sigma: &Integer) -> (Integer, Integer, Integ
 /// Stage 1: computes `k*P`, for `k >= 1`.
 #[must_use]
 pub fn stage1(p: &Point, k: &Integer) -> Point {
-    with_arith!(&p.n, |arith| stage1_with(arith, p, k))
+    stage1_until(p, k, Stop::NEVER)
 }
 
-fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer) -> Point {
+/// [`stage1`], stopping early (with a meaningless point) if `stop` is requested.
+fn stage1_until(p: &Point, k: &Integer, stop: Stop<'_>) -> Point {
+    with_arith!(&p.n, |arith| stage1_with(arith, p, k, stop))
+}
+
+fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer, stop: Stop<'_>) -> Point {
     let n: &Integer = &p.n;
     // Normalizing P to z = 1 saves a multiplication per ladder step. If z is not invertible, P
     // is the point at infinity modulo a factor of n, and so is k*P: P has the same gcd.
@@ -581,7 +599,7 @@ fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer) -> Point {
     let x = Integer::from(&p.x * &z_inv) % n;
 
     let curve = Curve::new(arith, &p.a24);
-    let q = curve.ladder(&curve.arith.factor(&x), &Factor::One, k);
+    let q = curve.ladder(&curve.arith.factor(&x), &Factor::One, k, stop);
     Point {
         x: curve.arith.to_integer(&q.x),
         z: curve.arith.to_integer(&q.z),
@@ -596,8 +614,14 @@ fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer) -> Point {
 /// Returns `gcd(g, n)` where `g` is the accumulated product over the primes in `(b1, b2]` of
 /// `plan` (or a factor found when normalizing the points, possibly `n`), and `1` if `b2 <= b1`.
 #[must_use]
+#[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
 pub fn stage2(q: &Point, plan: &Stage2Plan) -> Integer {
-    with_arith!(&q.n, |arith| stage2_with(arith, q, plan))
+    stage2_until(q, plan, Stop::NEVER)
+}
+
+/// [`stage2`], stopping early (with the gcd of a partial product) if `stop` is requested.
+fn stage2_until(q: &Point, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
+    with_arith!(&q.n, |arith| stage2_with(arith, q, plan, stop))
 }
 
 /// Trial division removes the prime factors below this bound.
@@ -818,7 +842,7 @@ mod tests {
     /// `a*(b*P) = (a*b)*P` (`n` must be prime).
     fn check_stage1(n: &Integer, param: Param, sigma: u64) {
         let p = curve(n, param, &Integer::from(sigma)).unwrap();
-        let plain = |k: &Integer| stage1_with(crate::arith::Plain::new(n), &p, k);
+        let plain = |k: &Integer| stage1_with(crate::arith::Plain::new(n), &p, k, Stop::NEVER);
         assert!(same_point(&stage1(&p, &Integer::from(1)), &p));
         let ks = [2u32, 3, 7, 1000, 123_456_789].map(Integer::from);
         for k in ks.iter().chain(std::iter::once(&stage1_multiplier(200))) {
@@ -907,7 +931,7 @@ mod tests {
             for sigma in 2..100 {
                 let q = stage1(&square_curve(&n, &Integer::from(sigma)).unwrap(), &k);
                 let g = stage2(&q, &plan);
-                assert_eq!(g, stage2_with(Plain::new(&n), &q, &plan));
+                assert_eq!(g, stage2_with(Plain::new(&n), &q, &plan, Stop::NEVER));
             }
         }
     }
