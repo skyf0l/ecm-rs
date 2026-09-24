@@ -490,8 +490,8 @@ pub(crate) type Elem<G> = <<G as XLine>::A as Arith>::Elem;
 /// differential additions: all that stage 2 needs. Stage 2 checks the primes `l` with
 /// `x(m*D*Q) = x(j*Q)` for `l = m*D +- j`.
 ///
-/// Montgomery curves for ECM ([`Curve`]), and for P-1 the Lucas sequences
-/// `V_k = a^k + a^-k` ([`crate::pm1`]).
+/// Montgomery curves for ECM ([`Curve`]), and for P-1 and P+1 the Lucas sequences
+/// `V_k = a^k + a^-k` ([`crate::lucas`]).
 pub(crate) trait XLine {
     /// Arithmetic of the coordinates.
     type A: Arith;
