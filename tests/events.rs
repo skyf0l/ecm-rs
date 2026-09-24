@@ -504,9 +504,12 @@ fn pp1_only() {
             .any(|e| matches!(e, Owned::Curve(..) | Owned::Level(..) | Owned::Pm1(..)))
     );
     assert!(events.contains(&Owned::Factor(n.clone(), p.clone(), Method::Pp1Stage2)));
-    // The starting value of P-1 (x0 = 1 finds all the factors at once: none).
+    // The starting value of P-1 (x0 = 1 would find all the factors at once: none).
     let pm1 = |num: i32| pm1.clone().x0(num.into(), 1.into());
-    assert_eq!(pm1(1).find_factor(&n), Err(Error::ECMFailed));
+    assert!(matches!(
+        pm1(1).find_factor(&n),
+        Err(Error::InvalidOption(_))
+    ));
     assert_eq!(pm1(5).find_factor(&n), Err(Error::ECMFailed));
 }
 
@@ -557,6 +560,16 @@ fn invalid_options() {
             .algorithm(Algorithm::Pm1)
             .b1(2000)
             .x0(2.into(), 0.into()),
+        Factorizer::new()
+            .algorithm(Algorithm::Pp1)
+            .x0((-4).into(), 2.into()),
+        Factorizer::new()
+            .algorithm(Algorithm::Pp1)
+            .x0(0.into(), 5.into()),
+        Factorizer::new()
+            .algorithm(Algorithm::Pm1)
+            .b1(2000)
+            .x0(3.into(), (-3).into()),
         Factorizer::new().b1(2000).sigma(Integer::from(1)),
         Factorizer::new().b1(2000).sigma(Integer::from(1) << 64),
         Factorizer::new()
