@@ -54,7 +54,7 @@ struct Buffers {
 
 impl Workspace {
     pub fn new() -> Self {
-        Workspace {
+        Self {
             x: Vec::new(),
             y: Vec::new(),
             bufs: Buffers {
@@ -502,7 +502,7 @@ impl<E: Clone> ProductTree<E> {
             next_level(a, ws, level, &levels[level], &mut next);
             levels.push(next);
         }
-        ProductTree { levels }
+        Self { levels }
     }
 
     /// The monic polynomial at the root, `prod (X - root)`.
@@ -588,7 +588,7 @@ impl<E: Clone> Modulus<E> {
         let inv = inverse(a, ws, &reverse_monic(a, f, d), d);
         let mut full = f.to_vec();
         full.push(a.poly_from(&Integer::from(1)));
-        Modulus {
+        Self {
             f: full,
             inv,
             packed_f: Packed::default(),
@@ -938,7 +938,7 @@ mod tests {
                 p[..len]
                     .iter()
                     .enumerate()
-                    .all(|(k, p)| *p == (k == 0) as u32),
+                    .all(|(k, p)| *p == u32::from(k == 0)),
                 "{lx} {len}"
             );
         }
@@ -1177,7 +1177,7 @@ mod tests {
                     let smin = slot_width(bits, min);
                     // A coefficient is a sum of at most min products of values < 2^bits.
                     let max = (Integer::from(1) << bits as u32) - 1u32;
-                    assert!((max.square() * min) >> smin as u32 == 0);
+                    assert_eq!((max.square() * min) >> smin as u32, 0);
                     for from in [1, min - 1, len / 3, len - min, len - 1] {
                         for to in [from + 1, len.min(from + lx), len] {
                             if let Some((s, rn)) = middle_size(bits, lx, ly, from, to) {

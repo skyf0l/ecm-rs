@@ -77,7 +77,7 @@ impl Wheel {
                 }
             })
             .collect();
-        Wheel {
+        Self {
             d,
             index,
             len,
@@ -172,7 +172,7 @@ impl Pairing {
         // The primes l < D are baby steps.
         let lo = b1.max(d - 1);
         while primes.next_if(|&l| l <= lo).is_some() {}
-        Pairing {
+        Self {
             d,
             b2,
             primes,
@@ -252,7 +252,12 @@ pub enum Stage2Plan {
 
 impl Stage2Plan {
     /// Cheapest plan (according to the cost model) for the primes in `(b1, b2]`, modulo numbers
-    /// of the size of `n`. Requires `b1 >= 3`.
+    /// of the size of `n`.
+    ///
+    /// # Panics
+    ///
+    /// If `b1 < 3`.
+    #[must_use]
     pub fn new(n: &Integer, b1: usize, b2: usize) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
         let costs = Costs::new(n.significant_bits() as usize);
@@ -260,9 +265,9 @@ impl Stage2Plan {
         let pairs = costs.pairs_stage2(b1, b2, d, phi(d));
         let (poly, poly_cost) = best_poly_plan(&costs, b1, b2);
         if poly_cost < pairs {
-            Stage2Plan::Poly(poly)
+            Self::Poly(poly)
         } else {
-            Stage2Plan::pairs(b1, b2)
+            Self::pairs(b1, b2)
         }
     }
 
@@ -277,32 +282,44 @@ impl Stage2Plan {
             || best_poly_shape(&costs, b1, b2).1 <= budget
     }
 
-    /// Plan of the baby-step giant-step continuation. Requires `b1 >= 3`.
+    /// Plan of the baby-step giant-step continuation.
+    ///
+    /// # Panics
+    ///
+    /// If `b1 < 3`.
+    #[must_use]
     pub fn pairs(b1: usize, b2: usize) -> Self {
-        Stage2Plan::Pairs(PairPlan::new(b1, b2))
+        Self::Pairs(PairPlan::new(b1, b2))
     }
 
-    /// Plan of the polynomial continuation, for numbers of the size of `n`. Requires `b1 >= 3`.
+    /// Plan of the polynomial continuation, for numbers of the size of `n`.
+    ///
+    /// # Panics
+    ///
+    /// If `b1 < 3`.
+    #[must_use]
     #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn poly(n: &Integer, b1: usize, b2: usize) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
         let costs = Costs::new(n.significant_bits() as usize);
-        Stage2Plan::Poly(best_poly_plan(&costs, b1, b2).0)
+        Self::Poly(best_poly_plan(&costs, b1, b2).0)
     }
 
     /// Stage 1 bound: stage 2 checks the primes above it.
+    #[must_use]
     pub fn b1(&self) -> usize {
         match self {
-            Stage2Plan::Pairs(plan) => plan.b1,
-            Stage2Plan::Poly(plan) => plan.b1(),
+            Self::Pairs(plan) => plan.b1,
+            Self::Poly(plan) => plan.b1(),
         }
     }
 
     /// Largest `b2' >= b2` such that stage 2 checks every prime in `(b1, b2']`.
+    #[must_use]
     pub fn b2(&self) -> usize {
         match self {
-            Stage2Plan::Pairs(plan) => plan.b2,
-            Stage2Plan::Poly(plan) => plan.b2_covered(),
+            Self::Pairs(plan) => plan.b2,
+            Self::Poly(plan) => plan.b2_covered(),
         }
     }
 }
@@ -340,10 +357,10 @@ fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> ((usize, usize, usize
         // The product tree of F (a coefficient per leaf and level), and at the peak (measured)
         // about 52 more coefficients per leaf: the other polynomials, F and its inverse packed
         // for the products, the Kronecker products and GMP's scratch space.
-        let coeffs = (usize::BITS - df.leading_zeros()) as f64 + 52.0;
+        let coeffs = f64::from(usize::BITS - df.leading_zeros()) + 52.0;
         coeffs * df as f64 * costs.elem_bytes() <= MAX_POLY_MEMORY
     };
-    for d1 in [6].into_iter().chain(POLY_GIANT_STEPS) {
+    for d1 in std::iter::once(6).chain(POLY_GIANT_STEPS) {
         if prime_factors(d1).iter().any(|&p| p > b1) {
             continue;
         }
@@ -458,6 +475,8 @@ pub(crate) trait XLine {
     ) -> Result<(), Integer>;
 }
 
+// The methods call the inherent ones of `Curve`, named explicitly (not `Self::`) to make clear
+// that they do not recurse.
 impl<A: Arith> XLine for Curve<A> {
     type A = A;
 
@@ -474,7 +493,7 @@ impl<A: Arith> XLine for Curve<A> {
     }
 
     fn double(&self, r: &mut Xz<A::Elem>, p: &Xz<A::Elem>, scratch: &mut Scratch<A::Elem>) {
-        Curve::double(self, r, p, scratch)
+        Curve::double(self, r, p, scratch);
     }
 
     fn add(
@@ -485,7 +504,7 @@ impl<A: Arith> XLine for Curve<A> {
         diff: &Xz<A::Elem>,
         scratch: &mut Scratch<A::Elem>,
     ) {
-        Curve::add(self, r, p, q, diff, scratch)
+        Curve::add(self, r, p, q, diff, scratch);
     }
 
     fn multiple(&self, p: &Xz<A::Elem>, k: &Integer) -> Xz<A::Elem> {
@@ -535,7 +554,7 @@ impl PairPlan {
             }
             table
         });
-        PairPlan {
+        Self {
             b1,
             b2,
             wheel,
@@ -557,7 +576,7 @@ pub(crate) struct Normalizer<E> {
 
 impl<E: Clone> Normalizer<E> {
     pub(crate) fn new<A: Arith<Elem = E>>(a: &A, len: usize) -> Self {
-        Normalizer {
+        Self {
             prefix: vec![a.zero(); len],
             inv: a.zero(),
             next: a.zero(),

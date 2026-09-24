@@ -33,8 +33,9 @@ pub enum Error {
 /// Number of rounds of the probabilistic primality test.
 const PRIMALITY_REPS: u32 = 25;
 
-/// Returns one factor of n using Lenstra's 2 Stage Elliptic curve Factorization,
-/// with the curves of GMP-ECM's parametrization 2 (`-param 2`). Here Montgomery
+/// Returns one factor of n using Lenstra's 2 Stage Elliptic curve Factorization.
+///
+/// The curves are those of GMP-ECM's parametrization 2 (`-param 2`). Here Montgomery
 /// curves and Montgomery modular arithmetic are used for fast computation of addition and
 /// doubling of points.
 ///
@@ -140,7 +141,7 @@ pub(crate) fn rand_state(seed: usize) -> RandState<'static> {
     RandState::new_custom_boxed(Box::new(SplitMix64(seed as u64)))
 }
 
-/// Steele, Lea and Flood's SplitMix64 generator: fast, and good enough to draw curves.
+/// Steele, Lea and Flood's `SplitMix64` generator: fast, and good enough to draw curves.
 struct SplitMix64(u64);
 
 impl RandGen for SplitMix64 {
@@ -182,8 +183,10 @@ pub fn random_sigma(n: &Integer, param: Param, rgen: &mut RandState<'_>) -> Inte
 
 /// Starting point of the curve of `param` given by `sigma`.
 ///
-/// Returns `Err(g)` when the curve cannot be built, where `g` is a factor of `n` found while
-/// building it (`g` may be `1` or `n`: then the curve is just unusable).
+/// # Errors
+///
+/// `Err(g)` when the curve cannot be built, where `g` is a factor of `n` found while building
+/// it (`g` may be `1` or `n`: then the curve is just unusable).
 pub fn curve(n: &Integer, param: Param, sigma: &Integer) -> Result<Point, Integer> {
     // Montgomery arithmetic needs an odd modulus.
     if n.is_even() {
@@ -298,6 +301,7 @@ fn stage1_backoff(n: &Integer, p: &Point, b1: usize) -> Option<Integer> {
 }
 
 /// Stage 1 multiplier: product of the largest powers of all primes `p <= b1` that are `<= b1`.
+#[must_use]
 pub fn stage1_multiplier(b1: usize) -> Integer {
     prime_power_product(1, b1)
 }
@@ -356,7 +360,9 @@ pub(crate) fn product(mut values: Vec<Integer>) -> Integer {
 
 /// Builds the starting point of a curve using Suyama's parametrization.
 ///
-/// Returns `Err(g)` with `g = gcd(2*u^3*v, n)` when the curve cannot be built (`g` may be `n`).
+/// # Errors
+///
+/// `Err(g)` with `g = gcd(2*u^3*v, n)` when the curve cannot be built (`g` may be `n`).
 pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     let three = Integer::from(3);
     let u = (Integer::from(sigma * sigma) - 5u32) % n;
@@ -383,14 +389,21 @@ pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     })
 }
 
-/// Builds the starting point of a curve using GMP-ECM's parametrization 1
-/// (`ECM_PARAM_BATCH_SQUARE`): the curve `b*y^2 = x^3 + a*x^2 + x` with `a = 4*d - 2`,
+/// Builds the starting point of a curve using GMP-ECM's parametrization 1.
+///
+/// This is `ECM_PARAM_BATCH_SQUARE`: the curve `b*y^2 = x^3 + a*x^2 + x` with `a = 4*d - 2`,
 /// `b = 16*d + 2` and `d = sigma^2/2^64 mod n`, and the point `(2 : 1)`.
 ///
 /// Its stage 1 is cheaper than with other curves: `(a + 2)/4 = d` has the one-limb Montgomery
 /// form `sigma^2` for `sigma < 2^32`, and the coordinates of the starting point are small.
 ///
-/// `n` must be odd. Returns `Err(n)` when the curve is singular (`d = 0` or `d = 1`).
+/// # Errors
+///
+/// `Err(n)` when the curve is singular (`d = 0` or `d = 1`).
+///
+/// # Panics
+///
+/// If `n` is even.
 pub fn square_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     let inv = Integer::from(Integer::u_pow_u(2, 64))
         .invert(n)
@@ -402,8 +415,9 @@ pub fn square_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     Ok(Point::start(d, n))
 }
 
-/// Builds the starting point of a curve using GMP-ECM's parametrization 2
-/// (`ECM_PARAM_BATCH_2`): the point `(2 : 1)` on the curve `b*y^2 = x^3 + a*x^2 + x` with
+/// Builds the starting point of a curve using GMP-ECM's parametrization 2.
+///
+/// This is `ECM_PARAM_BATCH_2`: the point `(2 : 1)` on the curve `b*y^2 = x^3 + a*x^2 + x` with
 /// `a = -(3*x3^4 + 6*x3^2 - 1)/(4*x3^3)` and `x3 = (3*x + y + 6)/(2*(y - 3))`, where
 /// `(x, y) = sigma*(-3, 3)` on `y^2 = x^3 + 36`.
 ///
@@ -411,8 +425,10 @@ pub fn square_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
 /// Suyama's, and a starting point with small coordinates: their stage 1 costs one full
 /// multiplication per ladder step less than with Suyama's parametrization.
 ///
-/// Requires `sigma >= 2`. Returns `Err(g)` with a factor `g` of `n` found by a failed
-/// inversion (`g` may be `n`).
+/// # Errors
+///
+/// `Err(g)` with a factor `g` of `n` found by a failed inversion (`g` may be `n`), and
+/// `Err(n)` if `sigma < 2`.
 pub fn batch2_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     if *sigma < 2 {
         return Err(n.clone());
@@ -427,7 +443,7 @@ pub fn batch2_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     let inv =
         |x: &Integer| -> Result<Integer, Integer> { x.clone().invert(n).map_err(|x| x.gcd(n)) };
 
-    let (x, y, z) = with_arith!(n, |arith| batch2_multiple(arith, sigma));
+    let (x, y, z) = with_arith!(n, |arith| batch2_multiple(&arith, sigma));
 
     // Affine coordinates.
     let z_inv = inv(&z)?;
@@ -446,7 +462,7 @@ pub fn batch2_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
 }
 
 /// `sigma*(-3 : 3 : 1)` in Jacobian coordinates, on the curve `y^2 = x^3 + 36`.
-fn batch2_multiple<A: Arith>(a: A, sigma: &Integer) -> (Integer, Integer, Integer) {
+fn batch2_multiple<A: Arith>(a: &A, sigma: &Integer) -> (Integer, Integer, Integer) {
     let (px, py) = (a.residue(&Integer::from(-3)), a.residue(&Integer::from(3)));
     let (mut x, mut y, mut z) = (px.clone(), py.clone(), a.residue(&Integer::from(1)));
     let [
@@ -517,6 +533,7 @@ fn batch2_multiple<A: Arith>(a: A, sigma: &Integer) -> (Integer, Integer, Intege
 }
 
 /// Stage 1: computes `k*P`, for `k >= 1`.
+#[must_use]
 pub fn stage1(p: &Point, k: &Integer) -> Point {
     with_arith!(&p.n, |arith| stage1_with(arith, p, k))
 }
@@ -545,6 +562,7 @@ fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer) -> Point {
 ///
 /// Returns `gcd(g, n)` where `g` is the accumulated product over the primes in `(b1, b2]` of
 /// `plan` (or a factor found when normalizing the points, possibly `n`), and `1` if `b2 <= b1`.
+#[must_use]
 pub fn stage2(q: &Point, plan: &Stage2Plan) -> Integer {
     with_arith!(&q.n, |arith| stage2_with(arith, q, plan))
 }
@@ -555,6 +573,7 @@ const TRIAL_DIVISION_BOUND: usize = 1 << 16;
 /// Removes the prime factors of `n` below 2^16.
 ///
 /// Returns the found factors with their multiplicity, and the remaining cofactor.
+#[must_use]
 pub fn trial_division(n: &Integer) -> (HashMap<Integer, usize>, Integer) {
     let mut factors = HashMap::new();
     let mut n: Integer = n.clone();
@@ -589,6 +608,12 @@ pub fn trial_division(n: &Integer) -> (HashMap<Integer, usize>, Integer) {
 ///
 /// - `n`: Number to be factored.
 ///
+/// # Errors
+///
+/// [`Error::ECMFailed`] if a composite part of `n` is still not split after 10 times the
+/// expected number of curves to find a factor of half its digits (65 digits at most): only
+/// when its smallest factor is far too large for ECM.
+///
 /// # Panics
 ///
 /// If `n` is not positive.
@@ -617,6 +642,12 @@ pub fn ecm(
 /// - `B2`: Stage 2 Bound.
 /// - `max_curve`: Maximum number of curves generated.
 /// - `seed`: Initialize pseudorandom generator.
+///
+/// # Errors
+///
+/// [`Error::BoundsNotEven`] if `b1` or `b2` is odd, [`Error::BoundsTooSmall`] if `b1 < 6` or
+/// `b2 < 4`, and [`Error::ECMFailed`] if `max_curve` curves do not find a factor of a
+/// composite part of `n`.
 ///
 /// # Panics
 ///
@@ -825,7 +856,7 @@ mod tests {
         let plain = |k: &Integer| stage1_with(crate::arith::Plain::new(n), &p, k);
         assert!(same_point(&stage1(&p, &Integer::from(1)), &p));
         let ks = [2u32, 3, 7, 1000, 123_456_789].map(Integer::from);
-        for k in ks.iter().chain([stage1_multiplier(200)].iter()) {
+        for k in ks.iter().chain(std::iter::once(&stage1_multiplier(200))) {
             assert!(same_point(&stage1(&p, k), &plain(k)), "{n} {param:?} {k}");
         }
         for a in &ks {
@@ -955,7 +986,7 @@ mod tests {
         let other = [29, 23, 19, 17, 13, 11, 7, 5]
             .into_iter()
             .find(|&p| p <= b1 && !d1.is_multiple_of(p));
-        for (d2, blocks) in [(d2, 2)].into_iter().chain(other.map(|p| (p, 0))) {
+        for (d2, blocks) in std::iter::once((d2, 2)).chain(other.map(|p| (p, 0))) {
             let plan = crate::stage2_poly::PolyPlan::new(b1, b2, d1, d2, blocks);
             assert!(plan.b2_covered() >= b2);
             plans.push(Stage2Plan::Poly(plan));
@@ -988,7 +1019,7 @@ mod tests {
                     );
                 }
             }
-            checked += expected as usize;
+            checked += usize::from(expected);
         }
         checked
     }
@@ -1063,7 +1094,7 @@ mod tests {
                         CurveOutcome::Setup(g)
                         | CurveOutcome::Stage1(g)
                         | CurveOutcome::Stage2(g) => {
-                            assert!(g != 1 && g != n && n.is_divisible(&g), "{n} {param:?}")
+                            assert!(g != 1 && g != n && n.is_divisible(&g), "{n} {param:?}");
                         }
                         CurveOutcome::Failed => {}
                     }

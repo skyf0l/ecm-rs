@@ -4,8 +4,8 @@
 //! A curve finds a prime `p` when its group order is `b1`-smooth but for at most one prime
 //! factor in `(b1, b2]`. Group orders behave like random numbers around `p/e^delta` (they are
 //! more often smooth, thanks to their known torsion), whose smoothness is given by Dickman's
-//! rho function (in its "local" form, for numbers near `x`, from Alexander Kruppa's PhD thesis,
-//! equations (5.6) and (5.10)).
+//! rho function (in its "local" form, for numbers near `x`, from Alexander Kruppa's doctoral
+//! thesis, equations (5.6) and (5.10)).
 
 use crate::primes::primes;
 use std::sync::OnceLock;
@@ -32,6 +32,7 @@ const SUM_THRESHOLD: usize = 20_000;
 
 /// Probability that a curve with bounds `b1` and `b2` finds a given prime factor of `digits`
 /// decimal digits (taken as `10^(digits - 1/2)`).
+#[must_use]
 pub fn ecm_prob(b1: f64, b2: f64, digits: f64) -> f64 {
     prob(b1, b2, 10f64.powf(digits - 0.5), ECM_EXTRA_SMOOTHNESS)
 }
@@ -39,6 +40,7 @@ pub fn ecm_prob(b1: f64, b2: f64, digits: f64) -> f64 {
 /// Probability that P-1 with bounds `b1` and `b2` finds a given prime factor of `digits`
 /// decimal digits.
 #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
+#[must_use]
 pub fn pm1_prob(b1: f64, b2: f64, digits: f64) -> f64 {
     prob(b1, b2, 10f64.powf(digits - 0.5), PM1_EXTRA_SMOOTHNESS)
 }
@@ -95,7 +97,7 @@ fn table() -> &'static [f64] {
 fn dilog_series(z: f64) -> f64 {
     let (mut r, mut zk) = (0.0, z);
     for k in 1..=44 {
-        r += zk / (k * k) as f64;
+        r += zk / f64::from(k * k);
         zk *= z;
     }
     r

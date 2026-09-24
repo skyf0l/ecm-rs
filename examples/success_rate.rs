@@ -139,7 +139,7 @@ fn measure(digits: u32, b1: usize, b2: usize, numbers: u64, curves: u64, param: 
     // All the numbers have about the same size.
     let plan = Stage2Plan::new(&tasks[0].0, b1, b2);
     let next = AtomicUsize::new(0);
-    let threads = thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = thread::available_parallelism().map_or(1, std::num::NonZero::get);
     let results: Vec<Counts> = thread::scope(|s| {
         let workers: Vec<_> = (0..threads)
             .map(|_| {

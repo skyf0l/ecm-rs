@@ -127,7 +127,7 @@ struct Progress {
 
 impl Progress {
     fn new(pm1: Option<Pm1>) -> Self {
-        Progress {
+        Self {
             level: 0,
             curves: 0,
             rounds: 0,
@@ -164,6 +164,10 @@ impl Context<'_> {
 }
 
 /// Factors `n` (see [`crate::ecm()`]), with the random state seeded by `seed`.
+///
+/// # Errors
+///
+/// As [`crate::ecm()`].
 ///
 /// # Panics
 ///
@@ -215,7 +219,7 @@ pub fn factor(
 
 /// Index of the last level for `n`: its smallest factor has at most half its digits.
 fn top_level(n: &Integer) -> usize {
-    let digits = (n.significant_bits() as f64 * std::f64::consts::LOG10_2).ceil() as u32;
+    let digits = (f64::from(n.significant_bits()) * std::f64::consts::LOG10_2).ceil() as u32;
     let half = digits.div_ceil(2);
     LEVELS
         .iter()
@@ -240,7 +244,7 @@ fn find_factor(
 
         let k = ctx.multiplier(level.b1);
         let plan = ctx.plan(n, level.b1, level.b2);
-        let prob = ecm_prob(level.b1 as f64, plan.b2() as f64, level.digits as f64);
+        let prob = ecm_prob(level.b1 as f64, plan.b2() as f64, f64::from(level.digits));
         let curves = (1.0 / prob).ceil().max(1.0) as usize;
 
         #[cfg(feature = "progress-bar")]
@@ -350,7 +354,8 @@ mod tests {
         // The expected curves of GMP-ECM's table 1 (with a stage 2 without Brent-Suyama's
         // extension): the bounds are the right ones for each size.
         for (level, curves) in LEVELS[2..6].iter().zip([86.0, 221.0, 454.0, 986.0]) {
-            let expected = 1.0 / ecm_prob(level.b1 as f64, level.b2 as f64, level.digits as f64);
+            let expected =
+                1.0 / ecm_prob(level.b1 as f64, level.b2 as f64, f64::from(level.digits));
             assert!((expected / curves - 1.0).abs() < 0.01, "{}", level.b1);
         }
     }

@@ -37,7 +37,7 @@ pub struct Pm1 {
 
 impl Default for Pm1 {
     fn default() -> Self {
-        Pm1 {
+        Self {
             x: Integer::from(X0),
             b1: 1,
         }
@@ -46,11 +46,13 @@ impl Default for Pm1 {
 
 impl Pm1 {
     /// Nothing done yet.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Stage 1 bound reached so far.
+    #[must_use]
     pub fn b1(&self) -> usize {
         self.b1
     }
@@ -79,6 +81,7 @@ impl Pm1 {
 
     /// Stage 2 modulo `n` with `plan`, whose `b1` must be at most the stage 1 bound: returns
     /// `gcd(g, n)` (see [`crate::ecm::stage2`]).
+    #[must_use]
     pub fn stage2(&self, n: &Integer, plan: &Stage2Plan) -> Integer {
         let x = Integer::from(&self.x % n);
         with_arith!(n, |arith| stage2_with(arith, &x, plan))
@@ -106,7 +109,7 @@ struct Lucas<A: Arith> {
 impl<A: Arith> Lucas<A> {
     fn new(arith: A) -> Self {
         let two = arith.residue(&Integer::from(2));
-        Lucas { arith, two }
+        Self { arith, two }
     }
 
     /// The element `V`.
@@ -223,13 +226,7 @@ mod tests {
 
     #[test]
     fn lucas_multiples() {
-        let n = Integer::from(1_000_000_007u64) * Integer::from(998_244_353u64);
-        let x = Integer::from(123_456_789);
-        let v = |k: u32| {
-            let a = x.clone().pow_mod(&Integer::from(k), &n).unwrap();
-            (Integer::from(a.invert_ref(&n).unwrap()) + a) % &n
-        };
-        fn check<A: Arith>(lucas: Lucas<A>, n: &Integer, v: &dyn Fn(u32) -> Integer) {
+        fn check<A: Arith>(lucas: &Lucas<A>, n: &Integer, v: &dyn Fn(u32) -> Integer) {
             let a = &lucas.arith;
             let p = lucas.element(&v(1));
             let mut scratch = lucas.scratch();
@@ -244,8 +241,14 @@ mod tests {
                 assert_eq!(a.to_integer(&m.x), v(k), "{k}");
             }
         }
-        check(Lucas::new(Mont::<2>::new(&n)), &n, &v);
-        check(Lucas::new(Plain::new(&n)), &n, &v);
+        let n = Integer::from(1_000_000_007u64) * Integer::from(998_244_353u64);
+        let x = Integer::from(123_456_789);
+        let v = |k: u32| {
+            let a = x.clone().pow_mod(&Integer::from(k), &n).unwrap();
+            (Integer::from(a.invert_ref(&n).unwrap()) + a) % &n
+        };
+        check(&Lucas::new(Mont::<2>::new(&n)), &n, &v);
+        check(&Lucas::new(Plain::new(&n)), &n, &v);
     }
 
     #[test]
@@ -307,7 +310,7 @@ mod tests {
                     assert_eq!(g, p, "stage 2 missed p = {p}: {plan:?} {b1} {b2}");
                 }
             }
-            checked += expected as usize;
+            checked += usize::from(expected);
         }
         checked
     }

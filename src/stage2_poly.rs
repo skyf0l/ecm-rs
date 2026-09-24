@@ -135,7 +135,7 @@ impl PolyPlan {
                 m_hi = nth_coprime(m_lo, giants, d2);
             }
         }
-        PolyPlan {
+        Self {
             b1,
             b2,
             d1,
@@ -385,7 +385,7 @@ mod tests {
                 .unwrap()
         };
         let sieve = primal::Sieve::new(4_000_000);
-        for d1 in [6].into_iter().chain(POLY_GIANT_STEPS.into_iter().take(40)) {
+        for d1 in std::iter::once(6).chain(POLY_GIANT_STEPS.into_iter().take(40)) {
             let b1_min = *prime_factors(d1).last().unwrap();
             let mut bounds = vec![(b1_min, 4), (b1_min, b1_min), (b1_min, b1_min + 1)];
             for b1 in [
@@ -464,7 +464,7 @@ mod tests {
         // in (b1, b2], whether l < d1/2 (baby step) or not.
         let n = Integer::from(4_009_823u64) * Integer::from(99_476_569u64);
         let mut found = 0;
-        for d1 in [6].into_iter().chain(POLY_GIANT_STEPS.into_iter().take(12)) {
+        for d1 in std::iter::once(6).chain(POLY_GIANT_STEPS.into_iter().take(12)) {
             let b1 = (*prime_factors(d1).last().unwrap()).max(30);
             let shapes = [
                 (1, 0),

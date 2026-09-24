@@ -86,7 +86,7 @@ impl Costs {
             // Plain arithmetic: roughly quadratic, and slower than Montgomery's.
             2.0 * MUL_NS[16] * (limbs as f64 / 16.0).powf(1.8)
         };
-        Costs {
+        Self {
             bits,
             mul,
             macc: 0.6 * mul,
@@ -188,7 +188,7 @@ impl Costs {
         while size < d {
             // Nodes of `size` leaves, and maybe a last shorter one.
             let (full, rest) = (d / size, d % size);
-            let nodes = full + (rest > 0) as usize;
+            let nodes = full + usize::from(rest > 0);
             if rest > 0 && nodes.is_multiple_of(2) {
                 total += (nodes / 2 - 1) as f64 * cost(size, size) + cost(size, rest);
             } else {
@@ -340,11 +340,11 @@ mod measure {
             std::mem::swap(&mut t, &mut r);
         }
         std::hint::black_box(r);
-        start.elapsed().as_nanos() as f64 / reps as f64
+        start.elapsed().as_nanos() as f64 / f64::from(reps)
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "measurement (minutes), prints the constants of this module"]
     fn primitive_costs() {
         let mut rand = RandState::new();
         let mut muls = Vec::new();
@@ -367,7 +367,7 @@ mod measure {
             }
             products.push(format!(
                 "{:.0}",
-                start.elapsed().as_nanos() as f64 / reps as f64
+                start.elapsed().as_nanos() as f64 / f64::from(reps)
             ));
         }
         eprintln!("GMP_MUL_NS: {}", products.join(", "));
@@ -387,9 +387,9 @@ mod measure {
             for _ in 0..reps {
                 mpn::mulmod_bnm1(&mut r, &x, &y, &mut scratch);
             }
-            let ns = start.elapsed().as_nanos() as f64 / reps as f64;
+            let ns = start.elapsed().as_nanos() as f64 / f64::from(reps);
             // Per 2^k bits.
-            wraps.push(format!("{:.0}", ns * (1 << (k - 6)) as f64 / rn as f64));
+            wraps.push(format!("{:.0}", ns * f64::from(1 << (k - 6)) / rn as f64));
         }
         eprintln!("WRAP_NS: {}", wraps.join(", "));
     }
