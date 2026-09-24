@@ -371,8 +371,7 @@ pub(crate) const POLY_GIANT_STEPS: [usize; 96] = [
     8978970, 10210200, 11741730, 13123110, 14804790,
 ];
 
-/// Largest memory (in bytes) used by the polynomial continuation, by default.
-pub(crate) const MAX_POLY_MEMORY: usize = 256 * 1024 * 1024;
+pub(crate) use crate::config::MAX_POLY_MEMORY;
 
 /// Cheapest polynomial continuation using at most `max_memory` bytes, and its cost (infinite
 /// if none fits).

@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 mod arith;
+mod config;
 mod cost;
 mod curve;
 mod driver;
