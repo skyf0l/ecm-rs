@@ -86,6 +86,12 @@ pub fn ecm_one_factor(
         return Err(Error::NumberIsPrime);
     }
 
+    // A perfect power is split by its root at once (modulo a power of a small prime, the curves
+    // may all find its whole power).
+    if let Some((root, _)) = perfect_power(n) {
+        return Ok(root);
+    }
+
     #[cfg(feature = "progress-bar")]
     if let Some(pb) = pb {
         pb.set_length(max_curve as u64);
@@ -204,6 +210,14 @@ pub fn run_curve(
 ) -> CurveOutcome {
     let p = match curve(n, param, sigma) {
         Ok(p) => p,
+        // The point sigma*(-3, 3) of parametrization 2 has a small order modulo some primes
+        // (5, 7, 13, 19, 37, ...): computing it hits the point at infinity modulo them for
+        // almost every sigma. When all the factors of n are such primes, the setup finds them
+        // all at once whatever sigma: Suyama's curves do not have this problem.
+        Err(g) if &g == n && param == Param::Batch2 && *n > 6 => {
+            let sigma = sigma % Integer::from(n - 6u32) + 6u32;
+            return run_curve(n, Param::Suyama, &sigma, k, plan);
+        }
         // If g = 1 or n, try another curve
         Err(g) if g == 1 || &g == n => return CurveOutcome::Failed,
         Err(g) => return CurveOutcome::Setup(g),
@@ -1173,6 +1187,28 @@ mod tests {
             }
         }
         assert!(split > 20, "{split}");
+    }
+
+    #[test]
+    fn one_factor_of_small_numbers() {
+        // Including the products of primes modulo which the point of parametrization 2 has a
+        // small order (5, 7, 13, 19, 37, ...), and powers of primes.
+        for n in 4u32..3000 {
+            let n = Integer::from(n);
+            if n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No {
+                continue;
+            }
+            for b1 in [6, 2000] {
+                let g = ecm_one_factor(&n, b1, 100 * b1, 20).unwrap();
+                assert!(g != 1 && g != n && n.is_divisible(&g), "{n} {b1}: {g}");
+            }
+        }
+        for (n, p) in [(9, 3), (25, 5), (49, 7), (5 * 5 * 5, 5)] {
+            assert_eq!(
+                ecm_one_factor(&Integer::from(n), 2000, 147_396, 1).unwrap(),
+                p
+            );
+        }
     }
 
     #[test]
