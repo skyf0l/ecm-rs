@@ -41,6 +41,11 @@ smallest to the largest, and a builder with progress events and cancellation.
 - Williams' P+1 method (`Algorithm::Pp1`, GMP-ECM's `-pp1`): stage 1 with PRAC Lucas chains
   on the Montgomery arithmetic, stage 2 with the continuations of the curves, seed `2/7` by
   default. It only runs when asked: after P-1, it does not make the default search faster.
+- GMP-ECM's special division (`-base2`): the numbers dividing `2^k +- 1` with `k` at most 1.4
+  times their size compute modulo `2^k +- 1` (reduction by a shift and an addition) in the
+  curves, P-1 and P+1, when it is faster than the Montgomery arithmetic (by measured costs).
+  `Factorizer::base2` with `Base2Mode::{Auto, Off, Force(k)}`, `Event::Base2`, and in `ecm-rs`
+  `--base2 K`, `--nobase2` and `-v`'s "Using special division for factor of 2^k+1".
 - `Event` (trial division, P-1 and P+1 runs, levels with their expected number of curves,
   curves with their `sigma` and stage durations, factors with their `Method`, primes), reported
   to the `Factorizer::on_event` callback, whose `ControlFlow::Break` interrupts the factorization
@@ -50,7 +55,7 @@ smallest to the largest, and a builder with progress events and cancellation.
   within a few milliseconds.
 - The `ecm-rs` command line tool (`cargo install ecm --features cli`): complete factorization
   by default, GMP-ECM-like options (`--b1`, `--b2`, `-c`, `--sigma`, `--param`, `--one`,
-  `--pm1`, `--pp1`, `--x0`, `--maxmem`, `--primetest`, `--printconfig`, `-q`, `-v`), GMP-ECM's input
+  `--pm1`, `--pp1`, `--x0`, `--maxmem`, `--base2`, `--nobase2`, `--primetest`, `--printconfig`, `-q`, `-v`), GMP-ECM's input
   expressions, `--json`, `--seed`, `--timeout` (for each number) and `--total-timeout`, a
   progress bar, partial results on Ctrl-C, and GMP-ECM's exit status bits. The `cli` feature
   only adds its dependencies (`clap`, `ctrlc`, `indicatif`, `serde_json`): the library compiles
@@ -60,6 +65,8 @@ smallest to the largest, and a builder with progress events and cancellation.
 
 - Montgomery arithmetic on fixed-size limb arrays (up to 1024 bits; GMP's low-level functions
   from 641 bits), with BMI2/ADX copies of the hot loops chosen at run time.
+- Special division for the divisors of `2^k +- 1`: stage 1 of the curves and of P-1 2.4 to 2.8
+  times faster from 1024 bits (as fast as GMP-ECM's), stage 2 up to 1.5 times.
 - Stage 1: GMP-ECM's parametrization 2 curves (small starting point), a product-tree
   multiplier.
 - Stage 2: baby-step giant-step continuation with prime pairing for small `B2`, and GMP-ECM's
