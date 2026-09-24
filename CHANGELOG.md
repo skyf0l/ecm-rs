@@ -41,9 +41,9 @@ smallest to the largest, and a builder with progress events and cancellation.
 - Williams' P+1 method (`Algorithm::Pp1`, GMP-ECM's `-pp1`): stage 1 with PRAC Lucas chains
   on the Montgomery arithmetic, stage 2 with the continuations of the curves, seed `2/7` by
   default. It only runs when asked: after P-1, it does not make the default search faster.
-- `Event` (trial division, P-1 and P+1 runs, levels with their expected number of curves, curves with
-  their `sigma` and stage durations, factors with their `Method`, primes), reported to the
-  `Factorizer::on_event` callback, whose `ControlFlow::Break` interrupts the factorization
+- `Event` (trial division, P-1 and P+1 runs, levels with their expected number of curves,
+  curves with their `sigma` and stage durations, factors with their `Method`, primes), reported
+  to the `Factorizer::on_event` callback, whose `ControlFlow::Break` interrupts the factorization
   between two curves. Without a callback, the events cost nothing.
 - `Factorizer::interrupt_flag` (an `Arc<AtomicBool>`, for a Ctrl-C handler or another thread)
   and `Factorizer::timeout` interrupt the factorization even during a curve or P-1: usually

@@ -68,8 +68,9 @@ cargo install ecm --features cli
 
 Each number (an argument, or a line of the standard input) is factored completely, and printed
 with its prime factors in increasing order (parts marked `(composite)` when the factorization is
-incomplete: `--one`, `--timeout`, Ctrl-C, `--curves`, `--pm1` or `--pp1` exhausted). The numbers can be
-expressions: `+ - * /`, `^`, parentheses, `n!` (factorial), `n#` (primorial), as GMP-ECM's.
+incomplete: `--one`, `--timeout`, Ctrl-C, `--curves`, `--pm1` or `--pp1` exhausted). The numbers
+can be expressions: `+ - * /`, `^`, parentheses, `n!` (factorial), `n#` (primorial), as
+GMP-ECM's.
 
 ```text
 $ ecm-rs '2^67-1' '10!+1' 17
