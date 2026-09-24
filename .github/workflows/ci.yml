@@ -50,13 +50,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
-    # The `rust-version` of Cargo.toml: the library only (the dev-dependencies need a newer
-    # toolchain).
+    # The `rust-version` of Cargo.toml: the library and the `ecm-rs` tool (the
+    # dev-dependencies need a newer toolchain).
     - uses: dtolnay/rust-toolchain@1.87
     - uses: swatinem/rust-cache@v2
 
     - name: Check
       run: cargo check --lib --all-features
+
+    - name: Check the command line tool
+      run: cargo check --bins --features cli
 
   docs:
     name: Docs
@@ -148,10 +151,15 @@ jobs:
       shell: msys2 {0}
       run: |
         cargo build
+        cargo build --features cli
 
     - name: Build
       if: matrix.os != 'windows-latest'
       run: cargo build
+
+    - name: Build the command line tool
+      if: matrix.os != 'windows-latest'
+      run: cargo build --features cli
 
   publish:
     name: Publish
