@@ -467,4 +467,18 @@ mod tests {
         }
         assert_eq!(v, direct);
     }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stage1_generic_matches_dispatched() {
+        let (v1, _) = reference(&n());
+        for bits in [60, 128, 300, 1000] {
+            let n = Integer::from(Integer::u_pow_u(2, bits)) - 1u32;
+            let run = || stage1(&n, &v1, 1, 20_000, Stop::NEVER).unwrap();
+            crate::arith::GENERIC_ONLY.set(true);
+            let generic = run();
+            crate::arith::GENERIC_ONLY.set(false);
+            assert_eq!(generic, run(), "{bits} bits");
+        }
+    }
 }
