@@ -68,7 +68,7 @@ cargo install ecm --features cli
 
 Each number (an argument, or a line of the standard input) is factored completely, and printed
 with its prime factors in increasing order (parts marked `(composite)` when the factorization is
-incomplete: `--one`, `--timeout`, Ctrl-C, `--curves` or `--pm1` exhausted). The numbers can be
+incomplete: `--one`, `--timeout`, Ctrl-C, `--curves`, `--pm1` or `--pp1` exhausted). The numbers can be
 expressions: `+ - * /`, `^`, parentheses, `n!` (factorial), `n#` (primorial), as GMP-ECM's.
 
 ```text
@@ -106,6 +106,8 @@ run) print what was found so far. With `--json`, an invalid input gives `"n": nu
 | `ecm -param 0 B1`    | `ecm-rs --b1 B1 -c 1 --param 0`                          |
 | `ecm -one ...`       | `ecm-rs --one ...`                                       |
 | `ecm -pm1 B1 B2`     | `ecm-rs --pm1 --b1 B1 --b2 B2`                           |
+| `ecm -pp1 -x0 2/7 B1 B2` | `ecm-rs --pp1 --b1 B1 --b2 B2` (seed `2/7` by default; GMP-ECM: random) |
+| `ecm -pm1/-pp1 -x0 X`| `ecm-rs --pm1/--pp1 --x0 X`                              |
 | `ecm -maxmem MB`     | `ecm-rs --maxmem MB`                                     |
 | `ecm -primetest`     | `ecm-rs --primetest` (prints `N: prime` or `N: composite`) |
 | `ecm -printconfig`   | `ecm-rs --printconfig`                                   |
@@ -145,10 +147,15 @@ The implementation started as a translation of sympy's, and now uses the techniq
   15, 20, ... digits in turn, each for the expected number of curves given by GMP-ECM's
   probability model, and Pollard's P-1 method (with a `B1` 20 times larger) runs before each
   size. The time to find a factor depends on its size much more than on the size of the number.
+- Williams' P+1 method (`Algorithm::Pp1`, `--pp1`) runs alone when asked, as GMP-ECM's
+  `-pp1`: stage 1 with Montgomery's PRAC Lucas chains, stage 2 shared with P-1 and the curves.
+  It is not part of `ecm`: after P-1, the factors it adds (`p = 2 mod 3` with a smooth `p + 1`)
+  do not make the search faster (expected time within 0.1% at best, by GMP-ECM's model with
+  measured costs).
 - `ecm_with_params` and `ecm_one_factor` run curves with fixed bounds.
 - `Factorizer` has all the options (seed, fixed bounds, curves, `sigma`, parametrization,
-  P-1 only, stage 2 memory), and reports events (levels, curves with their `sigma` and stage
-  durations, P-1 runs, factors and primes) to a callback, which can interrupt the
+  P-1 or P+1 only, stage 2 memory), and reports events (levels, curves with their `sigma` and
+  stage durations, P-1 and P+1 runs, factors and primes) to a callback, which can interrupt the
   factorization. An interruption flag or a timeout interrupt it even during a curve.
 
 ## Performance

@@ -34,10 +34,14 @@ smallest to the largest, and a builder with progress events and cancellation.
 ### Added
 
 - `Factorizer`: seed, parametrization (`Param`, GMP-ECM's `-param 0/1/2`), fixed bounds
-  (`b1`, `b2`, `curves`, `sigma`), P-1 only (`pm1`), memory of the polynomial stage 2
+  (`b1`, `b2`, `curves`, `sigma`), P-1 or P+1 only (`algorithm`, with the starting value
+  `x0`), memory of the polynomial stage 2
   (`max_memory`), `factor`, `factor_partial` (the primes and the unfactored parts found so far
   on failure or interruption) and `find_factor` (one proper factor).
-- `Event` (trial division, P-1 runs, levels with their expected number of curves, curves with
+- Williams' P+1 method (`Algorithm::Pp1`, GMP-ECM's `-pp1`): stage 1 with PRAC Lucas chains
+  on the Montgomery arithmetic, stage 2 with the continuations of the curves, seed `2/7` by
+  default. It only runs when asked: after P-1, it does not make the default search faster.
+- `Event` (trial division, P-1 and P+1 runs, levels with their expected number of curves, curves with
   their `sigma` and stage durations, factors with their `Method`, primes), reported to the
   `Factorizer::on_event` callback, whose `ControlFlow::Break` interrupts the factorization
   between two curves. Without a callback, the events cost nothing.
@@ -46,7 +50,7 @@ smallest to the largest, and a builder with progress events and cancellation.
   within a few milliseconds.
 - The `ecm-rs` command line tool (`cargo install ecm --features cli`): complete factorization
   by default, GMP-ECM-like options (`--b1`, `--b2`, `-c`, `--sigma`, `--param`, `--one`,
-  `--pm1`, `--maxmem`, `--primetest`, `--printconfig`, `-q`, `-v`), GMP-ECM's input
+  `--pm1`, `--pp1`, `--x0`, `--maxmem`, `--primetest`, `--printconfig`, `-q`, `-v`), GMP-ECM's input
   expressions, `--json`, `--seed`, `--timeout` (for each number) and `--total-timeout`, a
   progress bar, partial results on Ctrl-C, and GMP-ECM's exit status bits. The `cli` feature
   only adds its dependencies (`clap`, `ctrlc`, `indicatif`, `serde_json`): the library compiles
