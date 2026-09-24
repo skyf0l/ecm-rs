@@ -47,9 +47,10 @@ smallest to the largest, and a builder with progress events and cancellation.
 - The `ecm-rs` command line tool (`cargo install ecm --features cli`): complete factorization
   by default, GMP-ECM-like options (`--b1`, `--b2`, `-c`, `--sigma`, `--param`, `--one`,
   `--pm1`, `--maxmem`, `--primetest`, `--printconfig`, `-q`, `-v`), GMP-ECM's input
-  expressions, `--json`, `--seed`, `--timeout`, a progress bar, partial results on Ctrl-C, and
-  GMP-ECM's exit status bits. The `cli` feature only adds its dependencies (`clap`, `ctrlc`,
-  `indicatif`, `serde_json`): the library compiles none of them.
+  expressions, `--json`, `--seed`, `--timeout` (for each number) and `--total-timeout`, a
+  progress bar, partial results on Ctrl-C, and GMP-ECM's exit status bits. The `cli` feature
+  only adds its dependencies (`clap`, `ctrlc`, `indicatif`, `serde_json`): the library compiles
+  none of them.
 
 ### Performance
 
