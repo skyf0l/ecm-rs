@@ -87,22 +87,24 @@ Prime cofactor 1159282937712710938601499347662537052411 has 40 digits
 
 On a terminal, a progress bar (on stderr) shows the level being run, with the curves done out of
 the expected number and the expected time of the level. Results go to stdout, diagnostics to
-stderr. Ctrl-C and `--timeout SECS` (per number) print what was found so far. See
-`ecm-rs --help` for all the options.
+stderr. Ctrl-C, `--timeout SECS` (for each number) and `--total-timeout SECS` (for the whole
+run) print what was found so far. With `--json`, an invalid input gives `"n": null`,
+`"error": "invalid"` and a `"message"`. See `ecm-rs --help` for all the options.
 
 | GMP-ECM              | ecm-rs                                                   |
 | -------------------- | -------------------------------------------------------- |
-| `ecm B1`             | `ecm-rs --b1 B1` (curves until a factor is found)        |
-| `ecm B1 B2`          | `ecm-rs --b1 B1 --b2 B2`                                 |
-| `ecm -c N B1`        | `ecm-rs --b1 B1 -c N`                                    |
+| `ecm B1`             | `ecm-rs --b1 B1 -c 1` (GMP-ECM runs one curve by default) |
+| `ecm B1 B2`          | `ecm-rs --b1 B1 --b2 B2 -c 1`                            |
+| `ecm -c N B1`        | `ecm-rs --b1 B1 -c N` (`N` curves per composite part)    |
 | `ecm -sigma 1:S B1`  | `ecm-rs --b1 B1 --sigma 1:S` (one curve, as GMP-ECM)     |
-| `ecm -param 0 B1`    | `ecm-rs --b1 B1 --param 0`                               |
+| `ecm -param 0 B1`    | `ecm-rs --b1 B1 -c 1 --param 0`                          |
 | `ecm -one ...`       | `ecm-rs --one ...`                                       |
 | `ecm -pm1 B1 B2`     | `ecm-rs --pm1 --b1 B1 --b2 B2`                           |
 | `ecm -maxmem MB`     | `ecm-rs --maxmem MB`                                     |
 | `ecm -primetest`     | `ecm-rs --primetest` (prints `N: prime` or `N: composite`) |
 | `ecm -printconfig`   | `ecm-rs --printconfig`                                   |
 | `ecm -q`, `ecm -v`   | `ecm-rs -q`, `ecm-rs -v`                                 |
+| (none)               | `ecm-rs --b1 B1`: curves until a factor is found         |
 | (none)               | `ecm-rs N`: complete factorization, bounds by factor size |
 
 Exit status: bits as GMP-ECM's, for the last number (bits 1 and 16 for any number).
@@ -116,7 +118,7 @@ Exit status: bits as GMP-ECM's, for the last number (bits 1 and 16 for any numbe
 | 8      | The number is prime (or 1)                                              |
 | 10     | A composite factor found, the cofactor is prime (`--one`)               |
 | 14     | Factored completely (`--one`: a prime factor, a prime cofactor)         |
-| +16    | `--timeout` interrupted a factorization                                 |
+| +16    | `--timeout` or `--total-timeout` interrupted a factorization            |
 | 64     | Invalid command line                                                    |
 | 130    | Interrupted by Ctrl-C                                                   |
 

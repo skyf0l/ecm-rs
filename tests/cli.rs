@@ -115,9 +115,43 @@ fn invalid_inputs() {
 
     let (code, out, _) = run(&["--json", "--", "-5"]);
     let value: Value = serde_json::from_str(out.trim()).unwrap();
-    assert_eq!(value["error"], "the number must be positive");
+    assert_eq!(value["error"], "invalid");
+    assert_eq!(value["message"], "the number must be positive");
     assert_eq!(value["n"], Value::Null);
+    // The fields of a valid number.
+    assert_eq!(value["factors"], serde_json::json!([]));
+    assert_eq!(value["complete"], false);
     assert_eq!(code, 1);
+
+    // A long input is shortened in the messages.
+    let long = format!("{}a", "1".repeat(1000));
+    let (_, _, err) = run(&[&long]);
+    assert!(err.len() < 200, "{err}");
+    assert!(
+        err.contains("... (1001 characters): invalid expression"),
+        "{err}"
+    );
+    // Recursion is bounded.
+    let deep = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
+    let (code, _, err) = run_with(&[], &deep);
+    assert!(err.contains("nested too deeply"), "{err}");
+    assert_eq!(code, 1);
+    // Invalid UTF-8 rejects its line only.
+    let mut child = ecm_rs(&[])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"\xff15\n21\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "21 = 3 * 7\n");
+    assert_eq!(output.status.code(), Some(1 | 14));
 }
 
 #[test]
@@ -301,6 +335,23 @@ fn timeout_prints_partial_results() {
     assert_eq!(code, 16);
 }
 
+#[test]
+fn total_timeout() {
+    // The whole run stops after 0.3 s: each number still gets its line, with the factors of
+    // trial division.
+    let start = Instant::now();
+    let (code, out, _) = run(&["--total-timeout", "0.3", P25, &format!("5*{P25}"), "15"]);
+    assert!(start.elapsed() < Duration::from_secs(5));
+    assert_eq!(
+        out,
+        format!(
+            "{P25} = {P25} (composite)\n{} = 5 * {P25} (composite)\n15 = 3 * 5\n",
+            P25.parse::<rug::Integer>().unwrap() * 5u32
+        )
+    );
+    assert_eq!(code, 16 | 14);
+}
+
 #[cfg(unix)]
 #[test]
 fn ctrl_c_prints_partial_results() {
@@ -326,6 +377,32 @@ fn ctrl_c_prints_partial_results() {
     assert_eq!(output.status.code(), Some(130));
 }
 
+#[cfg(unix)]
+#[test]
+fn ctrl_c_while_reading_exits() {
+    // Waiting for the standard input: Ctrl-C exits at once.
+    let mut child = ecm_rs(&[])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(b"15\n").unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let killed = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    let start = Instant::now();
+    let output = child.wait_with_output().unwrap();
+    assert!(start.elapsed() < Duration::from_secs(2));
+    drop(stdin);
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "15 = 3 * 5\n");
+    assert_eq!(output.status.code(), Some(130));
+}
+
 #[test]
 fn primetest() {
     let (code, out, _) = run(&["--primetest", "2^61-1", "2^67-1"]);
@@ -337,6 +414,7 @@ fn primetest() {
     let (code, out, _) = run(&["--primetest", "--json", "2^61-1"]);
     let v: Value = serde_json::from_str(out.trim()).unwrap();
     assert_eq!(v["prime"], true);
+    assert_eq!(v["error"], Value::Null);
     assert_eq!(code, 8);
 }
 
@@ -348,6 +426,8 @@ fn printconfig() {
     assert!(out.contains("GMP "));
     assert!(out.contains("BMI2/ADX: "));
     assert!(out.contains("Montgomery"));
+    assert!(out.contains("above 1024 bits "), "{out}");
+    assert!(out.contains("Stage 2 memory (default): 256 MiB"), "{out}");
     let (code, _, _) = run(&["--printconfig", "15"]);
     assert_eq!(code, 64);
 }
