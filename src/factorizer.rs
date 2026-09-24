@@ -172,7 +172,9 @@ impl<H: EventHandler> Factorizer<H> {
 
     /// The factoring method (default: [`Algorithm::Ecm`]). With [`Algorithm::Pm1`] or
     /// [`Algorithm::Pp1`], no curves: with fixed bounds, the method runs once with `b1` and
-    /// `b2` per composite part; otherwise it runs with the bounds of P-1 at each level.
+    /// `b2` per composite part; otherwise it runs with the bounds of P-1 at each level. The
+    /// options of the curves ([`Factorizer::seed`], [`Factorizer::param`] and
+    /// [`Factorizer::curves`]) are then ignored, but [`Factorizer::sigma`] is an error.
     #[must_use]
     pub const fn algorithm(mut self, algorithm: Algorithm) -> Self {
         self.algorithm = algorithm;
@@ -186,7 +188,8 @@ impl<H: EventHandler> Factorizer<H> {
     /// P+1 works modulo a prime `p` in a group of order `p + 1` if `x0^2 - 4` is not a square
     /// modulo `p`, else of order `p - 1`: about half of the seeds find a factor with a smooth
     /// `p + 1`. `2/7` (orders multiple of 6: `p + 1` for `p = 2 mod 3`) and `6/5` (multiple of
-    /// 4: `p + 1` for `p = 3 mod 4`) do slightly better than random seeds.
+    /// 4: `p + 1` for `p = 3 mod 4`) do slightly better than random seeds. The seeds 0 and
+    /// `+-1` (and `+-2` for P+1) find nothing: they are rejected with [`Error::InvalidOption`].
     #[must_use]
     pub fn x0(mut self, numerator: Integer, denominator: Integer) -> Self {
         self.x0 = Some((numerator, denominator));
@@ -327,12 +330,27 @@ impl<H: EventHandler> Factorizer<H> {
 
     /// Checks the options.
     fn mode(&self) -> Result<Mode, Error> {
-        if let Some((_, denominator)) = &self.x0 {
+        if let Some((numerator, denominator)) = &self.x0 {
             if self.algorithm == Algorithm::Ecm {
                 return Err(Error::InvalidOption("x0 is for P-1 and P+1, not curves"));
             }
             if *denominator == 0 {
                 return Err(Error::InvalidOption("x0 with a zero denominator"));
+            }
+            // Elements of order at most 6, killed by any stage 1: 0 and +-1 for P-1 (x0^E = 0
+            // or 1), and also +-2 for P+1 (V_1 = 0, +-1, +-2: a root of unity of order 4, 6, 3,
+            // 1 or 2).
+            let degenerate: &[i32] = match self.algorithm {
+                Algorithm::Pp1 => &[0, 1, -1, 2, -2],
+                _ => &[0, 1, -1],
+            };
+            if degenerate
+                .iter()
+                .any(|&k| *numerator == Integer::from(denominator * k))
+            {
+                return Err(Error::InvalidOption(
+                    "x0 is 0 or +-1 (or +-2 for P+1): no factor can be found",
+                ));
             }
         }
         let Some(b1) = self.b1 else {
