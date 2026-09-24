@@ -63,6 +63,16 @@ const PRIMALITY_REPS: u32 = 25;
 /// - `B2`: Stage 2 Bound.
 /// - `max_curve`: Maximum number of curves generated.
 /// - `rgen`: Random number generator.
+///
+/// # Errors
+///
+/// [`Error::BoundsNotEven`] if `b1` or `b2` is odd, [`Error::BoundsTooSmall`] if `b1 < 6` or
+/// `b2 < 4`, [`Error::NumberIsPrime`] if `n` is prime, and [`Error::ECMFailed`] if no curve
+/// finds a factor.
+///
+/// # Panics
+///
+/// If `n <= 1`: it has no proper factor.
 pub fn ecm_one_factor(
     n: &Integer,
     b1: usize,
@@ -79,6 +89,7 @@ pub fn ecm_one_factor(
     if b1 < 6 || b2 < 4 {
         return Err(Error::BoundsTooSmall);
     }
+    assert!(*n > 1, "only numbers greater than 1 have a proper factor");
 
     // BPSW only (rug runs `reps - 24` Miller-Rabin rounds on top of it): no composite is known
     // to pass it, and the caller usually already knows that `n` is composite.
@@ -1209,6 +1220,24 @@ mod tests {
                 p
             );
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "greater than 1")]
+    fn one_factor_of_zero() {
+        let _ = ecm_one_factor(&Integer::ZERO, 2000, 147_396, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "greater than 1")]
+    fn one_factor_of_one() {
+        let _ = ecm_one_factor(&Integer::from(1), 2000, 147_396, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "greater than 1")]
+    fn one_factor_of_negative() {
+        let _ = ecm_one_factor(&Integer::from(-15), 2000, 147_396, 10);
     }
 
     #[test]
