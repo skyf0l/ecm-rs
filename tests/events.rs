@@ -1,7 +1,8 @@
 //! The public `Factorizer` API: events, cancellation, fixed bounds, determinism.
 
 use ecm::{
-    Algorithm, Error, Event, Factorization, Factorizer, Method, Param, ecm, ecm_with_params,
+    Algorithm, Base2Mode, Error, Event, Factorization, Factorizer, Method, Param, ecm,
+    ecm_with_params,
 };
 use rug::{Integer, ops::Pow};
 use std::{
@@ -24,6 +25,7 @@ fn int(s: &str) -> Integer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Owned {
     TrialDivision(HashMap<Integer, usize>, Integer),
+    Base2(Integer, i64),
     Pm1(Integer, usize, Option<usize>),
     Pp1(Integer, usize, Option<usize>),
     Level(Integer, Option<u32>, usize, usize, Option<usize>, usize),
@@ -37,6 +39,7 @@ fn owned(event: &Event<'_>) -> Owned {
         Event::TrialDivision {
             factors, cofactor, ..
         } => Owned::TrialDivision(factors.clone(), cofactor.clone()),
+        Event::Base2 { n, k, .. } => Owned::Base2(n.clone(), k),
         Event::Pm1 {
             n,
             b1,
@@ -158,6 +161,12 @@ fn check_events(n: &Integer, factors: &HashMap<Integer, usize>, events: &[Owned]
                 assert!(n.is_divisible(m));
                 assert!(b2.is_none_or(|b2| b2 > *b1));
                 level = None;
+            }
+            Owned::Base2(m, k) => {
+                assert!(n.is_divisible(m));
+                let power = Integer::from(1) << (k.unsigned_abs() as u32);
+                let form = if *k > 0 { power + 1u32 } else { power - 1u32 };
+                assert!(form.is_divisible(m));
             }
             Owned::TrialDivision(..) => {}
         }
@@ -790,5 +799,96 @@ fn interrupt_at_every_event() {
                 assert!(*m > 1 && !result.primes.contains_key(m));
             }
         }
+    }
+}
+
+#[test]
+fn base2() {
+    // 2^423 + 1 and 2^425 + 1: composite parts of 400 bits and less, those above about 320 bits
+    // with the special reduction.
+    for (n, k) in [
+        (int("2").pow(423) + 1u32, 423),
+        (int("2").pow(425) + 1u32, 425),
+    ] {
+        let (auto, events) = record(Factorizer::new(), &n, |_| false);
+        let factors = auto.into_result().unwrap();
+        check_events(&n, &factors, &events);
+        let base2: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Owned::Base2(m, k) => Some((m.significant_bits(), *k)),
+                _ => None,
+            })
+            .collect();
+        assert!(!base2.is_empty() && base2.iter().all(|&(bits, kk)| kk == k && bits > 300));
+
+        let (off, events) = record(Factorizer::new().base2(Base2Mode::Off), &n, |_| false);
+        assert_eq!(off.into_result().unwrap(), factors);
+        assert!(!events.iter().any(|event| matches!(event, Owned::Base2(..))));
+
+        // Forced, also modulo 2^(2k) - 1, a multiple of 2^k + 1, and for every part.
+        for force in [k, -2 * k] {
+            let (forced, events) =
+                record(Factorizer::new().base2(Base2Mode::Force(force)), &n, |_| {
+                    false
+                });
+            assert_eq!(forced.into_result().unwrap(), factors, "{force}");
+            let parts = events
+                .iter()
+                .filter(|e| matches!(e, Owned::Level(..) | Owned::Pm1(..)))
+                .count();
+            assert!(
+                parts > 0
+                    && events
+                        .iter()
+                        .filter(|e| matches!(e, Owned::Base2(_, kk) if *kk == force))
+                        .count()
+                        > 0
+            );
+        }
+    }
+    // Forced modulo a number the composite parts do not divide.
+    let n = int("2").pow(425) + 1u32;
+    let result = Factorizer::new()
+        .base2(Base2Mode::Force(-425))
+        .factor_partial(&n);
+    assert!(matches!(result.error, Some(Error::InvalidOption(_))));
+    check_partial(&n, &result);
+    // 3 * (2^67 - 1): trial division removes the 3, the rest divides 2^67 - 1.
+    let n = int("3") * (int("2").pow(67) - 1u32);
+    let expected: HashMap<Integer, usize> = [("3", 1), ("193707721", 1), ("761838257287", 1)]
+        .map(|(p, e)| (int(p), e))
+        .into();
+    for mode in [
+        Base2Mode::Force(-67),
+        Base2Mode::Force(-134),
+        Base2Mode::Auto,
+    ] {
+        assert_eq!(Factorizer::new().base2(mode).factor(&n).unwrap(), expected);
+    }
+    assert_eq!(
+        Factorizer::new()
+            .base2(Base2Mode::Force(-67))
+            .find_factor(&(int("1000003") * int("1000033"))),
+        Err(Error::InvalidOption(
+            "base2: the number does not divide 2^k+1 (2^-k-1 if k < 0)"
+        ))
+    );
+    // P-1 and P+1 with fixed bounds, forced.
+    let n = int("2").pow(128) + 1u32;
+    for algorithm in [Algorithm::Pm1, Algorithm::Pp1] {
+        let run = |mode| {
+            Factorizer::new()
+                .algorithm(algorithm)
+                .b1(100_000)
+                .b2(10_000_000)
+                .base2(mode)
+                .find_factor(&n)
+        };
+        assert_eq!(
+            run(Base2Mode::Force(128)),
+            run(Base2Mode::Off),
+            "{algorithm}"
+        );
     }
 }

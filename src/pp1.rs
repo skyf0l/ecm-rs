@@ -12,7 +12,7 @@
 //! Stage 2 checks the primes `l` in `(b1, b2]` with the same continuations as ECM and P-1 (see
 //! [`crate::stage2`]), in the same Lucas sequence.
 
-use crate::{lucas, stage2::Stage2Plan, stop::Stop};
+use crate::{base2::Base2Form, lucas, stage2::Stage2Plan, stop::Stop};
 use rug::Integer;
 
 /// Default seed `x0 = 2/7` (numerator, denominator).
@@ -63,12 +63,19 @@ impl Pp1 {
     /// `gcd(V - 2, n)` (or `gcd(denominator, n)` if the seed is not defined modulo `n`).
     #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn stage1(&mut self, n: &Integer, b1: usize) -> Integer {
-        self.stage1_until(n, b1, Stop::NEVER)
+        self.stage1_until(n, b1, Base2Form::detect(n), Stop::NEVER)
     }
 
-    /// [`Pp1::stage1`], stopping early if `stop` is requested: the bound reached is then not
-    /// updated, and `V` is kept.
-    pub(crate) fn stage1_until(&mut self, n: &Integer, b1: usize, stop: Stop<'_>) -> Integer {
+    /// [`Pp1::stage1`] with the special reduction modulo `base2` (a multiple of `n`) if any,
+    /// stopping early if `stop` is requested: the bound reached is then not updated, and `V` is
+    /// kept.
+    pub(crate) fn stage1_until(
+        &mut self,
+        n: &Integer,
+        b1: usize,
+        base2: Option<Base2Form>,
+        stop: Stop<'_>,
+    ) -> Integer {
         let mut v = match self.v.take() {
             Some(v) => v % n,
             None => match lucas::rational(&self.x0.0, &self.x0.1, n) {
@@ -77,7 +84,7 @@ impl Pp1 {
             },
         };
         if self.b1 < b1 {
-            if let Some(w) = lucas::stage1(n, &v, self.b1, b1, stop) {
+            if let Some(w) = lucas::stage1(n, &v, (self.b1, b1), base2, stop) {
                 v = w;
                 self.b1 = b1;
             }
@@ -96,14 +103,20 @@ impl Pp1 {
     #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     #[must_use]
     pub fn stage2(&self, n: &Integer, plan: &Stage2Plan) -> Integer {
-        self.stage2_until(n, plan, Stop::NEVER)
+        self.stage2_until(n, plan, Base2Form::detect(n), Stop::NEVER)
     }
 
-    /// [`Pp1::stage2`], stopping early (with the gcd of a partial product) if `stop` is
-    /// requested.
-    pub(crate) fn stage2_until(&self, n: &Integer, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
+    /// [`Pp1::stage2`] with the special reduction modulo `base2` (a multiple of `n`) if any,
+    /// stopping early (with the gcd of a partial product) if `stop` is requested.
+    pub(crate) fn stage2_until(
+        &self,
+        n: &Integer,
+        plan: &Stage2Plan,
+        base2: Option<Base2Form>,
+        stop: Stop<'_>,
+    ) -> Integer {
         let v = self.v.as_ref().expect("stage 1 runs first");
-        lucas::stage2(n, &Integer::from(v % n), plan, stop)
+        lucas::stage2(n, &Integer::from(v % n), plan, base2, stop)
     }
 }
 
@@ -269,6 +282,26 @@ mod tests {
             q.set_bit(bits - 1, true);
             let [plus, minus] = check_stage2_primes(&q.next_prime(), 50, 3000, &primes);
             assert!(plus + minus > 5, "{bits} bits: {plus} {minus}");
+        }
+    }
+
+    #[test]
+    fn base2_matches_generic() {
+        for k in [-101, 128, -263, 512, -1061] {
+            let (n, form) = crate::base2::cofactor_of(k);
+            let (mut on, mut off) = (Pp1::default(), Pp1::default());
+            for b1 in [1_000, 30_000] {
+                let g = on.stage1_until(&n, b1, Some(form), Stop::NEVER);
+                assert_eq!(g, off.stage1_until(&n, b1, None, Stop::NEVER), "{form}");
+                assert_eq!(on.v, off.v, "{form}");
+            }
+            for plan in [
+                Stage2Plan::pairs(30_000, 3_000_000),
+                Stage2Plan::poly(&n, 30_000, 3_000_000),
+            ] {
+                let g = on.stage2_until(&n, &plan, Some(form), Stop::NEVER);
+                assert_eq!(g, off.stage2_until(&n, &plan, None, Stop::NEVER), "{form}");
+            }
         }
     }
 }

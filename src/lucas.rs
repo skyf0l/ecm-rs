@@ -13,6 +13,7 @@
 
 use crate::{
     arith::{Arith, with_arith},
+    base2::Base2Form,
     curve::{Scratch, Xz},
     primes::primes,
     stage2::{Normalizer, Stage2Plan, XLine, stage2_group},
@@ -28,10 +29,17 @@ pub(crate) fn rational(num: &Integer, den: &Integer, n: &Integer) -> Result<Inte
     }
 }
 
-/// Stage 2 from `V_1 = v` modulo `n`: checks the primes `l` in `(b1, b2]` of `plan` (see
-/// [`crate::stage2`]), and returns `gcd(g, n)`, partial if `stop` is requested.
-pub(crate) fn stage2(n: &Integer, v: &Integer, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
-    with_arith!(n, |arith| {
+/// Stage 2 from `V_1 = v` modulo `n` (with the special reduction modulo `base2`, a multiple of
+/// `n`, if any): checks the primes `l` in `(b1, b2]` of `plan` (see [`crate::stage2`]), and
+/// returns `gcd(g, n)`, partial if `stop` is requested.
+pub(crate) fn stage2(
+    n: &Integer,
+    v: &Integer,
+    plan: &Stage2Plan,
+    base2: Option<Base2Form>,
+    stop: Stop<'_>,
+) -> Integer {
+    with_arith!(n, base2, |arith| {
         let lucas = Lucas::new(arith);
         let start = lucas.element(v);
         stage2_group(&lucas, &start, plan, stop)
@@ -39,17 +47,18 @@ pub(crate) fn stage2(n: &Integer, v: &Integer, plan: &Stage2Plan, stop: Stop<'_>
 }
 
 /// `V_E(v)` modulo `n`, where `E` is the product of the largest powers of the primes `<= hi`
-/// that are `<= hi`, divided by the same product for `lo` (see [`crate::ecm::stage1_multiplier`]).
+/// that are `<= hi`, divided by the same product for `lo` (see [`crate::ecm::stage1_multiplier`]),
+/// with the special reduction modulo `base2` (a multiple of `n`) if any.
 ///
 /// Returns `None` if `stop` was requested (the value is then lost: `v` is kept).
 pub(crate) fn stage1(
     n: &Integer,
     v: &Integer,
-    lo: usize,
-    hi: usize,
+    (lo, hi): (usize, usize),
+    base2: Option<Base2Form>,
     stop: Stop<'_>,
 ) -> Option<Integer> {
-    with_arith!(n, |arith| {
+    with_arith!(n, base2, |arith| {
         let lucas = Lucas::new(arith);
         let mut x = lucas.arith.residue(v);
         lucas
@@ -450,11 +459,11 @@ mod tests {
             let mut expected = Lucas::new(Plain::new(&n)).element(&v1);
             let k = crate::ecm::prime_power_product(lo, hi);
             expected = Lucas::new(Plain::new(&n)).multiple(&expected, &k);
-            let got = stage1(&n, &v1, lo, hi, Stop::NEVER).unwrap();
+            let got = stage1(&n, &v1, (lo, hi), None, Stop::NEVER).unwrap();
             assert_eq!(got, expected.x, "{lo} {hi}");
         }
         // Resumed.
-        let direct = stage1(&n, &v1, 1, 100_000, Stop::NEVER).unwrap();
+        let direct = stage1(&n, &v1, (1, 100_000), None, Stop::NEVER).unwrap();
         let mut v = v1;
         for (lo, hi) in [
             (1, 10),
@@ -463,7 +472,7 @@ mod tests {
             (2000, 99_999),
             (99_999, 100_000),
         ] {
-            v = stage1(&n, &v, lo, hi, Stop::NEVER).unwrap();
+            v = stage1(&n, &v, (lo, hi), None, Stop::NEVER).unwrap();
         }
         assert_eq!(v, direct);
     }
@@ -474,7 +483,7 @@ mod tests {
         let (v1, _) = reference(&n());
         for bits in [60, 128, 300, 1000] {
             let n = Integer::from(Integer::u_pow_u(2, bits)) - 1u32;
-            let run = || stage1(&n, &v1, 1, 20_000, Stop::NEVER).unwrap();
+            let run = || stage1(&n, &v1, (1, 20_000), None, Stop::NEVER).unwrap();
             crate::arith::GENERIC_ONLY.set(true);
             let generic = run();
             crate::arith::GENERIC_ONLY.set(false);

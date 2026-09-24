@@ -12,6 +12,8 @@
 //! is `V_k = 2`, that is `x^k = 1`.
 
 use crate::{
+    arith::{Arith, pow},
+    base2::{Base2, Base2Form},
     ecm::{prime_power_words, product},
     lucas,
     stage2::Stage2Plan,
@@ -76,12 +78,19 @@ impl Pm1 {
     /// `gcd(x - 1, n)` (or `gcd(denominator, n)` if `x0` is not defined modulo `n`).
     #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn stage1(&mut self, n: &Integer, b1: usize) -> Integer {
-        self.stage1_until(n, b1, Stop::NEVER)
+        self.stage1_until(n, b1, Base2Form::detect(n), Stop::NEVER)
     }
 
-    /// [`Pm1::stage1`], stopping early if `stop` is requested: the bound reached is then not
-    /// updated, and `x` stays valid (a power of the previous one).
-    pub(crate) fn stage1_until(&mut self, n: &Integer, b1: usize, stop: Stop<'_>) -> Integer {
+    /// [`Pm1::stage1`] with the special reduction modulo `base2` (a multiple of `n`) if any,
+    /// stopping early if `stop` is requested: the bound reached is then not updated, and `x`
+    /// stays valid (a power of the previous one).
+    pub(crate) fn stage1_until(
+        &mut self,
+        n: &Integer,
+        b1: usize,
+        base2: Option<Base2Form>,
+        stop: Stop<'_>,
+    ) -> Integer {
         let mut x = match self.x.take() {
             Some(x) => x % n,
             None => match lucas::rational(&self.x0.0, &self.x0.1, n) {
@@ -108,8 +117,7 @@ impl Pm1 {
                     .take(chunk_words)
                     .map(Integer::from)
                     .collect();
-                x.pow_mod_mut(&product(chunk), n)
-                    .expect("positive exponent");
+                pow_mod(&mut x, &product(chunk), n, base2);
             }
             if !stopped {
                 self.b1 = b1;
@@ -129,18 +137,38 @@ impl Pm1 {
     #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     #[must_use]
     pub fn stage2(&self, n: &Integer, plan: &Stage2Plan) -> Integer {
-        self.stage2_until(n, plan, Stop::NEVER)
+        self.stage2_until(n, plan, Base2Form::detect(n), Stop::NEVER)
     }
 
-    /// [`Pm1::stage2`], stopping early (with the gcd of a partial product) if `stop` is
-    /// requested.
-    pub(crate) fn stage2_until(&self, n: &Integer, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
+    /// [`Pm1::stage2`] with the special reduction modulo `base2` (a multiple of `n`) if any,
+    /// stopping early (with the gcd of a partial product) if `stop` is requested.
+    pub(crate) fn stage2_until(
+        &self,
+        n: &Integer,
+        plan: &Stage2Plan,
+        base2: Option<Base2Form>,
+        stop: Stop<'_>,
+    ) -> Integer {
         let x = self.x.as_ref().expect("stage 1 runs first");
         let x = Integer::from(x % n);
         let Ok(inv) = x.clone().invert(n) else {
             return x.gcd(n);
         };
-        lucas::stage2(n, &((inv + x) % n), plan, stop)
+        lucas::stage2(n, &((inv + x) % n), plan, base2, stop)
+    }
+}
+
+/// `x = x^e mod n` for `e > 0`: GMP's, or with the special reduction modulo `base2` (a
+/// multiple of `n`), whose squarings cost a third of GMP's from 1024 bits.
+fn pow_mod(x: &mut Integer, e: &Integer, n: &Integer, base2: Option<Base2Form>) {
+    match base2 {
+        Some(form) => {
+            let a = Base2::new(n, form);
+            *x = a.to_integer(&pow(&a, &a.residue(x), e));
+        }
+        None => {
+            x.pow_mod_mut(e, n).expect("positive exponent");
+        }
     }
 }
 
@@ -251,6 +279,26 @@ mod tests {
             q.set_bit(bits - 1, true);
             let checked = check_stage2_primes(&q.next_prime(), 50, 3000, &primes);
             assert!(checked > 5, "{bits} bits: {checked}");
+        }
+    }
+
+    #[test]
+    fn base2_matches_generic() {
+        for k in [-101, 128, -263, 512, -1061] {
+            let (n, form) = crate::base2::cofactor_of(k);
+            let (mut on, mut off) = (Pm1::new(), Pm1::new());
+            for b1 in [1_000, 30_000] {
+                let g = on.stage1_until(&n, b1, Some(form), Stop::NEVER);
+                assert_eq!(g, off.stage1_until(&n, b1, None, Stop::NEVER), "{form}");
+                assert_eq!(on.x, off.x, "{form}");
+            }
+            for plan in [
+                Stage2Plan::pairs(30_000, 3_000_000),
+                Stage2Plan::poly(&n, 30_000, 3_000_000),
+            ] {
+                let g = on.stage2_until(&n, &plan, Some(form), Stop::NEVER);
+                assert_eq!(g, off.stage2_until(&n, &plan, None, Stop::NEVER), "{form}");
+            }
         }
     }
 }
