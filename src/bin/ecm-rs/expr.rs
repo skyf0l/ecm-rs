@@ -13,6 +13,9 @@ pub const MAX_BITS: u32 = 1 << 20;
 const MAX_FACTORIAL: u32 = 50_000;
 const MAX_PRIMORIAL: u32 = 700_000;
 
+/// Largest nesting of parentheses, signs and exponents (the parser is recursive).
+const MAX_DEPTH: usize = 200;
+
 /// Why an expression was rejected, with the position (in characters, from 1) of the problem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExprError {
@@ -31,6 +34,7 @@ pub fn eval(input: &str) -> Result<Integer, ExprError> {
     let mut parser = Parser {
         chars: input.chars().collect(),
         pos: 0,
+        depth: 0,
     };
     parser.skip_spaces();
     if parser.peek().is_none() {
@@ -48,6 +52,8 @@ pub fn eval(input: &str) -> Result<Integer, ExprError> {
 struct Parser {
     chars: Vec<char>,
     pos: usize,
+    /// Nesting of [`Parser::unary`], which every recursion goes through.
+    depth: usize,
 }
 
 impl Parser {
@@ -130,11 +136,18 @@ impl Parser {
 
     /// `unary := ('-' | '+') unary | power`
     fn unary(&mut self) -> Result<Integer, ExprError> {
-        match self.next_op(&['-', '+']) {
-            Some('-') => Ok(-self.unary()?),
+        if self.depth == MAX_DEPTH {
+            self.skip_spaces();
+            return Err(self.error(format!("nested too deeply (more than {MAX_DEPTH} levels)")));
+        }
+        self.depth += 1;
+        let value = match self.next_op(&['-', '+']) {
+            Some('-') => self.unary().map(|v| -v),
             Some(_) => self.unary(),
             None => self.power(),
-        }
+        };
+        self.depth -= 1;
+        value
     }
 
     /// `power := postfix ('^' unary)?`: right associative, `-2^2 = -4`, `2^-1` is an error.
@@ -298,5 +311,12 @@ mod tests {
         assert!(err("(2^1000000)*(2^1000000)").starts_with("value too large"));
         assert!(err("1000000#").starts_with("argument of '#'"));
         assert!(err("5!0").starts_with("invalid step"));
+        // Recursion is bounded: no stack overflow.
+        let deep = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
+        assert!(err(&deep).starts_with("nested too deeply"));
+        assert!(err(&format!("{}5", "-".repeat(100_000))).starts_with("nested too deeply"));
+        assert!(err(&vec!["2"; 100_000].join("^")).starts_with("nested too deeply"));
+        let ok_depth = format!("{}7{}", "(".repeat(150), ")".repeat(150));
+        assert_eq!(ok(&format!("-{ok_depth}^1")), "-7");
     }
 }
