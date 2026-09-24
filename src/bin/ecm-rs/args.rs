@@ -97,17 +97,28 @@ pub struct Cli {
     pub b2: Option<usize>,
 
     /// Largest number of curves per composite part [default: unlimited; 1 with --sigma].
-    #[arg(short, long, value_name = "N", requires = "b1")]
+    #[arg(short, long, value_name = "N", requires = "b1", conflicts_with_all = ["pm1", "pp1"])]
     pub curves: Option<usize>,
 
     /// Parameter of the first curve, "P:S" or "S", with P the parametrization (the next curves
     /// take S+1, S+2...). Reproduces a curve of GMP-ECM ("-sigma P:S") or of -v. S is at least
     /// 6 with P = 0, in [2, 2^32) with P = 1, in [2, 2^64) with P = 2.
-    #[arg(long, value_name = "[P:]S", value_parser = parse_sigma, requires = "b1")]
+    #[arg(
+        long,
+        value_name = "[P:]S",
+        value_parser = parse_sigma,
+        requires = "b1",
+        conflicts_with_all = ["pm1", "pp1"]
+    )]
     pub sigma: Option<(Option<u8>, Integer)>,
 
     /// Parametrization of the curves, as GMP-ECM's -param: 0 (Suyama), 1, 2 [default: 2].
-    #[arg(long, value_name = "P", value_parser = clap::value_parser!(u8).range(0..=2))]
+    #[arg(
+        long,
+        value_name = "P",
+        value_parser = clap::value_parser!(u8).range(0..=2),
+        conflicts_with_all = ["pm1", "pp1"]
+    )]
     pub param: Option<u8>,
 
     /// Stops at the first factor found (maybe composite): prints it and its cofactor.
@@ -158,7 +169,8 @@ pub struct Cli {
     pub quiet: bool,
 
     /// Prints the steps (as GMP-ECM's -v) on stderr: levels, curves with their sigma and
-    /// stage times, P-1 and P+1 runs, factors found. Twice: also the prime factors as they are found.
+    /// stage times, P-1 and P+1 runs, factors found. Twice: also the prime factors as they are
+    /// found.
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
