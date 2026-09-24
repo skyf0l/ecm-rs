@@ -2,8 +2,8 @@
 
 #![allow(dead_code)]
 
-use ecm::bench::{curve, stage1, stage1_multiplier, Param, Point};
-use rug::{rand::RandState, Integer};
+use ecm::bench::{Param, Point, curve, stage1, stage1_multiplier};
+use rug::{Integer, rand::RandState};
 
 /// Seed used for every generated input, so all runs measure exactly the same work.
 pub const SEED: u64 = 0xEC0;

@@ -10,7 +10,7 @@
 //! [`Arith::to_integer`], and [`Arith::gcd`] gives `gcd(x, n)` directly (`R` is coprime to an
 //! odd `n`).
 
-use rug::{integer::Order, Assign, Integer};
+use rug::{Assign, Integer, integer::Order};
 
 /// Largest number of 64-bit limbs handled by [`Mont`]; larger moduli use [`Plain`].
 pub const MAX_LIMBS: usize = 16;
@@ -471,7 +471,7 @@ pub(crate) mod mpn {
         && gmp::NAIL_BITS == 0
         && (gmp::VERSION > 5 || (gmp::VERSION == 5 && gmp::VERSION_MINOR >= 1));
 
-    extern "C" {
+    unsafe extern "C" {
         /// `mpn_redc_1(rp, up, mp, n, invm)`: Montgomery reduction by `n` limbs of the `2n`
         /// limbs `up` (clobbered) modulo the `n` limbs `mp`, with `invm = -1/mp[0] mod 2^64`.
         /// Writes `n` limbs to `rp` and returns the carry out of them.

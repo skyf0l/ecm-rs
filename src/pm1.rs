@@ -13,10 +13,10 @@
 //! is `V_k = 2`, that is `x^k = 1`.
 
 use crate::{
-    arith::{with_arith, Arith, PolyArith},
+    arith::{Arith, PolyArith, with_arith},
     curve::{Scratch, Xz},
     ecm::{prime_power_words, product},
-    stage2::{stage2_group, Normalizer, Stage2Plan, XLine},
+    stage2::{Normalizer, Stage2Plan, XLine, stage2_group},
 };
 use rug::Integer;
 

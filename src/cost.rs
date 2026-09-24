@@ -324,8 +324,8 @@ mod tests {
 /// --nocapture`.
 #[cfg(test)]
 mod measure {
-    use crate::arith::{mpn, with_arith, Arith};
-    use rug::{rand::RandState, Assign, Integer};
+    use crate::arith::{Arith, mpn, with_arith};
+    use rug::{Assign, Integer, rand::RandState};
     use std::time::Instant;
 
     /// Nanoseconds per modular multiplication.

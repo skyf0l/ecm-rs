@@ -16,8 +16,8 @@
 //! A monic polynomial of degree `d` is stored as its `d` low coefficients, the leading `1` is
 //! implicit.
 
-use crate::arith::{mpn, PolyArith};
-use rug::{integer::Order, Assign, Integer};
+use crate::arith::{PolyArith, mpn};
+use rug::{Assign, Integer, integer::Order};
 use std::collections::HashMap;
 
 /// Products with a factor of at most this many coefficients are schoolbook.
@@ -741,7 +741,7 @@ fn middle<A: PolyArith>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arith::{with_arith, Arith};
+    use crate::arith::{Arith, with_arith};
     use rug::rand::RandState;
     use std::cell::Cell;
 

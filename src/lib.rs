@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 #![deny(rust_2018_idioms)]
+#![deny(unsafe_op_in_unsafe_fn, clippy::undocumented_unsafe_blocks)]
 #![warn(missing_docs)]
 
 mod arith;
@@ -14,7 +15,7 @@ mod rho;
 mod stage2;
 mod stage2_poly;
 
-pub use crate::ecm::{ecm, ecm_one_factor, ecm_with_params, Error};
+pub use crate::ecm::{Error, ecm, ecm_one_factor, ecm_with_params};
 
 /// Internals exposed for benchmarks only. Not part of the public API, no stability guarantees.
 #[cfg(feature = "bench")]
@@ -24,8 +25,8 @@ pub mod bench {
     pub use crate::curve::Point;
     pub use crate::driver::factor;
     pub use crate::ecm::{
-        batch2_curve, curve, random_sigma, run_curve, square_curve, stage1, stage1_multiplier,
-        stage2, suyama_curve, trial_division, CurveOutcome, Param,
+        CurveOutcome, Param, batch2_curve, curve, random_sigma, run_curve, square_curve, stage1,
+        stage1_multiplier, stage2, suyama_curve, trial_division,
     };
     pub use crate::pm1::Pm1;
     pub use crate::rho::{ecm_prob, pm1_prob};

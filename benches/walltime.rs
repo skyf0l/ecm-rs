@@ -22,9 +22,9 @@
 
 mod common;
 
-use common::{curve_point, semiprime_bits, stage2_point, PER_CURVE_ROWS, SEED};
-use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
-use ecm::bench::{stage1, stage1_multiplier, stage2, Param, Stage2Plan};
+use common::{PER_CURVE_ROWS, SEED, curve_point, semiprime_bits, stage2_point};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
+use ecm::bench::{Param, Stage2Plan, stage1, stage1_multiplier, stage2};
 use std::{hint::black_box, time::Duration};
 
 /// Benchmark id of a row: `bits_256_b1_50k`.

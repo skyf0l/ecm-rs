@@ -27,7 +27,7 @@ use crate::{
     arith::{Arith, PolyArith},
     curve::Xz,
     poly::{self, ProductTree, Workspace},
-    stage2::{baby_steps, phi, prime_factors, Elem, Normalizer, XLine},
+    stage2::{Elem, Normalizer, XLine, baby_steps, phi, prime_factors},
 };
 use rug::Integer;
 
@@ -306,9 +306,9 @@ where
 mod tests {
     use super::*;
     use crate::{
-        arith::{with_arith, Mont, Plain},
-        ecm::{curve, stage1, stage1_multiplier, stage2, Param},
-        stage2::{Stage2Plan, POLY_GIANT_STEPS},
+        arith::{Mont, Plain, with_arith},
+        ecm::{Param, curve, stage1, stage1_multiplier, stage2},
+        stage2::{POLY_GIANT_STEPS, Stage2Plan},
     };
     use primal::Primes;
 

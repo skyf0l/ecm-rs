@@ -30,12 +30,12 @@
 #[path = "../benches/common/mod.rs"]
 mod common;
 
-use common::{bounds, success_rate_number, SEED};
+use common::{SEED, bounds, success_rate_number};
 use ecm::bench::{
-    ecm_prob, random_sigma, run_curve, stage1_multiplier, CurveOutcome, Param, Stage2Plan,
+    CurveOutcome, Param, Stage2Plan, ecm_prob, random_sigma, run_curve, stage1_multiplier,
 };
-use rug::{rand::RandState, Integer};
-use serde_json::{json, Value};
+use rug::{Integer, rand::RandState};
+use serde_json::{Value, json};
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     thread,

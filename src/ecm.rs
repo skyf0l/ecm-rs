@@ -1,15 +1,15 @@
 use crate::{
-    arith::{with_arith, Arith, Factor},
+    arith::{Arith, Factor, with_arith},
     curve::{Curve, Point},
     primes::primes,
-    stage2::{stage2_with, Stage2Plan},
+    stage2::{Stage2Plan, stage2_with},
 };
 #[cfg(feature = "progress-bar")]
 use indicatif::ProgressBar;
 use rug::{
+    Integer,
     integer::IsPrime,
     rand::{RandGen, RandState},
-    Integer,
 };
 use std::collections::HashMap;
 
@@ -122,7 +122,7 @@ pub fn ecm_one_factor(
         let sigma = random_sigma(n, param, rgen);
         match run_curve(n, param, &sigma, &k, &plan) {
             CurveOutcome::Setup(g) | CurveOutcome::Stage1(g) | CurveOutcome::Stage2(g) => {
-                return Ok(g)
+                return Ok(g);
             }
             CurveOutcome::Failed => {}
         }
@@ -144,7 +144,7 @@ pub(crate) fn rand_state(seed: usize) -> RandState<'static> {
 struct SplitMix64(u64);
 
 impl RandGen for SplitMix64 {
-    fn gen(&mut self) -> u32 {
+    fn r#gen(&mut self) -> u32 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -449,8 +449,16 @@ pub fn batch2_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
 fn batch2_multiple<A: Arith>(a: A, sigma: &Integer) -> (Integer, Integer, Integer) {
     let (px, py) = (a.residue(&Integer::from(-3)), a.residue(&Integer::from(3)));
     let (mut x, mut y, mut z) = (px.clone(), py.clone(), a.residue(&Integer::from(1)));
-    let [mut t0, mut t1, mut t2, mut t3, mut t4, mut t5, mut t6, mut t7] =
-        std::array::from_fn(|_| a.zero());
+    let [
+        mut t0,
+        mut t1,
+        mut t2,
+        mut t3,
+        mut t4,
+        mut t5,
+        mut t6,
+        mut t7,
+    ] = std::array::from_fn(|_| a.zero());
     for bit in (0..sigma.significant_bits() - 1).rev() {
         // Doubling, "dbl-2009-l" (a = 0).
         a.sqr(&mut t0, &x); // A = x^2

@@ -13,7 +13,7 @@
 
 use ecm::bench::factor;
 use gungraun::{library_benchmark, library_benchmark_group, main};
-use rug::{integer::IsPrime, ops::Pow, Integer};
+use rug::{Integer, integer::IsPrime, ops::Pow};
 use std::{collections::HashMap, hint::black_box, str::FromStr};
 
 /// Factors `n` as `ecm::ecm` does, once per seed, and checks the results.
