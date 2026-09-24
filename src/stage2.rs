@@ -689,6 +689,31 @@ pub(crate) fn baby_steps<G: XLine>(
 
 /// Product `g` of stage 2, or `Err(g)` with a factor found by a failed inversion.
 fn accumulate<G: XLine>(curve: &G, q: &Xz<Elem<G>>, plan: &PairPlan) -> Result<Elem<G>, Integer> {
+    #[cfg(target_arch = "x86_64")]
+    if crate::arith::has_bmi2_adx() {
+        // SAFETY: the CPU has the features `accumulate_bmi2` is compiled for.
+        return unsafe { accumulate_bmi2(curve, q, plan) };
+    }
+    accumulate_generic(curve, q, plan)
+}
+
+/// [`accumulate`] compiled with BMI2 and ADX (see [`crate::arith::has_bmi2_adx`]).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "bmi2,adx")]
+fn accumulate_bmi2<G: XLine>(
+    curve: &G,
+    q: &Xz<Elem<G>>,
+    plan: &PairPlan,
+) -> Result<Elem<G>, Integer> {
+    accumulate_generic(curve, q, plan)
+}
+
+#[inline(always)]
+fn accumulate_generic<G: XLine>(
+    curve: &G,
+    q: &Xz<Elem<G>>,
+    plan: &PairPlan,
+) -> Result<Elem<G>, Integer> {
     let a = curve.arith();
     let wheel = &plan.wheel;
     let (d, words) = (wheel.d, wheel.words);

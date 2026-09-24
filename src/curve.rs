@@ -166,6 +166,28 @@ impl<A: Arith> Curve<A> {
 
     /// `k*P` with the Montgomery ladder, where `P = (xp : zp)`, for `k >= 1`.
     pub fn ladder(&self, xp: &Factor<A::Elem>, zp: &Factor<A::Elem>, k: &Integer) -> Xz<A::Elem> {
+        #[cfg(target_arch = "x86_64")]
+        if crate::arith::has_bmi2_adx() {
+            // SAFETY: the CPU has the features `ladder_bmi2` is compiled for.
+            return unsafe { self.ladder_bmi2(xp, zp, k) };
+        }
+        self.ladder_generic(xp, zp, k)
+    }
+
+    /// [`Curve::ladder`] compiled with BMI2 and ADX (see [`crate::arith::has_bmi2_adx`]).
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "bmi2,adx")]
+    fn ladder_bmi2(&self, xp: &Factor<A::Elem>, zp: &Factor<A::Elem>, k: &Integer) -> Xz<A::Elem> {
+        self.ladder_generic(xp, zp, k)
+    }
+
+    #[inline(always)]
+    fn ladder_generic(
+        &self,
+        xp: &Factor<A::Elem>,
+        zp: &Factor<A::Elem>,
+        k: &Integer,
+    ) -> Xz<A::Elem> {
         let a = &self.arith;
         let mut scratch = self.scratch();
         // (p, q) = (j*P, (j + 1)*P), with j the bits of k above the current one.
