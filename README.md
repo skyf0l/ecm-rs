@@ -8,6 +8,56 @@ Lenstra's Elliptic Curve Factorization Implementation with Big Integers.
 
 Based on [rug](https://crates.io/crates/rug), it can use [arbitrary-precision numbers (aka BigNum)](https://en.wikipedia.org/wiki/Arbitrary-precision_arithmetic).
 
+## Usage
+
+```rust
+use ecm::{Event, Factorizer, ecm};
+use rug::Integer;
+use std::{
+    ops::ControlFlow,
+    time::{Duration, Instant},
+};
+
+let n: Integer = "4516511326451341281684513".parse().unwrap();
+
+// Complete factorization: 3^2 * 39869 * 131743543 * 95542348571.
+let factors = ecm(&n).unwrap();
+assert_eq!(factors[&Integer::from(3)], 2);
+assert_eq!(factors.len(), 4);
+
+// With a seed, progress events and a timeout: `factor_partial` also returns what was found
+// when the factorization is interrupted (or fails).
+let deadline = Instant::now() + Duration::from_secs(60);
+let result = Factorizer::new()
+    .seed(42)
+    .on_event(|event| {
+        match event {
+            Event::Level { digits: Some(digits), curves: Some(curves), .. } => {
+                println!("factors of {digits} digits: {curves} curves");
+            }
+            Event::Factor { factor, method, .. } => println!("{factor} found by {method}"),
+            _ => {}
+        }
+        if Instant::now() < deadline {
+            ControlFlow::Continue(())
+        } else {
+            ControlFlow::Break(())
+        }
+    })
+    .factor_partial(&n);
+println!("primes: {:?}, unfactored: {:?}", result.primes, result.unfactored);
+
+// Fixed bounds (as GMP-ECM's `ecm -c 100 11000 1873422`), or only P-1.
+let factors = Factorizer::new()
+    .b1(11_000)
+    .b2(1_873_422)
+    .curves(100)
+    .factor(&n)
+    .unwrap();
+assert_eq!(factors.len(), 4);
+let factor = Factorizer::new().pm1(true).b1(100_000).find_factor(&n);
+```
+
 ## Algorithm
 
 The implementation started as a translation of sympy's, and now uses the techniques of
@@ -26,6 +76,10 @@ The implementation started as a translation of sympy's, and now uses the techniq
   probability model, and Pollard's P-1 method (with a `B1` 20 times larger) runs before each
   size. The time to find a factor depends on its size much more than on the size of the number.
 - `ecm_with_params` and `ecm_one_factor` run curves with fixed bounds.
+- `Factorizer` has all the options (seed, fixed bounds, curves, `sigma`, parametrization,
+  P-1 only, stage 2 memory), and reports events (levels, curves with their `sigma` and stage
+  durations, P-1 runs, factors and primes) to a callback, which can interrupt the
+  factorization.
 
 ## Performance
 
