@@ -6,17 +6,15 @@
 //! valid modulo any divisor of `n`.
 //!
 //! Stage 2 checks the primes `l` in `(b1, b2]` with the same continuations as ECM (see
-//! [`crate::stage2`]), on the Lucas sequence `V_k = x^k + x^-k`: `V_(k+l) = V_k*V_l - V_(k-l)`
-//! and `V_2k = V_k^2 - 2` are differential additions, and
+//! [`crate::stage2`]), on the Lucas sequence `V_k = x^k + x^-k` (see [`crate::lucas`]), with
 //! `x^(m*D) * (V_(m*D) - V_j) = (x^(m*D - j) - 1) * (x^(m*D + j) - 1)`, so `V_(m*D) = V_j`
 //! modulo `p` checks `m*D +- j` as `x(m*D*Q) = x(j*Q)` does for a curve. The identity element
 //! is `V_k = 2`, that is `x^k = 1`.
 
 use crate::{
-    arith::{Arith, PolyArith, with_arith},
-    curve::{Scratch, Xz},
     ecm::{prime_power_words, product},
-    stage2::{Normalizer, Stage2Plan, XLine, stage2_group},
+    lucas,
+    stage2::Stage2Plan,
     stop::Stop,
 };
 use rug::Integer;
@@ -116,172 +114,18 @@ impl Pm1 {
     /// requested.
     pub(crate) fn stage2_until(&self, n: &Integer, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
         let x = Integer::from(&self.x % n);
-        with_arith!(n, |arith| stage2_with(arith, &x, plan, stop))
-    }
-}
-
-fn stage2_with<A: PolyArith>(arith: A, x: &Integer, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
-    let n = arith.modulus();
-    let Ok(inv) = x.clone().invert(n) else {
-        return x.clone().gcd(n);
-    };
-    let v1 = (inv + x) % n;
-    let lucas = Lucas::new(arith);
-    let start = lucas.element(&v1);
-    stage2_group(&lucas, &start, plan, stop)
-}
-
-/// Lucas sequences `V_k = x^k + x^-k` modulo `n`, as elements `(V_k : V_k - 2)`: the second
-/// coordinate vanishes modulo `p` exactly when `x^k = 1` modulo `p`.
-struct Lucas<A: Arith> {
-    arith: A,
-    two: A::Elem,
-}
-
-impl<A: Arith> Lucas<A> {
-    fn new(arith: A) -> Self {
-        let two = arith.residue(&Integer::from(2));
-        Self { arith, two }
-    }
-
-    /// The element `V`.
-    fn element(&self, v: &Integer) -> Xz<A::Elem> {
-        let x = self.arith.residue(v);
-        let mut z = self.arith.zero();
-        self.arith.sub(&mut z, &x, &self.two);
-        Xz { x, z }
-    }
-}
-
-impl<A: Arith> XLine for Lucas<A> {
-    type A = A;
-
-    fn arith(&self) -> &A {
-        &self.arith
-    }
-
-    fn infinity(&self) -> Xz<A::Elem> {
-        Xz {
-            x: self.two.clone(),
-            z: self.arith.zero(),
-        }
-    }
-
-    fn scratch(&self) -> Scratch<A::Elem> {
-        Scratch(std::array::from_fn(|_| self.arith.zero()))
-    }
-
-    fn double(&self, r: &mut Xz<A::Elem>, p: &Xz<A::Elem>, scratch: &mut Scratch<A::Elem>) {
-        let a = &self.arith;
-        let t = &mut scratch.0[0];
-        a.sqr(t, &p.x);
-        a.sub(&mut r.x, t, &self.two);
-        a.sub(&mut r.z, &r.x, &self.two);
-    }
-
-    fn add(
-        &self,
-        r: &mut Xz<A::Elem>,
-        p: &Xz<A::Elem>,
-        q: &Xz<A::Elem>,
-        diff: &Xz<A::Elem>,
-        scratch: &mut Scratch<A::Elem>,
-    ) {
-        let a = &self.arith;
-        let t = &mut scratch.0[0];
-        a.mul(t, &p.x, &q.x);
-        a.sub(&mut r.x, t, &diff.x);
-        a.sub(&mut r.z, &r.x, &self.two);
-    }
-
-    fn multiple(&self, p: &Xz<A::Elem>, k: &Integer) -> Xz<A::Elem> {
-        let a = &self.arith;
-        // (u, w) = (V_j, V_(j + 1)), with j the bits of k above the current one.
-        let mut u = p.x.clone();
-        let mut w = a.zero();
-        let mut t = a.zero();
-        a.sqr(&mut t, &u);
-        a.sub(&mut w, &t, &self.two);
-        for bit in (0..k.significant_bits().saturating_sub(1)).rev() {
-            a.mul(&mut t, &u, &w);
-            if k.get_bit(bit) {
-                a.sub(&mut u, &t, &p.x);
-                a.sqr(&mut t, &w);
-                a.sub(&mut w, &t, &self.two);
-            } else {
-                a.sub(&mut w, &t, &p.x);
-                a.sqr(&mut t, &u);
-                a.sub(&mut u, &t, &self.two);
-            }
-        }
-        let mut z = a.zero();
-        a.sub(&mut z, &u, &self.two);
-        Xz { x: u, z }
-    }
-
-    /// The `x` are already normalized: only checks that no `z` shares a factor with `n`, with a
-    /// product and a single gcd.
-    fn normalize(
-        &self,
-        _normalizer: &mut Normalizer<A::Elem>,
-        _x: &mut [A::Elem],
-        z: &[A::Elem],
-    ) -> Result<(), Integer> {
-        let a = &self.arith;
-        let (mut acc, mut t) = (a.residue(&Integer::from(1)), a.zero());
-        for z in z {
-            a.mul(&mut t, &acc, z);
-            std::mem::swap(&mut acc, &mut t);
-        }
-        let g = a.gcd(&acc);
-        let n = a.modulus();
-        if g == 1 {
-            Ok(())
-        } else if &g != n {
-            Err(g)
-        } else {
-            Err(z
-                .iter()
-                .map(|z| a.gcd(z))
-                .find(|g| *g != 1 && g != n)
-                .unwrap_or(g))
-        }
+        let Ok(inv) = x.clone().invert(n) else {
+            return x.gcd(n);
+        };
+        lucas::stage2(n, &((inv + x) % n), plan, stop)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arith::{Mont, Plain};
     use primal::Primes;
     use rug::{ops::Pow, rand::RandState};
-
-    #[test]
-    fn lucas_multiples() {
-        fn check<A: Arith>(lucas: &Lucas<A>, n: &Integer, v: &dyn Fn(u32) -> Integer) {
-            let a = &lucas.arith;
-            let p = lucas.element(&v(1));
-            let mut scratch = lucas.scratch();
-            let (mut r, mut s) = (lucas.infinity(), lucas.infinity());
-            lucas.double(&mut r, &p, &mut scratch);
-            assert_eq!(a.to_integer(&r.x), v(2));
-            lucas.add(&mut s, &r, &p, &p, &mut scratch);
-            assert_eq!(a.to_integer(&s.x), v(3));
-            assert_eq!(a.to_integer(&s.z), (v(3) + n - 2u32) % n);
-            for k in [1, 2, 3, 4, 5, 6, 7, 100, 1000, 65_537, 1_234_567] {
-                let m = lucas.multiple(&p, &Integer::from(k));
-                assert_eq!(a.to_integer(&m.x), v(k), "{k}");
-            }
-        }
-        let n = Integer::from(1_000_000_007u64) * Integer::from(998_244_353u64);
-        let x = Integer::from(123_456_789);
-        let v = |k: u32| {
-            let a = x.clone().pow_mod(&Integer::from(k), &n).unwrap();
-            (Integer::from(a.invert_ref(&n).unwrap()) + a) % &n
-        };
-        check(&Lucas::new(Mont::<2>::new(&n)), &n, &v);
-        check(&Lucas::new(Plain::new(&n)), &n, &v);
-    }
 
     #[test]
     fn stage1_resumes() {

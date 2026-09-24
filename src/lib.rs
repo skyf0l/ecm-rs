@@ -11,6 +11,7 @@ mod driver;
 mod ecm;
 mod events;
 mod factorizer;
+mod lucas;
 mod pm1;
 mod poly;
 mod primes;
