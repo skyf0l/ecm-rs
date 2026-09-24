@@ -12,8 +12,10 @@ categories = ["mathematics"]
 keywords = ["number-theory", "primes", "lenstra", "ECM", "bignum"]
 include = [
   "benches/**/*",
+  "CHANGELOG.md",
   "examples/**/*",
   "src/**/*",
+  "tests/**/*",
   "Cargo.toml",
   "COPYING*",
   "LICENSE*",
