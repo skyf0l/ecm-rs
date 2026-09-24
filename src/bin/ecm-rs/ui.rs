@@ -146,6 +146,15 @@ impl Ui {
                 let next = self.first.unwrap_or(Algorithm::Ecm);
                 self.spinner(format!("{next} on C{}", digits(cofactor)));
             }
+            Event::Base2 { k, .. } => {
+                if self.verbose > 0 {
+                    let sign = if k > 0 { '+' } else { '-' };
+                    let k = k.unsigned_abs();
+                    self.line(&format!(
+                        "Using special division for factor of 2^{k}{sign}1"
+                    ));
+                }
+            }
             Event::Pm1 {
                 n,
                 b1,
