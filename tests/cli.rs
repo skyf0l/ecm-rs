@@ -168,6 +168,11 @@ fn usage_errors() {
         &["--b1", "11000", "--sigma", "1:1", "15"],
         &["--b1", "4", "15"],
         &["--pm1", "--b1", "1000", "--sigma", "7", "15"],
+        &["--pp1", "--b1", "1000", "--sigma", "7", "15"],
+        &["--pm1", "--pp1", "15"],
+        &["--x0", "2/7", "15"],
+        &["--pp1", "--x0", "2/0", "15"],
+        &["--pp1", "--x0", "a", "15"],
         &["--primetest", "--one", "15"],
         &["-q", "-v", "15"],
     ] {
@@ -253,6 +258,39 @@ fn pm1_only() {
         "147573952589676412927 = 147573952589676412927 (composite)\n"
     );
     assert_eq!(code, 0);
+}
+
+#[test]
+fn pp1_only() {
+    // p + 1 = 2^2 * 3 * 5813 * 14683 * 18691 * 35089 * 39227 * 300017: GMP-ECM 7.0.7's
+    // `ecm -pp1 -x0 2/7 40000 400000` finds p in step 2, as with 6/5 and 3; not with 4 (the
+    // group of order p - 1).
+    let p = "7905527545387271831388442067";
+    let n = format!("{p}*(10^30+57)");
+    let (code, out, err) = run(&["--pp1", "--b1", "40000", "--b2", "400000", "-v", &n]);
+    assert!(out.contains(&format!(" = {p} * ")), "{out}");
+    assert!(
+        err.contains("P+1 on C58: B1=40000, B2=400000, x0=2/7"),
+        "{err}"
+    );
+    assert!(err.contains("Factor found by P+1 stage 2"), "{err}");
+    assert!(!err.contains("[factor found by P-1]"), "{err}");
+    assert!(!err.contains("Curve"), "{err}");
+    assert_eq!(code, 14);
+    for (x0, found) in [("6/5", true), ("3", true), ("4", false), ("-4/1", false)] {
+        let args = ["--pp1", "--x0", x0, "--b1", "40000", "--b2", "400000", &n];
+        let (_, out, _) = run(&args);
+        assert_eq!(out.contains(&format!(" = {p} * ")), found, "{x0}: {out}");
+    }
+    // Without bounds: P+1 alone, with the P-1 bounds of the levels.
+    let (code, out, _) = run(&["--pp1", &n]);
+    assert!(out.contains(&format!(" = {p} * ")), "{out}");
+    assert_eq!(code, 14);
+    // A factor p = 1 mod 3 with a smooth p - 1: found by P+1 with the seed 2/7, in the group
+    // of order p - 1 (193707721 - 1 = 2^3 * 3^3 * 5 * 11 * 11 * 107 * ...).
+    let (_, out, err) = run(&["--pp1", "--b1", "6000", "-v", "2^67-1"]);
+    assert_eq!(out, "147573952589676412927 = 193707721 * 761838257287\n");
+    assert!(err.contains("[factor found by P-1]"), "{err}");
 }
 
 #[test]

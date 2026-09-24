@@ -39,8 +39,8 @@ the next one.
 
 Output (stdout), one line per number: \"N = p1^e1 * p2 * ...\", in increasing order, where N is \
 the number in decimal. Every factor is a (probable) prime, except the parts marked \
-\"(composite)\" when the factorization is incomplete (--one, --timeout, Ctrl-C, --curves or \
---pm1 exhausted). Diagnostics, -v lines and the progress bar go to stderr.";
+\"(composite)\" when the factorization is incomplete (--one, --timeout, Ctrl-C, --curves, \
+--pm1 or --pp1 exhausted). Diagnostics, -v lines and the progress bar go to stderr.";
 
 const AFTER_LONG_HELP: &str = "\
 GMP-ECM equivalents:
@@ -51,6 +51,9 @@ GMP-ECM equivalents:
   ecm -param 0 B1              ecm-rs --b1 B1 -c 1 --param 0
   ecm -one ...                 ecm-rs --one ...
   ecm -pm1 B1 B2               ecm-rs --pm1 --b1 B1 --b2 B2
+  ecm -pp1 -x0 2/7 B1 B2       ecm-rs --pp1 --b1 B1 --b2 B2   (x0 = 2/7 by default; GMP-ECM:
+                                 random, which finds a smooth p+1 half of the time)
+  ecm -pm1/-pp1 -x0 X ...      ecm-rs --pm1/--pp1 --x0 X ...
   ecm -maxmem MB               ecm-rs --maxmem MB
   ecm -primetest               ecm-rs --primetest
   ecm -printconfig             ecm-rs --printconfig
@@ -112,8 +115,18 @@ pub struct Cli {
     pub one: bool,
 
     /// Runs only Pollard's P-1 method (with --b1: once per composite part).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "pp1")]
     pub pm1: bool,
+
+    /// Runs only Williams' P+1 method (with --b1: once per composite part): finds the factors
+    /// p with a smooth p+1 (or p-1, depending on p and the seed).
+    #[arg(long)]
+    pub pp1: bool,
+
+    /// Starting value of P-1 or P+1, an integer or a fraction "N/D" (as GMP-ECM's -x0)
+    /// [default: 3 for P-1, 2/7 for P+1].
+    #[arg(long, value_name = "X", value_parser = parse_x0, allow_hyphen_values = true)]
+    pub x0: Option<(Integer, Integer)>,
 
     /// Seed of the random curves [default: fixed, the results are reproducible].
     #[arg(long, value_name = "SEED")]
@@ -133,7 +146,7 @@ pub struct Cli {
     pub maxmem: Option<usize>,
 
     /// Only tests whether each number is prime: prints "N: prime" or "N: composite".
-    #[arg(long, conflicts_with_all = ["one", "pm1", "b1"])]
+    #[arg(long, conflicts_with_all = ["one", "pm1", "pp1", "b1"])]
     pub primetest: bool,
 
     /// Prints the configuration (versions, arithmetic by size, CPU extensions) and exits.
@@ -145,7 +158,7 @@ pub struct Cli {
     pub quiet: bool,
 
     /// Prints the steps (as GMP-ECM's -v) on stderr: levels, curves with their sigma and
-    /// stage times, P-1 runs, factors found. Twice: also the prime factors as they are found.
+    /// stage times, P-1 and P+1 runs, factors found. Twice: also the prime factors as they are found.
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
@@ -196,6 +209,18 @@ fn parse_sigma(s: &str) -> Result<(Option<u8>, Integer), String> {
         .parse::<Integer>()
         .map_err(|_| format!("invalid sigma '{sigma}'"))?;
     Ok((param, sigma))
+}
+
+/// `N` or `N/D` (integers, `D != 0`).
+fn parse_x0(s: &str) -> Result<(Integer, Integer), String> {
+    let invalid = || format!("invalid x0 '{s}' (an integer or N/D)");
+    let (num, den) = s.split_once('/').unwrap_or((s, "1"));
+    let num = num.trim().parse::<Integer>().map_err(|_| invalid())?;
+    let den = den.trim().parse::<Integer>().map_err(|_| invalid())?;
+    if den == 0 {
+        return Err(format!("invalid x0 '{s}': zero denominator"));
+    }
+    Ok((num, den))
 }
 
 fn parse_timeout(s: &str) -> Result<Duration, String> {
