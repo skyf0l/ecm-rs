@@ -9,7 +9,7 @@ mod ui;
 
 use args::{Cli, status};
 use clap::{Parser, error::ErrorKind};
-use ecm::{Error, Factorizer, Param};
+use ecm::{Algorithm, Error, Factorizer, Param};
 use rug::Integer;
 use serde_json::{Value, json};
 use std::{
@@ -112,7 +112,10 @@ fn factorizer(cli: &Cli) -> Result<Factorizer, String> {
         (Some(p), _) | (None, &Some((Some(p), _))) => Some(p),
         _ => None,
     };
-    let mut f = Factorizer::new().pm1(cli.pm1);
+    let mut f = Factorizer::new();
+    if cli.pm1 {
+        f = f.algorithm(Algorithm::Pm1);
+    }
     if let Some(p) = param {
         f = f.param(Param::try_from(p).map_err(|e| e.to_string())?);
     }

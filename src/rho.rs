@@ -18,6 +18,12 @@ const ECM_EXTRA_SMOOTHNESS: f64 = 3.134;
 #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
 const PM1_EXTRA_SMOOTHNESS: f64 = 1.2269688;
 
+/// Extra smoothness of the group orders of P+1 with the seed `2/7`, multiples of 6 (Alexander
+/// Kruppa's doctoral thesis; GMP-ECM itself uses [`PM1_EXTRA_SMOOTHNESS`] for P+1, the average of
+/// random seeds).
+#[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
+const PP1_EXTRA_SMOOTHNESS: f64 = 2.05093;
+
 /// Euler-Mascheroni constant.
 const EULER: f64 = 0.577_215_664_901_532_9;
 
@@ -43,6 +49,16 @@ pub fn ecm_prob(b1: f64, b2: f64, digits: f64) -> f64 {
 #[must_use]
 pub fn pm1_prob(b1: f64, b2: f64, digits: f64) -> f64 {
     prob(b1, b2, 10f64.powf(digits - 0.5), PM1_EXTRA_SMOOTHNESS)
+}
+
+/// Probability that P+1 with the seed `2/7` and bounds `b1` and `b2` finds a given prime factor
+/// `p` of `digits` decimal digits. Half of it is for the primes `p = 1 mod 3`, where P+1 works
+/// in the group of order `p - 1`, as P-1: after P-1 with at least the same bounds, P+1 only
+/// adds (about) half of this probability.
+#[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
+#[must_use]
+pub fn pp1_prob(b1: f64, b2: f64, digits: f64) -> f64 {
+    prob(b1, b2, 10f64.powf(digits - 0.5), PP1_EXTRA_SMOOTHNESS)
 }
 
 /// Probability that a number around `n/e^delta` is `b1`-smooth but for at most one prime factor
@@ -278,6 +294,9 @@ mod tests {
         for (digits, p) in [(20.0, 0.18), (25.0, 0.039), (30.0, 0.0063), (35.0, 0.00078)] {
             let prob = pm1_prob(1e6, 1_748_900_148.0, digits);
             assert!((prob / p - 1.0).abs() < 0.05, "{digits}: {prob}");
+            // Orders multiple of 6: more often smooth.
+            let pp1 = pp1_prob(1e6, 1_748_900_148.0, digits);
+            assert!(pp1 > 1.05 * prob && pp1 < 1.5 * prob, "{digits}: {pp1}");
         }
     }
 }

@@ -10,7 +10,8 @@ use std::{collections::HashMap, fmt, ops::ControlFlow, time::Duration};
 ///
 /// Order of the events of [`crate::Factorizer::factor`]: [`Event::TrialDivision`] first, with
 /// the [`Event::Prime`] events of its factors, then for each composite part, the searches
-/// ([`Event::Pm1`], [`Event::Level`] followed by its [`Event::Curve`] events), until a
+/// ([`Event::Pm1`] or [`Event::Pp1`], [`Event::Level`] followed by its [`Event::Curve`] events),
+/// until a
 /// [`Event::Factor`] splits it, followed by the [`Event::Prime`] (and [`Event::Factor`] for a
 /// perfect power) events of the parts. The [`Event::Prime`] events together are the complete
 /// factorization: the product of `p^exponent` over them is the number.
@@ -29,6 +30,21 @@ pub enum Event<'a> {
     /// Pollard's P-1 method ran on `n`.
     #[non_exhaustive]
     Pm1 {
+        /// The composite number searched.
+        n: &'a Integer,
+        /// Stage 1 bound (stage 1 resumes from the previous bound on the same number).
+        b1: usize,
+        /// Stage 2 bound (every prime up to it is covered), `None` if stage 2 did not run
+        /// (stage 1 found a factor, or all the factors at once).
+        b2: Option<usize>,
+        /// Duration of stage 1.
+        stage1: Duration,
+        /// Duration of stage 2.
+        stage2: Duration,
+    },
+    /// Williams' P+1 method ran on `n` (see [`crate::Algorithm::Pp1`]).
+    #[non_exhaustive]
+    Pp1 {
         /// The composite number searched.
         n: &'a Integer,
         /// Stage 1 bound (stage 1 resumes from the previous bound on the same number).
@@ -109,6 +125,10 @@ pub enum Method {
     Pm1Stage1,
     /// Stage 2 of Pollard's P-1 method.
     Pm1Stage2,
+    /// Stage 1 of Williams' P+1 method (or the seed, not defined modulo a factor).
+    Pp1Stage1,
+    /// Stage 2 of Williams' P+1 method.
+    Pp1Stage2,
     /// Building a curve (a failed modular inversion).
     EcmSetup,
     /// Stage 1 of a curve.
@@ -124,6 +144,8 @@ impl fmt::Display for Method {
             Self::PerfectPower => "perfect power",
             Self::Pm1Stage1 => "P-1 stage 1",
             Self::Pm1Stage2 => "P-1 stage 2",
+            Self::Pp1Stage1 => "P+1 stage 1",
+            Self::Pp1Stage2 => "P+1 stage 2",
             Self::EcmSetup => "ECM curve setup",
             Self::EcmStage1 => "ECM stage 1",
             Self::EcmStage2 => "ECM stage 2",

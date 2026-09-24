@@ -1,6 +1,8 @@
 //! The public `Factorizer` API: events, cancellation, fixed bounds, determinism.
 
-use ecm::{Error, Event, Factorization, Factorizer, Method, Param, ecm, ecm_with_params};
+use ecm::{
+    Algorithm, Error, Event, Factorization, Factorizer, Method, Param, ecm, ecm_with_params,
+};
 use rug::{Integer, ops::Pow};
 use std::{
     collections::HashMap,
@@ -23,6 +25,7 @@ fn int(s: &str) -> Integer {
 enum Owned {
     TrialDivision(HashMap<Integer, usize>, Integer),
     Pm1(Integer, usize, Option<usize>),
+    Pp1(Integer, usize, Option<usize>),
     Level(Integer, Option<u32>, usize, usize, Option<usize>, usize),
     Curve(Integer, Param, Integer, usize),
     Factor(Integer, Integer, Method),
@@ -45,6 +48,18 @@ fn owned(event: &Event<'_>) -> Owned {
             assert!(b2.is_some() || stage2 == Duration::ZERO);
             assert!(stage1 > Duration::ZERO);
             Owned::Pm1(n.clone(), b1, b2)
+        }
+        Event::Pp1 {
+            n,
+            b1,
+            b2,
+            stage1,
+            stage2,
+            ..
+        } => {
+            assert!(b2.is_some() || stage2 == Duration::ZERO);
+            assert!(stage1 > Duration::ZERO);
+            Owned::Pp1(n.clone(), b1, b2)
         }
         Event::Level {
             n,
@@ -139,7 +154,7 @@ fn check_events(n: &Integer, factors: &HashMap<Integer, usize>, events: &[Owned]
                 assert_eq!(*index, last_curve + 1);
                 last_curve = *index;
             }
-            Owned::Pm1(m, b1, b2) => {
+            Owned::Pm1(m, b1, b2) | Owned::Pp1(m, b1, b2) => {
                 assert!(n.is_divisible(m));
                 assert!(b2.is_none_or(|b2| b2 > *b1));
                 level = None;
@@ -281,9 +296,11 @@ fn interruptions() {
     interrupt(&n, Factorizer::new().b1(11_000), |e| {
         matches!(e, Owned::Curve(_, _, _, 5))
     });
-    interrupt(&n, Factorizer::new().b1(11_000).pm1(true), |e| {
-        matches!(e, Owned::Pm1(..))
-    });
+    interrupt(
+        &n,
+        Factorizer::new().b1(11_000).algorithm(Algorithm::Pm1),
+        |e| matches!(e, Owned::Pm1(..)),
+    );
 
     // Interrupted while a factor was found: the factor is kept.
     let n = sample();
@@ -422,7 +439,7 @@ fn pm1_only() {
     let p = int("1326262092842391910564284053");
     let n = Integer::from(10).pow(100) + 267u32;
     let n = Integer::from(&p * &n);
-    let pm1 = |b1, b2| Factorizer::new().pm1(true).b1(b1).b2(b2);
+    let pm1 = |b1, b2| Factorizer::new().algorithm(Algorithm::Pm1).b1(b1).b2(b2);
     let (result, events) = record(pm1(40_000, 400_000), &n, |_| false);
     assert_eq!(result.error, None);
     assert!(events.contains(&Owned::Factor(n.clone(), p.clone(), Method::Pm1Stage2)));
@@ -430,13 +447,67 @@ fn pm1_only() {
     assert_eq!(pm1(400_000, 400_000).find_factor(&n), Ok(p.clone()));
     assert_eq!(pm1(40_000, 200_000).find_factor(&n), Err(Error::ECMFailed));
     // Without fixed bounds: P-1 of the levels only.
-    let (result, events) = record(Factorizer::new().pm1(true), &n, |_| false);
+    let (result, events) = record(Factorizer::new().algorithm(Algorithm::Pm1), &n, |_| false);
     assert_eq!(result.error, None);
     assert!(
         !events
             .iter()
             .any(|e| matches!(e, Owned::Curve(..) | Owned::Level(..)))
     );
+}
+
+#[test]
+fn pp1_only() {
+    // p + 1 = 2^2 * 3 * 5813 * 14683 * 18691 * 35089 * 39227 * 300017, p - 1 has a 23-digit
+    // prime factor.
+    let p = int("7905527545387271831388442067");
+    let n = Integer::from(10).pow(100) + 267u32;
+    let n = Integer::from(&p * &n);
+    let pp1 = |b1, b2| Factorizer::new().algorithm(Algorithm::Pp1).b1(b1).b2(b2);
+    let (result, events) = record(pp1(40_000, 400_000), &n, |_| false);
+    assert_eq!(result.error, None);
+    assert!(events.contains(&Owned::Pp1(n.clone(), 40_000, Some(400_000))));
+    assert!(events.contains(&Owned::Factor(n.clone(), p.clone(), Method::Pp1Stage2)));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Owned::Curve(..) | Owned::Pm1(..)))
+    );
+    let (_, events) = record(pp1(400_000, 400_000), &n, |_| false);
+    assert!(events.contains(&Owned::Factor(n.clone(), p.clone(), Method::Pp1Stage1)));
+    assert_eq!(pp1(40_000, 200_000).find_factor(&n), Err(Error::ECMFailed));
+    // P-1 does not find it.
+    let pm1 = Factorizer::new()
+        .algorithm(Algorithm::Pm1)
+        .b1(400_000)
+        .b2(4_000_000);
+    assert_eq!(pm1.clone().find_factor(&n), Err(Error::ECMFailed));
+    // The seeds: 6/5 and 3 work in the group of order p + 1 too, 4 in the one of order p - 1.
+    let seed = |num: u32, den: u32| pp1(40_000, 400_000).x0(num.into(), den.into());
+    assert_eq!(seed(6, 5).find_factor(&n), Ok(p.clone()));
+    assert_eq!(seed(3, 1).find_factor(&n), Ok(p.clone()));
+    assert_eq!(seed(4, 1).find_factor(&n), Err(Error::ECMFailed));
+    // A seed not defined modulo p: its denominator is a factor.
+    let q = Integer::from(1_000_003);
+    let m = Integer::from(&q * &p);
+    assert_eq!(
+        pp1(40_000, 400_000).x0(1.into(), q.clone()).find_factor(&m),
+        Ok(q.clone())
+    );
+    // Without fixed bounds: P+1 with the P-1 bounds of the levels only (B1 = 40000 at the
+    // second one).
+    let (result, events) = record(Factorizer::new().algorithm(Algorithm::Pp1), &n, |_| false);
+    assert_eq!(result.error, None);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Owned::Curve(..) | Owned::Level(..) | Owned::Pm1(..)))
+    );
+    assert!(events.contains(&Owned::Factor(n.clone(), p.clone(), Method::Pp1Stage2)));
+    // The starting value of P-1 (x0 = 1 finds all the factors at once: none).
+    let pm1 = |num: i32| pm1.clone().x0(num.into(), 1.into());
+    assert_eq!(pm1(1).find_factor(&n), Err(Error::ECMFailed));
+    assert_eq!(pm1(5).find_factor(&n), Err(Error::ECMFailed));
 }
 
 #[test]
@@ -469,7 +540,23 @@ fn invalid_options() {
         Factorizer::new().b2(1000),
         Factorizer::new().curves(10),
         Factorizer::new().sigma(Integer::from(7)),
-        Factorizer::new().b1(2000).pm1(true).sigma(Integer::from(7)),
+        Factorizer::new()
+            .b1(2000)
+            .algorithm(Algorithm::Pm1)
+            .sigma(Integer::from(7)),
+        Factorizer::new()
+            .b1(2000)
+            .algorithm(Algorithm::Pp1)
+            .sigma(Integer::from(7)),
+        Factorizer::new().x0(2.into(), 7.into()),
+        Factorizer::new().b1(2000).x0(2.into(), 7.into()),
+        Factorizer::new()
+            .algorithm(Algorithm::Pp1)
+            .x0(2.into(), 0.into()),
+        Factorizer::new()
+            .algorithm(Algorithm::Pm1)
+            .b1(2000)
+            .x0(2.into(), 0.into()),
         Factorizer::new().b1(2000).sigma(Integer::from(1)),
         Factorizer::new().b1(2000).sigma(Integer::from(1) << 64),
         Factorizer::new()
@@ -577,8 +664,29 @@ fn interrupt_flag_is_prompt() {
         (Factorizer::new().b1(11_000).b2(b2), 400),
         (Factorizer::new().b1(11_000).b2(b2), 900),
         // Stage 1 of P-1, then stage 2.
-        (Factorizer::new().pm1(true).b1(20_000_000), 300),
-        (Factorizer::new().pm1(true).b1(100_000).b2(b2), 300),
+        (
+            Factorizer::new().algorithm(Algorithm::Pm1).b1(20_000_000),
+            300,
+        ),
+        (
+            Factorizer::new()
+                .algorithm(Algorithm::Pm1)
+                .b1(100_000)
+                .b2(b2),
+            300,
+        ),
+        // Stage 1 of P+1, then stage 2.
+        (
+            Factorizer::new().algorithm(Algorithm::Pp1).b1(20_000_000),
+            300,
+        ),
+        (
+            Factorizer::new()
+                .algorithm(Algorithm::Pp1)
+                .b1(100_000)
+                .b2(b2),
+            300,
+        ),
         // The first level: P-1, then curves.
         (Factorizer::new(), 300),
     ] {
