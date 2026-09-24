@@ -12,16 +12,8 @@
 
 use rug::{Assign, Integer, integer::Order};
 
-/// Largest number of 64-bit limbs handled by [`Mont`]; larger moduli use [`Plain`].
-pub const MAX_LIMBS: usize = 16;
-
-/// Smallest number of limbs from which [`Mont`] multiplies and squares with GMP's `mpn`
-/// functions (a product, then a Montgomery reduction) instead of its own code.
-///
-/// Measured in stage 1: GMP's squaring is faster from 11 limbs up, and the multiplications cost
-/// the same, but GMP's compiled code does not depend on the build profile, while our unrolled
-/// CIOS got up to 30% slower from 13 limbs up with `lto = "fat"` and `codegen-units = 1`.
-const GMP_LIMBS: usize = 11;
+use crate::config::GMP_LIMBS;
+pub use crate::config::MAX_LIMBS;
 
 /// Arithmetic modulo a fixed `n`, on residues of type [`Arith::Elem`].
 ///
@@ -217,7 +209,7 @@ pub fn has_bmi2_adx() -> bool {
     if GENERIC_ONLY.get() {
         return false;
     }
-    std::is_x86_feature_detected!("bmi2") && std::is_x86_feature_detected!("adx")
+    crate::config::bmi2_adx_detected()
 }
 
 #[cfg(all(test, target_arch = "x86_64"))]
@@ -493,11 +485,8 @@ impl<const N: usize> Arith for Mont<N> {
 pub(crate) mod mpn {
     use gmp_mpfr_sys::gmp;
 
-    /// Whether GMP's limbs are our 64-bit limbs (and `mpn_redc_1` returns its carry, from GMP
-    /// 5.1); if not, these functions must not be called.
-    pub const ENABLED: bool = gmp::LIMB_BITS == 64
-        && gmp::NAIL_BITS == 0
-        && (gmp::VERSION > 5 || (gmp::VERSION == 5 && gmp::VERSION_MINOR >= 1));
+    /// Whether GMP's limbs are our 64-bit limbs: if not, these functions must not be called.
+    pub const ENABLED: bool = crate::config::MPN_ENABLED;
 
     unsafe extern "C" {
         /// `mpn_redc_1(rp, up, mp, n, invm)`: Montgomery reduction by `n` limbs of the `2n`
