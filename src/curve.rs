@@ -22,8 +22,9 @@ pub struct Point {
 
 impl Point {
     /// Point `(2 : 1)`, the starting point of GMP-ECM's parametrizations 1 and 2.
-    pub fn start(a24: Integer, n: &Integer) -> Point {
-        Point {
+    #[must_use]
+    pub fn start(a24: Integer, n: &Integer) -> Self {
+        Self {
             x: 2.into(),
             z: 1.into(),
             a24,
@@ -52,7 +53,7 @@ impl<A: Arith> Curve<A> {
     /// Curve with parameter `a24 = (a + 2)/4`.
     pub fn new(arith: A, a24: &Integer) -> Self {
         let a24 = arith.factor(a24);
-        Curve { arith, a24 }
+        Self { arith, a24 }
     }
 
     /// Point with the given coordinates.

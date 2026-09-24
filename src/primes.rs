@@ -38,8 +38,8 @@ impl Iterator for PrimesUpTo {
     #[inline]
     fn next(&mut self) -> Option<usize> {
         match self {
-            PrimesUpTo::Small(primes) => primes.next().map(|p| p as usize),
-            PrimesUpTo::Large(primes, hi) => primes.next().filter(|p| p <= hi),
+            Self::Small(primes) => primes.next().map(|p| p as usize),
+            Self::Large(primes, hi) => primes.next().filter(|p| p <= hi),
         }
     }
 }

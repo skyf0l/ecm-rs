@@ -202,7 +202,7 @@ fn reduce(x: &Integer, n: &Integer) -> Integer {
 /// `lo + a * b + carry`, as `(low limb, high limb)`: never overflows.
 #[inline(always)]
 fn mac(lo: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
-    let t = lo as u128 + a as u128 * b as u128 + carry as u128;
+    let t = u128::from(lo) + u128::from(a) * u128::from(b) + u128::from(carry);
     (t as u64, (t >> 64) as u64)
 }
 
@@ -211,7 +211,7 @@ fn mac(lo: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
 fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
     let (s, c1) = a.overflowing_add(b);
     let (s, c2) = s.overflowing_add(carry);
-    (s, (c1 | c2) as u64)
+    (s, u64::from(c1 | c2))
 }
 
 /// `a - b - borrow` (borrow is 0 or 1), as `(difference, borrow out)`.
@@ -219,7 +219,7 @@ fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
 fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
     let (d, b1) = a.overflowing_sub(b);
     let (d, b2) = d.overflowing_sub(borrow);
-    (d, (b1 | b2) as u64)
+    (d, u64::from(b1 | b2))
 }
 
 /// Montgomery arithmetic modulo an odd `n` of at most `N` limbs.
@@ -246,7 +246,7 @@ impl<const N: usize> Mont<N> {
         }
         let mut to_poly = Integer::from(1) << (64 * N as u32 + 64);
         to_poly %= n;
-        Mont {
+        Self {
             m,
             ninv: inv.wrapping_neg(),
             to_poly: Self::limbs(&to_poly),
@@ -283,7 +283,7 @@ impl<const N: usize> Mont<N> {
         // t = (t_hi, t_n, t[N-1..0]) < 2n at the end of every iteration.
         let mut t = [0u64; N];
         let mut t_n = 0u64;
-        for &bi in b.iter() {
+        for &bi in b {
             let mut c = 0;
             for j in 0..N {
                 (t[j], c) = mac(t[j], a[j], bi, c);
@@ -354,9 +354,9 @@ impl<const N: usize> Arith for Mont<N> {
     #[inline(always)]
     fn mul(&self, r: &mut [u64; N], a: &[u64; N], b: &[u64; N]) {
         if mpn::ENABLED && N >= GMP_LIMBS {
-            self.gmp_mul(r, a, Some(b))
+            self.gmp_mul(r, a, Some(b));
         } else {
-            self.cios(r, a, b)
+            self.cios(r, a, b);
         }
     }
 
@@ -584,7 +584,7 @@ pub(crate) mod mpn {
                 a.as_ptr().cast(),
                 b.as_ptr().cast(),
                 a.len() as gmp::size_t,
-            )
+            );
         }
     }
 
@@ -598,7 +598,7 @@ pub(crate) mod mpn {
                 r.as_mut_ptr().cast(),
                 a.as_ptr().cast(),
                 a.len() as gmp::size_t,
-            )
+            );
         }
     }
 
@@ -634,7 +634,7 @@ pub struct Plain {
 impl Plain {
     /// Arithmetic modulo `n > 0`.
     pub fn new(n: &Integer) -> Self {
-        Plain { n: n.clone() }
+        Self { n: n.clone() }
     }
 }
 
@@ -855,8 +855,9 @@ impl PolyArith for Plain {
     }
 }
 
-/// A chain of modular multiplications or squarings on fixed residues, dispatched like the curve
-/// code (Montgomery up to 16 limbs, plain integers above), for benchmarks: the setup
+/// A chain of modular multiplications or squarings on fixed residues, for benchmarks.
+///
+/// Dispatched like the curve code (Montgomery up to 16 limbs, plain integers above): the setup
 /// (conversion to the internal representation) is done by [`ArithBatch::new`], and
 /// [`ArithBatch::run`] only computes.
 #[cfg(feature = "bench")]
@@ -894,22 +895,29 @@ impl<A: Arith> BatchRun for Batch<A> {
 #[cfg(feature = "bench")]
 impl ArithBatch {
     /// Arithmetic modulo `n` (the implementation the curve code would use), on the residues of
-    /// `values` (at least one).
+    /// `values`.
+    ///
+    /// # Panics
+    ///
+    /// If `values` is empty.
+    #[must_use]
     pub fn new(n: &Integer, values: &[Integer]) -> Self {
         assert!(!values.is_empty());
         with_arith!(n, |arith| {
             let values = values.iter().map(|x| arith.residue(x)).collect();
-            ArithBatch(Box::new(Batch { arith, values }))
+            Self(Box::new(Batch { arith, values }))
         })
     }
 
     /// Number of limbs of the Montgomery implementation used, or `0` for plain integers.
+    #[must_use]
     pub fn limbs(n: &Integer) -> usize {
         mont_limbs(n)
     }
 
     /// `ops` chained multiplications `acc = acc * values[i % len]` (or squarings `acc = acc^2`)
     /// from `acc = values[0]`: returns the final `acc`.
+    #[must_use]
     pub fn run(&self, ops: usize, square: bool) -> Integer {
         self.0.run(ops, square)
     }
@@ -1056,7 +1064,7 @@ mod tests {
             assert_eq!(a.to_integer(&ex), *x, "residue {x} mod {n}");
             a.sqr(&mut r, &ex);
             assert_eq!(a.to_integer(&r), Integer::from(x * x) % &n, "{x}^2 mod {n}");
-            for c in [1, 2, u64::MAX - 1, u64::MAX, rand.bits(32) as u64] {
+            for c in [1, 2, u64::MAX - 1, u64::MAX, u64::from(rand.bits(32))] {
                 // One-limb form `c` of `c/2^64` (Mont) or of `c` (Plain).
                 let c_int = Integer::from(c);
                 for y in [&c_int * inverse_r(&n) % &n, c_int % &n] {
@@ -1126,7 +1134,7 @@ mod tests {
     fn inverse_r(n: &Integer) -> Integer {
         Integer::from(Integer::u_pow_u(2, 64))
             .invert(n)
-            .unwrap_or(Integer::from(1))
+            .unwrap_or_else(|_| Integer::from(1))
     }
 
     #[test]
