@@ -120,7 +120,8 @@ impl<H: EventHandler> Factorizer<H> {
 
     /// Parameter of the first curve with fixed bounds, instead of a random one (the next curves
     /// take `sigma + 1`, `sigma + 2`, ...), in the range of the parametrization (see
-    /// [`Param`]). Requires [`Factorizer::b1`].
+    /// [`Param`]; for [`Param::Suyama`], at least 6, and taken modulo the number). Requires
+    /// [`Factorizer::b1`].
     #[must_use]
     pub fn sigma(mut self, sigma: Integer) -> Self {
         self.sigma = Some(sigma);
@@ -244,8 +245,20 @@ impl<H: EventHandler> Factorizer<H> {
             }
             return Ok(Mode::Levels);
         };
-        if self.pm1 && self.sigma.is_some() {
-            return Err(Error::InvalidOption("sigma is for curves, not P-1"));
+        if let Some(sigma) = &self.sigma {
+            if self.pm1 {
+                return Err(Error::InvalidOption("sigma is for curves, not P-1"));
+            }
+            let valid = match self.param {
+                Param::Suyama => *sigma >= 6,
+                Param::Square => *sigma >= 2 && *sigma < 1u64 << 32,
+                Param::Batch2 => *sigma >= 2 && sigma.significant_bits() <= 64,
+            };
+            if !valid {
+                return Err(Error::InvalidOption(
+                    "sigma out of the range of the parametrization",
+                ));
+            }
         }
         let b2 = self.b2.unwrap_or_else(|| crate::driver::default_b2(b1));
         Mode::fixed(b1, b2, self.curves)
