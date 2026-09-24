@@ -260,9 +260,13 @@ impl Stage2Plan {
     #[must_use]
     pub fn new(n: &Integer, b1: usize, b2: usize) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
-        let costs = Costs::new(n.significant_bits() as usize);
+        let bits = n.significant_bits() as usize;
+        let costs = Costs::new(bits);
         let d = giant_step(b1, b2);
         let pairs = costs.pairs_stage2(b1, b2, d, phi(d));
+        if pairs_always_cheaper(bits, b2) {
+            return Self::pairs(b1, b2);
+        }
         let (poly, poly_cost) = best_poly_plan(&costs, b1, b2);
         if poly_cost < pairs {
             Self::Poly(poly)
@@ -279,7 +283,7 @@ impl Stage2Plan {
         let costs = Costs::new(bits);
         let d = giant_step(b1, b2);
         costs.pairs_stage2(b1, b2, d, phi(d)) <= budget
-            || best_poly_shape(&costs, b1, b2).1 <= budget
+            || (!pairs_always_cheaper(bits, b2) && best_poly_shape(&costs, b1, b2).1 <= budget)
     }
 
     /// Plan of the baby-step giant-step continuation.
@@ -322,6 +326,15 @@ impl Stage2Plan {
             Self::Poly(plan) => plan.b2_covered(),
         }
     }
+}
+
+/// Whether the baby-step giant-step continuation costs less than every polynomial one for
+/// `(b1, b2]` modulo numbers of `bits` bits, whatever `b1`, without searching them (the search
+/// costs more than the plan itself for small numbers). By the cost model, a polynomial plan
+/// wins from `b2` = 810k on (for tiny numbers and `b1` <= 11k, 1.1M to 7M above 64 bits):
+/// checked on a grid by the test `pairs_always_cheaper_on_grid`.
+fn pairs_always_cheaper(bits: usize, b2: usize) -> bool {
+    b2 <= 500_000 && bits < 640
 }
 
 /// Giant steps `d1` of the polynomial continuation: multiples of 6, each with more baby steps
@@ -816,6 +829,29 @@ mod tests {
         assert_eq!(w.index[1155], u32::MAX);
         assert_eq!(w.index[2309], 479);
         assert_eq!(Wheel::new(6).len, 2);
+    }
+
+    #[test]
+    fn pairs_always_cheaper_on_grid() {
+        // Where the polynomial plans are not searched, none of them would have been chosen:
+        // the bounds of the driver's levels and of P-1 (20 times larger b1), and b2 on a grid.
+        for bits in (2..640).step_by(7) {
+            let costs = Costs::new(bits);
+            for b1 in [
+                300, 2000, 6000, 11_000, 40_000, 50_000, 220_000, 250_000, 1_000_000,
+            ] {
+                let mut b2 = b1 + 1;
+                while b2 <= 500_000 {
+                    if pairs_always_cheaper(bits, b2) {
+                        let d = giant_step(b1, b2);
+                        let pairs = costs.pairs_stage2(b1, b2, d, phi(d));
+                        let poly = best_poly_shape(&costs, b1, b2).1;
+                        assert!(pairs <= poly, "{bits} {b1} {b2}: {pairs} > {poly}");
+                    }
+                    b2 += b2 / 16 + 1;
+                }
+            }
+        }
     }
 
     #[test]

@@ -131,14 +131,41 @@ fn rho_exact(x: f64) -> f64 {
 
 /// Dickman's rho, for `alpha < TABLE_MAX` (linear interpolation of the table).
 fn rho(alpha: f64) -> f64 {
-    if alpha <= 3.0 {
+    if alpha <= 2.0 {
         return rho_exact(alpha);
     }
     let t = table();
+    if alpha <= 3.0 {
+        return rho_hermite(t, alpha);
+    }
     let a = (alpha * INV_H as f64).floor() as usize;
     let rho1 = t[a];
     let rho2 = t.get(a + 1).copied().unwrap_or(0.0);
     rho1 + (rho2 - rho1) * (alpha * INV_H as f64 - a as f64)
+}
+
+/// Dickman's rho for `2 < alpha <= 3`: cubic Hermite interpolation between the table points
+/// around `alpha` (exact there), with the derivatives `rho'(x) = -rho(x - 1)/x` (also from the
+/// table). It agrees with [`rho_exact`] within `6e-12` (relative), and costs a few
+/// operations instead of a dilogarithm series (`rho` on this range is called for every prime
+/// summed one by one by [`mu_sum`]).
+fn rho_hermite(t: &[f64], alpha: f64) -> f64 {
+    let exact = |i: usize| {
+        if i < 3 * INV_H {
+            t[i]
+        } else {
+            rho_exact(i as f64 * H)
+        }
+    };
+    let slope = |i: usize| -t[i - INV_H] / (i as f64 * H);
+    // alpha in (x0, x0 + H], with x0 = i*H.
+    let i = ((alpha * INV_H as f64).ceil() as usize - 1).max(2 * INV_H);
+    let s = alpha * INV_H as f64 - i as f64;
+    let (s2, s3) = (s * s, s * s * s);
+    (2.0 * s3 - 3.0 * s2 + 1.0) * exact(i)
+        + (s3 - 2.0 * s2 + s) * H * slope(i)
+        + (3.0 * s2 - 2.0 * s3) * exact(i + 1)
+        + (s3 - s2) * H * slope(i + 1)
 }
 
 /// Probability that a number near `x` is `x^(1/alpha)`-smooth.
@@ -212,6 +239,17 @@ mod tests {
         assert!((rho(2.5) - 0.130_319).abs() < 1e-5);
         assert!((rho(4.0) - 0.004_910_9).abs() < 1e-6);
         assert!((rho(5.0) - 0.000_354_7).abs() < 1e-7);
+    }
+
+    #[test]
+    fn interpolation_matches_exact() {
+        // On (2, 3], the interpolation of the table replaces the dilogarithm.
+        let mut worst: f64 = 0.0;
+        for k in 1..=100_000 {
+            let x = 2.0 + f64::from(k) / 100_000.0;
+            worst = worst.max((rho(x) / rho_exact(x) - 1.0).abs());
+        }
+        assert!(worst < 1e-11, "{worst}");
     }
 
     #[test]
