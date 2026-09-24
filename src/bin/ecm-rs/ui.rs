@@ -1,7 +1,7 @@
 //! Diagnostics on stderr, built from the events of the factorization: `-v` lines (worded as
 //! GMP-ECM's) and the progress bar.
 
-use ecm::{Event, Method, Param};
+use ecm::{Algorithm, Event, Method, Param};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rug::Integer;
 use std::{fmt::Write as _, time::Duration};
@@ -67,8 +67,10 @@ struct Level {
 /// Reports the events of one factorization on stderr.
 pub struct Ui {
     verbose: u8,
-    /// Whether P-1 runs first (not with fixed bounds, but with P-1 only).
-    pm1_first: bool,
+    /// P-1 or P+1, if it runs first (not with fixed bounds, but when it runs alone).
+    first: Option<Algorithm>,
+    /// The seed of P-1 or P+1, if not the default one.
+    x0: Option<(Integer, Integer)>,
     bar: Option<ProgressBar>,
     level: Level,
     /// The last curve run: `(param, sigma)`, for the factor it may have found.
@@ -76,9 +78,14 @@ pub struct Ui {
 }
 
 impl Ui {
-    /// `verbose` lines (0: none), and a progress bar if `progress`; `pm1_first` if P-1 runs
-    /// before the curves.
-    pub fn new(verbose: u8, progress: bool, pm1_first: bool) -> Self {
+    /// `verbose` lines (0: none), and a progress bar if `progress`; `first`: P-1 or P+1 if it
+    /// runs first; `x0`: its seed, if given.
+    pub fn new(
+        verbose: u8,
+        progress: bool,
+        first: Option<Algorithm>,
+        x0: Option<(Integer, Integer)>,
+    ) -> Self {
         let bar = progress.then(|| {
             let bar = ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr());
             bar.set_style(spinner_style());
@@ -88,7 +95,8 @@ impl Ui {
         });
         Self {
             verbose,
-            pm1_first,
+            first,
+            x0,
             bar,
             level: Level::default(),
             last_curve: None,
@@ -135,7 +143,7 @@ impl Ui {
                     };
                     self.line(&format!("Trial division below 2^16: {found}{rest}"));
                 }
-                let next = if self.pm1_first { "P-1" } else { "ECM" };
+                let next = self.first.unwrap_or(Algorithm::Ecm);
                 self.spinner(format!("{next} on C{}", digits(cofactor)));
             }
             Event::Pm1 {
@@ -145,12 +153,29 @@ impl Ui {
                 stage1,
                 stage2,
                 ..
+            }
+            | Event::Pp1 {
+                n,
+                b1,
+                b2,
+                stage1,
+                stage2,
+                ..
             } => {
                 if self.verbose > 0 {
-                    let mut line = format!("P-1 on C{}: B1={b1}", digits(n));
+                    let (name, default) = match event {
+                        Event::Pp1 { .. } => ("P+1", "2/7"),
+                        _ => ("P-1", "3"),
+                    };
+                    let mut line = format!("{name} on C{}: B1={b1}", digits(n));
                     if let Some(b2) = b2 {
                         let _ = write!(line, ", B2={b2}");
                     }
+                    let _ = match &self.x0 {
+                        Some((num, den)) if *den == 1 => write!(line, ", x0={num}"),
+                        Some((num, den)) => write!(line, ", x0={num}/{den}"),
+                        None => write!(line, ", x0={default}"),
+                    };
                     let _ = write!(line, ": Step 1 took {}", ms(stage1));
                     if b2.is_some() {
                         let _ = write!(line, ", Step 2 took {}", ms(stage2));
@@ -267,6 +292,17 @@ impl Ui {
                     _ => method.to_string(),
                 };
                 self.line(&format!("********** Factor found by {how}: {factor}"));
+                if matches!(method, Method::Pp1Stage1 | Method::Pp1Stage2)
+                    && self.verbose > 0
+                    && is_prime(factor)
+                {
+                    // As GMP-ECM: x0^2 - 4 is a square modulo p, the group has order p - 1.
+                    let (num, den) = self.x0.clone().unwrap_or((2.into(), 7.into()));
+                    let d = Integer::from(&num * &num) - Integer::from(&den * &den) * 4u32;
+                    if d.jacobi(factor) == 1 {
+                        self.line("[factor found by P-1]");
+                    }
+                }
                 if self.verbose > 0 {
                     let cofactor = Integer::from(n / factor);
                     let kind = |x: &Integer| {

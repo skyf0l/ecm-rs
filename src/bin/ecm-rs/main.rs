@@ -103,6 +103,17 @@ fn main() -> ExitCode {
     run.exit_code()
 }
 
+/// The method of the options.
+fn algorithm(cli: &Cli) -> Algorithm {
+    if cli.pp1 {
+        Algorithm::Pp1
+    } else if cli.pm1 {
+        Algorithm::Pm1
+    } else {
+        Algorithm::Ecm
+    }
+}
+
 /// The [`Factorizer`] of the options.
 fn factorizer(cli: &Cli) -> Result<Factorizer, String> {
     let param = match (cli.param, &cli.sigma) {
@@ -112,9 +123,12 @@ fn factorizer(cli: &Cli) -> Result<Factorizer, String> {
         (Some(p), _) | (None, &Some((Some(p), _))) => Some(p),
         _ => None,
     };
-    let mut f = Factorizer::new();
-    if cli.pm1 {
-        f = f.algorithm(Algorithm::Pm1);
+    let mut f = Factorizer::new().algorithm(algorithm(cli));
+    if let Some((num, den)) = &cli.x0 {
+        if algorithm(cli) == Algorithm::Ecm {
+            return Err("--x0 requires --pm1 or --pp1".into());
+        }
+        f = f.x0(num.clone(), den.clone());
     }
     if let Some(p) = param {
         f = f.param(Param::try_from(p).map_err(|e| e.to_string())?);
@@ -273,7 +287,12 @@ impl Run<'_> {
         let mut ui = Ui::new(
             if self.cli.quiet { 0 } else { self.cli.verbose },
             self.progress,
-            self.cli.b1.is_none() || self.cli.pm1,
+            match algorithm(self.cli) {
+                Algorithm::Ecm if self.cli.b1.is_some() => None,
+                Algorithm::Ecm => Some(Algorithm::Pm1),
+                algorithm => Some(algorithm),
+            },
+            self.cli.x0.clone(),
         );
         if self.cli.verbose > 0 && !self.cli.quiet {
             ui.line(&format!("Input number is {input} ({} digits)", digits(&n)));
