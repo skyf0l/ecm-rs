@@ -167,6 +167,11 @@ impl PolyPlan {
         (m_hi + 1) * self.d1 - (self.d1 / 2 - 1) * self.d2 - 1
     }
 
+    /// Stage 1 bound.
+    pub fn b1(&self) -> usize {
+        self.b1
+    }
+
     /// Giant step `d1`, degree `dF` of `F` and number of giant steps.
     pub fn shape(&self) -> (usize, usize, usize) {
         (self.d1, self.df, self.giants)

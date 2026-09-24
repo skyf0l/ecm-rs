@@ -202,14 +202,14 @@ pub fn run_curve(
     k: &Integer,
     plan: &Stage2Plan,
 ) -> CurveOutcome {
-    let q = match curve(n, param, sigma) {
-        Ok(q) => q,
+    let p = match curve(n, param, sigma) {
+        Ok(p) => p,
         // If g = 1 or n, try another curve
         Err(g) if g == 1 || &g == n => return CurveOutcome::Failed,
         Err(g) => return CurveOutcome::Setup(g),
     };
 
-    let q = stage1(&q, k);
+    let q = stage1(&p, k);
     let g = q.z.clone().gcd(n);
 
     // Stage 1 factor
@@ -217,9 +217,10 @@ pub fn run_curve(
         return CurveOutcome::Stage1(g);
     }
 
-    // Stage 1 failure. Q.z = 0, Try another curve
+    // Stage 1 found all the factors at once (frequent when they are small compared to `b1`):
+    // look for the point where it finds only some of them.
     if &g == n {
-        return CurveOutcome::Failed;
+        return stage1_backoff(n, &p, plan.b1()).map_or(CurveOutcome::Failed, CurveOutcome::Stage1);
     }
 
     let g = stage2(&q, plan);
@@ -230,6 +231,45 @@ pub fn run_curve(
     }
 
     CurveOutcome::Failed
+}
+
+/// Splits `n` with the curve of the starting point `p` when stage 1 up to `b1` finds all its
+/// factors at once (`gcd(z, n) = n`), which happens when they are small compared to `b1`.
+///
+/// Redoes stage 1 by segments `(b/2, b]` of the primes, with a gcd after each, then prime by
+/// prime in the segment where the gcd jumps from 1 to `n` (like GMP-ECM, which checks the gcd
+/// during stage 1 when asked to). Returns a proper factor, or `None` if the orders of the
+/// point modulo the factors of `n` are completed by the same prime power: this curve cannot
+/// separate them. Only runs after a failure, so its cost (about one more stage 1 and a gcd per
+/// prime of a segment) does not matter.
+fn stage1_backoff(n: &Integer, p: &Point, b1: usize) -> Option<Integer> {
+    let mut q = p.clone();
+    let mut lo = 1;
+    while lo < b1 {
+        let hi = lo.saturating_mul(2).min(b1);
+        let next = stage1(&q, &prime_power_product(lo, hi));
+        let g = next.z.clone().gcd(n);
+        if g == 1 {
+            (q, lo) = (next, hi);
+            continue;
+        }
+        if &g != n {
+            return Some(g);
+        }
+        // The gcd goes from 1 to n in (lo, hi]: one prime power at a time.
+        for prime in primes(hi) {
+            let old = if prime <= lo { lo.ilog(prime) } else { 0 };
+            for _ in old..hi.ilog(prime) {
+                q = stage1(&q, &Integer::from(prime));
+                let g = q.z.clone().gcd(n);
+                if g != 1 {
+                    return (&g != n).then_some(g);
+                }
+            }
+        }
+        return None;
+    }
+    None
 }
 
 /// Stage 1 multiplier: product of the largest powers of all primes `p <= b1` that are `<= b1`.
@@ -1088,6 +1128,51 @@ mod tests {
                 (Integer::from(99_476_569), 2)
             ])
         );
+    }
+
+    #[test]
+    fn large_bounds_small_factors() {
+        // With b1 large compared to the factors, stage 1 of every curve finds all of them at
+        // once (g = n): the curves must still split n (these used to fail).
+        for (p, q, b1s) in [
+            (100_003u64, 100_019u64, &[11_000, 250_000][..]),
+            (1_000_003, 1_000_033, &[250_000]),
+            (70_001, 1_299_709, &[250_000]),
+            (65_537, 65_539, &[11_000]),
+        ] {
+            let n = Integer::from(p) * q;
+            let expected = HashMap::from([(Integer::from(p), 1), (Integer::from(q), 1)]);
+            for &b1 in b1s {
+                assert_eq!(
+                    ecm_with_params(&n, b1, 100 * b1, 20).unwrap(),
+                    expected,
+                    "{n} {b1}"
+                );
+                let g = ecm_one_factor(&n, b1, 100 * b1, 20).unwrap();
+                assert!(g == p || g == q, "{n} {b1}");
+            }
+        }
+    }
+
+    #[test]
+    fn stage1_backoff_splits() {
+        // Stage 1 up to 11000 finds both factors with every one of these curves.
+        let n = Integer::from(100_003u64) * 100_019u64;
+        let k = stage1_multiplier(11_000);
+        let plan = Stage2Plan::new(&n, 11_000, 1_873_422);
+        let mut split = 0;
+        for sigma in 2..30 {
+            let p = batch2_curve(&n, &Integer::from(sigma)).unwrap();
+            assert_eq!(stage1(&p, &k).z.gcd(&n), n);
+            match run_curve(&n, Param::Batch2, &Integer::from(sigma), &k, &plan) {
+                CurveOutcome::Stage1(g) => {
+                    assert!(g == 100_003 || g == 100_019);
+                    split += 1;
+                }
+                outcome => assert_eq!(outcome, CurveOutcome::Failed),
+            }
+        }
+        assert!(split > 20, "{split}");
     }
 
     #[test]
