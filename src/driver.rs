@@ -29,6 +29,7 @@
 //! interrupt them.
 
 use crate::{
+    base2::{Base2Form, Base2Mode},
     cost::Costs,
     ecm::{
         CurveOutcome, Error, Param, is_prime, perfect_power, random_sigma, run_curve_timed,
@@ -192,17 +193,29 @@ impl PlusMinus {
         }
     }
 
-    fn stage1(&mut self, n: &Integer, b1: usize, stop: Stop<'_>) -> Integer {
+    fn stage1(
+        &mut self,
+        n: &Integer,
+        b1: usize,
+        base2: Option<Base2Form>,
+        stop: Stop<'_>,
+    ) -> Integer {
         match self {
-            Self::Pm1(pm1) => pm1.stage1_until(n, b1, stop),
-            Self::Pp1(pp1) => pp1.stage1_until(n, b1, stop),
+            Self::Pm1(pm1) => pm1.stage1_until(n, b1, base2, stop),
+            Self::Pp1(pp1) => pp1.stage1_until(n, b1, base2, stop),
         }
     }
 
-    fn stage2(&self, n: &Integer, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
+    fn stage2(
+        &self,
+        n: &Integer,
+        plan: &Stage2Plan,
+        base2: Option<Base2Form>,
+        stop: Stop<'_>,
+    ) -> Integer {
         match self {
-            Self::Pm1(pm1) => pm1.stage2_until(n, plan, stop),
-            Self::Pp1(pp1) => pp1.stage2_until(n, plan, stop),
+            Self::Pm1(pm1) => pm1.stage2_until(n, plan, base2, stop),
+            Self::Pp1(pp1) => pp1.stage2_until(n, plan, base2, stop),
         }
     }
 
@@ -329,11 +342,13 @@ pub(crate) struct Engine<'a, 'r, H> {
     /// Seed of P-1 or P+1, if not the default one.
     x0: Option<(Integer, Integer)>,
     max_memory: usize,
+    base2: Base2Mode,
     rand: &'a mut RandState<'r>,
     events: Events<'a, H>,
-    /// Stage 1 multipliers by `b1`, and stage 2 plans by bounds and size of the number.
+    /// Stage 1 multipliers by `b1`, and stage 2 plans by bounds, size of the number and form
+    /// of its special reduction.
     multipliers: HashMap<usize, Rc<Integer>>,
-    plans: HashMap<(usize, usize, u32), Rc<Stage2Plan>>,
+    plans: HashMap<(usize, usize, u32, Option<Base2Form>), Rc<Stage2Plan>>,
 }
 
 impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
@@ -344,6 +359,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         sigma: Option<Integer>,
         (algorithm, x0): (Algorithm, Option<(Integer, Integer)>),
         max_memory: usize,
+        base2: Base2Mode,
         rand: &'a mut RandState<'r>,
         handler: &'a mut H,
         stop: Stop<'a>,
@@ -355,6 +371,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             algorithm,
             x0,
             max_memory,
+            base2,
             rand,
             events: Events {
                 handler,
@@ -373,11 +390,17 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             .clone()
     }
 
-    fn plan(&mut self, n: &Integer, b1: usize, b2: usize) -> Rc<Stage2Plan> {
+    fn plan(
+        &mut self,
+        n: &Integer,
+        b1: usize,
+        b2: usize,
+        base2: Option<Base2Form>,
+    ) -> Rc<Stage2Plan> {
         let max_memory = self.max_memory;
         self.plans
-            .entry((b1, b2, n.significant_bits()))
-            .or_insert_with(|| Rc::new(Stage2Plan::with_max_memory(n, b1, b2, max_memory)))
+            .entry((b1, b2, n.significant_bits(), base2))
+            .or_insert_with(|| Rc::new(Stage2Plan::for_arith(n, b1, b2, max_memory, base2)))
             .clone()
     }
 
@@ -526,26 +549,35 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
 
     /// A proper factor of the composite `n`, resuming the search from `progress`.
     fn find(&mut self, n: &Integer, progress: &mut Progress) -> Result<(Integer, Method), Error> {
+        let base2 = self.base2.form(n).map_err(Error::InvalidOption)?;
+        if let Some(form) = base2 {
+            self.events.emit(Event::Base2 {
+                n,
+                k: form.signed(),
+            })?;
+        }
         match self.mode {
-            Mode::Levels => self.find_by_levels(n, progress),
+            Mode::Levels => self.find_by_levels(n, progress, base2),
             Mode::Fixed { b1, b2, .. } if self.algorithm != Algorithm::Ecm => {
-                self.pm_fixed(n, b1, b2)
+                self.pm_fixed(n, b1, b2, base2)
             }
-            Mode::Fixed { b1, b2, curves } => self.curves(n, (b1, b2), None, curves, &mut 0),
+            Mode::Fixed { b1, b2, curves } => self.curves(n, (b1, b2), None, curves, &mut 0, base2),
         }
     }
 
-    /// Searches `n` level by level, from `progress` on.
+    /// Searches `n` level by level, from `progress` on (with the special reduction modulo
+    /// `base2` if any).
     fn find_by_levels(
         &mut self,
         n: &Integer,
         progress: &mut Progress,
+        base2: Option<Base2Form>,
     ) -> Result<(Integer, Method), Error> {
         let top = top_level(n);
         loop {
             let index = progress.level.min(top);
             let level = &LEVELS[index];
-            if let Some(found) = self.pm_level(n, index, progress)? {
+            if let Some(found) = self.pm_level(n, index, progress, base2)? {
                 return Ok(found);
             }
 
@@ -558,7 +590,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             }
 
             let prob = {
-                let plan = self.plan(n, level.b1, level.b2);
+                let plan = self.plan(n, level.b1, level.b2, base2);
                 ecm_prob(level.b1 as f64, plan.b2() as f64, f64::from(level.digits))
             };
             let curves = (1.0 / prob).ceil().max(1.0) as usize;
@@ -568,6 +600,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
                 Some(level.digits),
                 Some(curves),
                 &mut progress.curves,
+                base2,
             ) {
                 Err(Error::ECMFailed) => {}
                 result => return result,
@@ -594,13 +627,14 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         digits: Option<u32>,
         curves: Option<usize>,
         done: &mut usize,
+        base2: Option<Base2Form>,
     ) -> Result<(Integer, Method), Error> {
         if curves.is_some_and(|curves| *done >= curves) {
             // Resumed on a cofactor after all the curves of the level.
             return Err(Error::ECMFailed);
         }
         let k = self.multiplier(b1);
-        let plan = self.plan(n, b1, b2);
+        let plan = self.plan(n, b1, b2, base2);
         self.events.emit(Event::Level {
             n,
             digits,
@@ -623,9 +657,9 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             };
             let stop = self.events.stop;
             let (outcome, [stage1, stage2]) = if H::ENABLED {
-                run_curve_timed::<true>(n, param, &sigma, &k, &plan, stop)
+                run_curve_timed::<true>(n, param, &sigma, &k, &plan, base2, stop)
             } else {
-                run_curve_timed::<false>(n, param, &sigma, &k, &plan, stop)
+                run_curve_timed::<false>(n, param, &sigma, &k, &plan, base2, stop)
             };
             if outcome == CurveOutcome::Failed {
                 // The curve may have stopped early: not reported.
@@ -656,6 +690,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         n: &Integer,
         index: usize,
         progress: &mut Progress,
+        base2: Option<Base2Form>,
     ) -> Result<Option<(Integer, Method)>, Error> {
         if progress.pm_level >= Some(index) {
             return Ok(None);
@@ -669,8 +704,8 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             return Ok(None);
         }
         let max_memory = self.max_memory;
-        let b2 = || pm1_b2(n, b1, max_memory);
-        let (found, all) = run_plus_minus(pm, n, b1, b2, max_memory, &mut self.events)?;
+        let b2 = || pm1_b2(n, b1, max_memory, base2);
+        let (found, all) = run_plus_minus(pm, n, (b1, b2), max_memory, base2, &mut self.events)?;
         if all {
             // Every p - 1 (or p + 1) is smooth: P-1 (or P+1) cannot separate the factors.
             progress.pm = None;
@@ -679,28 +714,35 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
     }
 
     /// P-1 (or P+1) with fixed bounds.
-    fn pm_fixed(&mut self, n: &Integer, b1: usize, b2: usize) -> Result<(Integer, Method), Error> {
+    fn pm_fixed(
+        &mut self,
+        n: &Integer,
+        b1: usize,
+        b2: usize,
+        base2: Option<Base2Form>,
+    ) -> Result<(Integer, Method), Error> {
         let mut pm = self.plus_minus();
         let max_memory = self.max_memory;
-        let (found, _) = run_plus_minus(&mut pm, n, b1, || b2, max_memory, &mut self.events)?;
+        let events = &mut self.events;
+        let (found, _) = run_plus_minus(&mut pm, n, (b1, || b2), max_memory, base2, events)?;
         found.ok_or(Error::ECMFailed)
     }
 }
 
 /// Runs P-1 (or P+1) on `n` up to `b1` (resuming `pm`), then stage 2 up to `b2()` if stage 1
-/// finds nothing: returns the proper factor found, if any, and whether stage 1 found all the
-/// factors of `n` at once.
+/// finds nothing (with the special reduction modulo `base2` if any): returns the proper factor
+/// found, if any, and whether stage 1 found all the factors of `n` at once.
 fn run_plus_minus<H: EventHandler>(
     pm: &mut PlusMinus,
     n: &Integer,
-    b1: usize,
-    b2: impl FnOnce() -> usize,
+    (b1, b2): (usize, impl FnOnce() -> usize),
     max_memory: usize,
+    base2: Option<Base2Form>,
     events: &mut Events<'_, H>,
 ) -> Result<(Option<(Integer, Method)>, bool), Error> {
     let [method1, method2] = pm.methods();
     let start = Events::<H>::now();
-    let g = pm.stage1(n, b1, events.stop);
+    let g = pm.stage1(n, b1, base2, events.stop);
     let stage1 = since(start);
     if g != 1 {
         let all = &g == n;
@@ -715,8 +757,8 @@ fn run_plus_minus<H: EventHandler>(
     // Stage 1 may have stopped early: it is not reported then.
     events.check()?;
     let start = Events::<H>::now();
-    let plan = Stage2Plan::with_max_memory(n, b1, b2(), max_memory);
-    let g = pm.stage2(n, &plan, events.stop);
+    let plan = Stage2Plan::for_arith(n, b1, b2(), max_memory, base2);
+    let g = pm.stage2(n, &plan, base2, events.stop);
     let stage2 = since(start);
     let found = (g != 1 && &g != n).then_some((g, method2));
     if found.is_none() {
@@ -741,12 +783,15 @@ fn top_level(n: &Integer) -> usize {
 }
 
 /// Stage 2 bound of P-1 after a stage 1 up to `b1`: the largest `b1*2^i` whose stage 2 costs at
-/// most [`PM1_STAGE2_RATIO`] times stage 1 (`1.44*b1` modular squarings).
-fn pm1_b2(n: &Integer, b1: usize, max_memory: usize) -> usize {
+/// most [`PM1_STAGE2_RATIO`] times stage 1 (`1.44*b1` modular squarings), with the special
+/// reduction modulo `base2` if any.
+fn pm1_b2(n: &Integer, b1: usize, max_memory: usize, base2: Option<Base2Form>) -> usize {
     let bits = n.significant_bits() as usize;
-    let budget = PM1_STAGE2_RATIO * 1.44 * b1 as f64 * 1.3 * Costs::new(bits).mul();
+    let costs = Costs::modulo(bits, base2);
+    let budget = PM1_STAGE2_RATIO * 1.44 * b1 as f64 * 1.3 * costs.mul();
+    let modulus = (bits, base2);
     let mut b2 = b1;
-    while b2 < usize::MAX / 4 && Stage2Plan::cost_at_most(bits, b1, 2 * b2, budget, max_memory) {
+    while b2 < usize::MAX / 4 && Stage2Plan::cost_at_most(modulus, b1, 2 * b2, budget, max_memory) {
         b2 *= 2;
     }
     b2
@@ -826,12 +871,13 @@ mod tests {
             None,
             (Algorithm::Ecm, None),
             MAX_POLY_MEMORY,
+            Base2Mode::Auto,
             &mut rand,
             &mut handler,
             Stop::NEVER,
         );
         let found = (0..3).find_map(|level| {
-            let found = engine.pm_level(&n, level, &mut progress).unwrap();
+            let found = engine.pm_level(&n, level, &mut progress, None).unwrap();
             found.map(|(g, method)| (level, g, method))
         });
         assert_eq!(found, Some((1, p, Method::Pm1Stage2)));

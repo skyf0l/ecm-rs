@@ -19,6 +19,7 @@
 use crate::primes::{PrimesUpTo, primes};
 use crate::{
     arith::{Arith, Factor, PolyArith},
+    base2::Base2Form,
     cost::Costs,
     curve::{Curve, Point, Scratch, Xz},
     stage2_poly::{self, PolyPlan},
@@ -272,10 +273,23 @@ impl Stage2Plan {
     ///
     /// If `b1 < 3`.
     #[must_use]
+    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn with_max_memory(n: &Integer, b1: usize, b2: usize, max_memory: usize) -> Self {
+        Self::for_arith(n, b1, b2, max_memory, Base2Form::detect(n))
+    }
+
+    /// As [`Stage2Plan::with_max_memory`], for the arithmetic modulo `base2` (a multiple of
+    /// `n`) if any, and modulo `n` otherwise.
+    pub(crate) fn for_arith(
+        n: &Integer,
+        b1: usize,
+        b2: usize,
+        max_memory: usize,
+        base2: Option<Base2Form>,
+    ) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
         let bits = n.significant_bits() as usize;
-        let costs = Costs::new(bits);
+        let costs = Costs::modulo(bits, base2);
         let d = giant_step(b1, b2);
         let pairs = costs.pairs_stage2(b1, b2, d, phi(d));
         if pairs_always_cheaper(bits, b2) {
@@ -290,17 +304,17 @@ impl Stage2Plan {
     }
 
     /// Whether the estimated cost (in nanoseconds, see [`Costs`]) of stage 2 with the plan
-    /// [`Stage2Plan::new`] would choose, modulo a number of `bits` bits, is at most `budget`,
-    /// without building the plan (nor searching the polynomial ones if the baby-step giant-step
-    /// continuation is cheap enough).
+    /// [`Stage2Plan::for_arith`] would choose, modulo a number of `bits` bits (computing modulo
+    /// `base2` if any), is at most `budget`, without building the plan (nor searching the
+    /// polynomial ones if the baby-step giant-step continuation is cheap enough).
     pub(crate) fn cost_at_most(
-        bits: usize,
+        (bits, base2): (usize, Option<Base2Form>),
         b1: usize,
         b2: usize,
         budget: f64,
         max_memory: usize,
     ) -> bool {
-        let costs = Costs::new(bits);
+        let costs = Costs::modulo(bits, base2);
         let d = giant_step(b1, b2);
         costs.pairs_stage2(b1, b2, d, phi(d)) <= budget
             || (!pairs_always_cheaper(bits, b2)
@@ -326,7 +340,7 @@ impl Stage2Plan {
     #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn poly(n: &Integer, b1: usize, b2: usize) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
-        let costs = Costs::new(n.significant_bits() as usize);
+        let costs = Costs::modulo(n.significant_bits() as usize, Base2Form::detect(n));
         Self::Poly(best_poly_plan(&costs, b1, b2, MAX_POLY_MEMORY).0)
     }
 

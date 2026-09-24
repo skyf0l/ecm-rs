@@ -1,6 +1,7 @@
 //! [`Factorizer`]: the configurable entry point, with events and cancellation.
 
 use crate::{
+    base2::Base2Mode,
     driver::{Engine, Mode},
     ecm::{Error, Param, rand_state},
     events::{Event, EventHandler, NoEvents},
@@ -89,6 +90,7 @@ pub struct Factorizer<H = NoEvents> {
     algorithm: Algorithm,
     x0: Option<(Integer, Integer)>,
     max_memory: usize,
+    base2: Base2Mode,
     interrupt: Option<Arc<AtomicBool>>,
     timeout: Option<Duration>,
     handler: H,
@@ -114,6 +116,7 @@ impl Factorizer {
             algorithm: Algorithm::Ecm,
             x0: None,
             max_memory: MAX_POLY_MEMORY,
+            base2: Base2Mode::Auto,
             interrupt: None,
             timeout: None,
             handler: NoEvents,
@@ -205,6 +208,21 @@ impl<H: EventHandler> Factorizer<H> {
         self
     }
 
+    /// When to compute modulo `2^k +- 1` instead of the number, with a reduction by shifts and
+    /// additions instead of Montgomery's (GMP-ECM's "special division", `-base2` and `-nobase2`):
+    /// by default, [`Base2Mode::Auto`], for the composite parts of at least 512 bits that divide
+    /// `2^k +- 1` with `k` at most 1.4 times their size (Mersenne, Fermat and Cunningham numbers
+    /// and their cofactors). Their curves, P-1 and P+1 are then 1.5 to 3 times faster. The
+    /// factors found are the same (the arithmetic gives the same values modulo the number).
+    ///
+    /// With [`Base2Mode::Force`], every composite part searched must divide the given `2^k +-
+    /// 1` ([`Error::InvalidOption`] otherwise).
+    #[must_use]
+    pub const fn base2(mut self, base2: Base2Mode) -> Self {
+        self.base2 = base2;
+        self
+    }
+
     /// Interrupts the factorizations when `flag` is set (from another thread, or a signal
     /// handler): they return [`Error::Interrupted`] soon after, even in the middle of a curve
     /// (see [`Factorizer::factor_partial`] for what was found so far). The flag is checked
@@ -247,6 +265,7 @@ impl<H: EventHandler> Factorizer<H> {
             algorithm: self.algorithm,
             x0: self.x0,
             max_memory: self.max_memory,
+            base2: self.base2,
             interrupt: self.interrupt,
             timeout: self.timeout,
             handler: f,
@@ -322,6 +341,7 @@ impl<H: EventHandler> Factorizer<H> {
             self.sigma.clone(),
             (self.algorithm, self.x0.clone()),
             self.max_memory,
+            self.base2,
             rand,
             &mut self.handler,
             stop,

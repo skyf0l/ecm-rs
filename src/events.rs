@@ -27,6 +27,16 @@ pub enum Event<'a> {
         /// What remains of the number (`1` if trial division factored it completely).
         cofactor: &'a Integer,
     },
+    /// The searches on the composite `n` compute modulo `2^k + 1` (if `k > 0`) or `2^-k - 1`
+    /// (if `k < 0`), a multiple of `n`, with a special reduction (see [`crate::Base2Mode`]):
+    /// before the other events of `n`.
+    #[non_exhaustive]
+    Base2 {
+        /// The composite number searched.
+        n: &'a Integer,
+        /// The exponent, signed as GMP-ECM's `-base2`.
+        k: i64,
+    },
     /// Pollard's P-1 method ran on `n`.
     #[non_exhaustive]
     Pm1 {
