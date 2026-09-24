@@ -296,10 +296,11 @@ impl Ui {
                     && self.verbose > 0
                     && is_prime(factor)
                 {
-                    // As GMP-ECM: x0^2 - 4 is a square modulo p, the group has order p - 1.
+                    // As GMP-ECM: x0^2 - 4 is a square modulo p, the group has order p - 1
+                    // (unless p divides the denominator: x0 is not defined modulo p).
                     let (num, den) = self.x0.clone().unwrap_or((2.into(), 7.into()));
                     let d = Integer::from(&num * &num) - Integer::from(&den * &den) * 4u32;
-                    if d.jacobi(factor) == 1 {
+                    if !den.is_divisible(factor) && d.jacobi(factor) == 1 {
                         self.line("[factor found by P-1]");
                     }
                 }
