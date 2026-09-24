@@ -151,6 +151,10 @@ impl PolyPlan {
 
     /// Largest `b2' >= b2` such that every prime in `(b1, b2']` is checked.
     pub fn b2_covered(&self) -> usize {
+        if self.b2 <= self.b1 {
+            // Nothing is checked, not even the baby steps.
+            return self.b2;
+        }
         if self.giants == 0 {
             return self.b2.max(self.d1 / 2);
         }
@@ -423,6 +427,27 @@ mod tests {
                     let plan = PolyPlan::new(b1, b2, d1, d2, blocks);
                     check_plan(&plan, &sieve, b1, b2, blocks);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_covered_when_b2_at_most_b1() {
+        // Stage 2 returns at once when b2 <= b1: a large d1 must not claim the primes in
+        // (b1, d1/2] as covered (d1 = 15288, b1 = 50, b2 = 29 used to cover 7644).
+        for (b1, b2, d1) in [
+            (50, 29, 15_288),
+            (50, 50, 15_288),
+            (1000, 999, 2310),
+            (6, 4, 6),
+        ] {
+            let b1 = b1.max(*prime_factors(d1).last().unwrap());
+            for d2 in [1, default_d2(b1, d1)] {
+                assert_eq!(
+                    PolyPlan::new(b1, b2, d1, d2, 0).b2_covered(),
+                    b2,
+                    "{b1} {b2} {d1}"
+                );
             }
         }
     }
