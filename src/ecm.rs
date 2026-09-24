@@ -101,7 +101,7 @@ pub fn ecm_one_factor(
         mode,
         Param::default(),
         None,
-        false,
+        (crate::factorizer::Algorithm::Ecm, None),
         MAX_POLY_MEMORY,
         rgen,
         &mut NoEvents,
@@ -363,9 +363,23 @@ pub(crate) fn prime_power_product(lo: usize, hi: usize) -> Integer {
 /// `E(hi)/E(lo)` (see [`prime_power_product`]) as a sequence of 64-bit factors, from the
 /// smallest primes to the largest.
 pub(crate) fn prime_power_words(lo: usize, hi: usize) -> impl Iterator<Item = u64> {
+    prime_power_words_below(lo, hi, hi)
+}
+
+/// The part of [`prime_power_product`] of the primes `<= max`.
+pub(crate) fn prime_power_product_below(lo: usize, hi: usize, max: usize) -> Integer {
+    product(
+        prime_power_words_below(lo, hi, max)
+            .map(Integer::from)
+            .collect(),
+    )
+}
+
+/// The part of [`prime_power_words`] of the primes `<= max`.
+fn prime_power_words_below(lo: usize, hi: usize, max: usize) -> impl Iterator<Item = u64> {
     let lo = lo.max(1);
     let mut word = 1u64;
-    let mut powers = primes(hi)
+    let mut powers = primes(hi.min(max))
         // Above sqrt(hi), only the primes in (lo, hi] contribute (to the power 1).
         .filter(move |&p| p > lo || p.saturating_mul(p) <= hi)
         .flat_map(move |p| {

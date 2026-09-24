@@ -11,7 +11,7 @@ Based on [rug](https://crates.io/crates/rug), it can use [arbitrary-precision nu
 ## Usage
 
 ```rust
-use ecm::{Event, Factorizer, ecm};
+use ecm::{Algorithm, Event, Factorizer, ecm};
 use rug::Integer;
 use std::{ops::ControlFlow, time::Duration};
 
@@ -41,7 +41,8 @@ let result = Factorizer::new()
     .factor_partial(&n);
 println!("primes: {:?}, unfactored: {:?}", result.primes, result.unfactored);
 
-// Fixed bounds (as GMP-ECM's `ecm -c 100 11000 1873422`), or only P-1.
+// Fixed bounds (as GMP-ECM's `ecm -c 100 11000 1873422`), or only P-1 or P+1 (as
+// `ecm -pp1 -x0 2/7 100000`).
 let factors = Factorizer::new()
     .b1(11_000)
     .b2(1_873_422)
@@ -49,7 +50,12 @@ let factors = Factorizer::new()
     .factor(&n)
     .unwrap();
 assert_eq!(factors.len(), 4);
-let factor = Factorizer::new().pm1(true).b1(100_000).find_factor(&n);
+let factor = Factorizer::new().algorithm(Algorithm::Pm1).b1(100_000).find_factor(&n);
+let factor = Factorizer::new()
+    .algorithm(Algorithm::Pp1)
+    .x0(2.into(), 7.into())
+    .b1(100_000)
+    .find_factor(&n);
 ```
 
 ## Command line tool

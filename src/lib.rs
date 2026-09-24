@@ -14,6 +14,7 @@ mod factorizer;
 mod lucas;
 mod pm1;
 mod poly;
+mod pp1;
 mod primes;
 mod rho;
 mod stage2;
@@ -23,7 +24,7 @@ mod stop;
 pub use crate::{
     ecm::{Error, Param, ecm, ecm_one_factor, ecm_with_params},
     events::{Event, EventHandler, Method, NoEvents},
-    factorizer::{Factorization, Factorizer},
+    factorizer::{Algorithm, Factorization, Factorizer},
 };
 
 /// Internals exposed for benchmarks only. Not part of the public API, no stability guarantees.
@@ -37,6 +38,7 @@ pub mod bench {
         stage1_multiplier, stage2, suyama_curve, trial_division,
     };
     pub use crate::pm1::Pm1;
-    pub use crate::rho::{ecm_prob, pm1_prob};
+    pub use crate::pp1::Pp1;
+    pub use crate::rho::{ecm_prob, pm1_prob, pp1_prob};
     pub use crate::stage2::Stage2Plan;
 }

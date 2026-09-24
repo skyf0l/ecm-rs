@@ -10,6 +10,7 @@ use crate::{
 use rug::Integer;
 use std::{
     collections::HashMap,
+    fmt,
     ops::ControlFlow,
     sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
@@ -18,7 +19,35 @@ use std::{
 /// Seed of [`crate::ecm()`], and of a [`Factorizer`] by default.
 pub(crate) const DEFAULT_SEED: u64 = 1234;
 
-/// Factorization with options: seed, fixed bounds, curves, P-1 only, stage 2 memory, a
+/// The factoring method of a [`Factorizer`].
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Algorithm {
+    /// Elliptic curves, after Pollard's P-1 method with larger bounds (except with fixed
+    /// bounds).
+    #[default]
+    Ecm,
+    /// Pollard's P-1 method only: finds the factors `p` with a smooth `p - 1`.
+    Pm1,
+    /// Williams' P+1 method only: finds the factors `p` with a smooth `p + 1` (or `p - 1`,
+    /// depending on the seed and `p`, see [`Factorizer::x0`]).
+    ///
+    /// It is not part of [`Algorithm::Ecm`]: after P-1, it finds too few factors for its cost
+    /// (the curves find random factors of 15 to 30 digits as fast without it).
+    Pp1,
+}
+
+impl fmt::Display for Algorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Ecm => "ECM",
+            Self::Pm1 => "P-1",
+            Self::Pp1 => "P+1",
+        })
+    }
+}
+
+/// Factorization with options: seed, fixed bounds, curves, P-1 or P+1 only, stage 2 memory, a
 /// callback receiving the [`Event`]s of the factorization, which can interrupt it, and an
 /// interruption flag or a timeout, which interrupt it even during a curve.
 ///
@@ -57,7 +86,8 @@ pub struct Factorizer<H = NoEvents> {
     b2: Option<usize>,
     curves: Option<usize>,
     sigma: Option<Integer>,
-    pm1: bool,
+    algorithm: Algorithm,
+    x0: Option<(Integer, Integer)>,
     max_memory: usize,
     interrupt: Option<Arc<AtomicBool>>,
     timeout: Option<Duration>,
@@ -81,7 +111,8 @@ impl Factorizer {
             b2: None,
             curves: None,
             sigma: None,
-            pm1: false,
+            algorithm: Algorithm::Ecm,
+            x0: None,
             max_memory: MAX_POLY_MEMORY,
             interrupt: None,
             timeout: None,
@@ -139,11 +170,26 @@ impl<H: EventHandler> Factorizer<H> {
         self
     }
 
-    /// Runs only Pollard's P-1 method, no curves: with fixed bounds, once with `b1` and `b2`
-    /// per composite part; otherwise with the P-1 bounds of each level.
+    /// The factoring method (default: [`Algorithm::Ecm`]). With [`Algorithm::Pm1`] or
+    /// [`Algorithm::Pp1`], no curves: with fixed bounds, the method runs once with `b1` and
+    /// `b2` per composite part; otherwise it runs with the bounds of P-1 at each level.
     #[must_use]
-    pub const fn pm1(mut self, pm1: bool) -> Self {
-        self.pm1 = pm1;
+    pub const fn algorithm(mut self, algorithm: Algorithm) -> Self {
+        self.algorithm = algorithm;
+        self
+    }
+
+    /// Starting value `x0 = numerator/denominator` (modulo the number) of P-1 or P+1, as
+    /// GMP-ECM's `-x0` (default: 3 for P-1, `2/7` for P+1). Requires [`Algorithm::Pm1`] or
+    /// [`Algorithm::Pp1`].
+    ///
+    /// P+1 works modulo a prime `p` in a group of order `p + 1` if `x0^2 - 4` is not a square
+    /// modulo `p`, else of order `p - 1`: about half of the seeds find a factor with a smooth
+    /// `p + 1`. `2/7` (orders multiple of 6: `p + 1` for `p = 2 mod 3`) and `6/5` (multiple of
+    /// 4: `p + 1` for `p = 3 mod 4`) do slightly better than random seeds.
+    #[must_use]
+    pub fn x0(mut self, numerator: Integer, denominator: Integer) -> Self {
+        self.x0 = Some((numerator, denominator));
         self
     }
 
@@ -195,7 +241,8 @@ impl<H: EventHandler> Factorizer<H> {
             b2: self.b2,
             curves: self.curves,
             sigma: self.sigma,
-            pm1: self.pm1,
+            algorithm: self.algorithm,
+            x0: self.x0,
             max_memory: self.max_memory,
             interrupt: self.interrupt,
             timeout: self.timeout,
@@ -270,7 +317,7 @@ impl<H: EventHandler> Factorizer<H> {
             mode,
             self.param,
             self.sigma.clone(),
-            self.pm1,
+            (self.algorithm, self.x0.clone()),
             self.max_memory,
             rand,
             &mut self.handler,
@@ -280,6 +327,14 @@ impl<H: EventHandler> Factorizer<H> {
 
     /// Checks the options.
     fn mode(&self) -> Result<Mode, Error> {
+        if let Some((_, denominator)) = &self.x0 {
+            if self.algorithm == Algorithm::Ecm {
+                return Err(Error::InvalidOption("x0 is for P-1 and P+1, not curves"));
+            }
+            if *denominator == 0 {
+                return Err(Error::InvalidOption("x0 with a zero denominator"));
+            }
+        }
         let Some(b1) = self.b1 else {
             if self.b2.is_some() || self.curves.is_some() || self.sigma.is_some() {
                 return Err(Error::InvalidOption("b2, curves and sigma require b1"));
@@ -287,8 +342,8 @@ impl<H: EventHandler> Factorizer<H> {
             return Ok(Mode::Levels);
         };
         if let Some(sigma) = &self.sigma {
-            if self.pm1 {
-                return Err(Error::InvalidOption("sigma is for curves, not P-1"));
+            if self.algorithm != Algorithm::Ecm {
+                return Err(Error::InvalidOption("sigma is for curves, not P-1 or P+1"));
             }
             let valid = match self.param {
                 Param::Suyama => *sigma >= 6,

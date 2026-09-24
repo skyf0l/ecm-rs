@@ -19,8 +19,9 @@ use crate::{
 };
 use rug::Integer;
 
-/// Starting value `x0` of stage 1 (the choice barely matters: `E` has a large power of 2).
-const X0: u32 = 3;
+/// Default starting value `x0` of stage 1 (the choice barely matters: `E` has a large power of
+/// 2).
+const DEFAULT_X0: u32 = 3;
 
 /// 64-bit factors of the exponent multiplied together before each modular exponentiation
 /// (about 2^20 bits): bounds the memory used.
@@ -34,17 +35,16 @@ const STOP_CHUNK_WORDS: usize = 1 << 13;
 /// State of P-1 on a number: stage 1 done up to `b1`.
 #[derive(Debug, Clone)]
 pub struct Pm1 {
-    /// `x0^E(b1)` modulo the number (or a multiple of it).
-    x: Integer,
+    /// Numerator and denominator of `x0`.
+    x0: (Integer, Integer),
+    /// `x0^E(b1)` modulo the number (or a multiple of it), `None` before stage 1.
+    x: Option<Integer>,
     b1: usize,
 }
 
 impl Default for Pm1 {
     fn default() -> Self {
-        Self {
-            x: Integer::from(X0),
-            b1: 1,
-        }
+        Self::with_x0(DEFAULT_X0.into(), 1.into())
     }
 }
 
@@ -55,6 +55,17 @@ impl Pm1 {
         Self::default()
     }
 
+    /// Nothing done yet, with the starting value `x0 = numerator/denominator` (`denominator !=
+    /// 0`).
+    #[must_use]
+    pub fn with_x0(numerator: Integer, denominator: Integer) -> Self {
+        Self {
+            x0: (numerator, denominator),
+            x: None,
+            b1: 1,
+        }
+    }
+
     /// Stage 1 bound reached so far.
     #[must_use]
     pub fn b1(&self) -> usize {
@@ -62,7 +73,7 @@ impl Pm1 {
     }
 
     /// Extends stage 1 to `b1` modulo `n` (a divisor of the previous numbers, if any): returns
-    /// `gcd(x - 1, n)`.
+    /// `gcd(x - 1, n)` (or `gcd(denominator, n)` if `x0` is not defined modulo `n`).
     #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn stage1(&mut self, n: &Integer, b1: usize) -> Integer {
         self.stage1_until(n, b1, Stop::NEVER)
@@ -71,7 +82,13 @@ impl Pm1 {
     /// [`Pm1::stage1`], stopping early if `stop` is requested: the bound reached is then not
     /// updated, and `x` stays valid (a power of the previous one).
     pub(crate) fn stage1_until(&mut self, n: &Integer, b1: usize, stop: Stop<'_>) -> Integer {
-        self.x %= n;
+        let mut x = match self.x.take() {
+            Some(x) => x % n,
+            None => match lucas::rational(&self.x0.0, &self.x0.1, n) {
+                Ok(x) => x,
+                Err(g) => return g,
+            },
+        };
         if self.b1 < b1 {
             let chunk_words = if stop.is_never() {
                 CHUNK_WORDS
@@ -91,19 +108,24 @@ impl Pm1 {
                     .take(chunk_words)
                     .map(Integer::from)
                     .collect();
-                self.x
-                    .pow_mod_mut(&product(chunk), n)
+                x.pow_mod_mut(&product(chunk), n)
                     .expect("positive exponent");
             }
             if !stopped {
                 self.b1 = b1;
             }
         }
-        Integer::from(&self.x - 1u32).gcd(n)
+        let g = Integer::from(&x - 1u32).gcd(n);
+        self.x = Some(x);
+        g
     }
 
     /// Stage 2 modulo `n` with `plan`, whose `b1` must be at most the stage 1 bound: returns
     /// `gcd(g, n)` (see [`crate::ecm::stage2`]).
+    ///
+    /// # Panics
+    ///
+    /// If stage 1 did not run.
     #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     #[must_use]
     pub fn stage2(&self, n: &Integer, plan: &Stage2Plan) -> Integer {
@@ -113,7 +135,8 @@ impl Pm1 {
     /// [`Pm1::stage2`], stopping early (with the gcd of a partial product) if `stop` is
     /// requested.
     pub(crate) fn stage2_until(&self, n: &Integer, plan: &Stage2Plan, stop: Stop<'_>) -> Integer {
-        let x = Integer::from(&self.x % n);
+        let x = self.x.as_ref().expect("stage 1 runs first");
+        let x = Integer::from(x % n);
         let Ok(inv) = x.clone().invert(n) else {
             return x.gcd(n);
         };
@@ -143,7 +166,8 @@ mod tests {
         let mut pm1 = Pm1::new();
         pm1.stage1(&n, b1);
         let e = crate::ecm::stage1_multiplier(b1);
-        assert_eq!(pm1.x, Integer::from(X0).pow_mod(&e, &n).unwrap());
+        let x0 = Integer::from(DEFAULT_X0);
+        assert_eq!(pm1.x, Some(x0.pow_mod(&e, &n).unwrap()));
     }
 
     #[test]
@@ -172,7 +196,7 @@ mod tests {
             if pm1.stage1(&n, b1) != 1 {
                 continue;
             }
-            let y = Integer::from(&pm1.x % p);
+            let y = Integer::from(pm1.x.as_ref().unwrap() % p);
             let expected = ls.iter().any(|&l| {
                 y.clone()
                     .pow_mod(&Integer::from(l), &Integer::from(p))
