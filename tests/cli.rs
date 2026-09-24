@@ -179,6 +179,9 @@ fn usage_errors() {
         &["--pm1", "--b1", "1000", "--curves", "3", "15"],
         &["--primetest", "--one", "15"],
         &["-q", "-v", "15"],
+        &["--base2", "0", "15"],
+        &["--base2", "x", "15"],
+        &["--base2", "5", "--nobase2", "15"],
     ] {
         let (code, out, err) = run(args);
         assert_eq!(code, 64, "{args:?}: {err}");
@@ -470,6 +473,7 @@ fn printconfig() {
     assert!(out.contains("Montgomery"));
     assert!(out.contains("above 1024 bits "), "{out}");
     assert!(out.contains("Stage 2 memory (default): 256 MiB"), "{out}");
+    assert!(out.contains("Special division (GMP-ECM -base2)"), "{out}");
     let (code, _, _) = run(&["--printconfig", "15"]);
     assert_eq!(code, 64);
 }
@@ -484,4 +488,39 @@ fn quiet_and_bounds() {
     let (_, out, err) = run(&["-v", "--b1", "2001", "--b2", "100001", "-c", "1", "2^67-1"]);
     assert!(err.contains("Using B1=2002, B2="), "{err}");
     assert!(!out.is_empty());
+}
+
+#[test]
+fn base2() {
+    // The special reduction by default on the part of 407 bits of 2^423 + 1, as GMP-ECM.
+    let expected = "21661481985318866090456360813617841433097164651373566993519371723551728967231450179999800047688590453885868835635965404913860609 = 3^3 * 19 * 283 * 1681003 * 85693033 * 35273039401 * 111349165273 * 165768537521 * 6596828416459 * 241158858171883059466688969410187157879210229879717221093613507\n";
+    let (code, out, err) = run(&["-v", "2^423+1"]);
+    assert_eq!((code, out.as_str()), (14, expected));
+    assert!(
+        err.contains("Using special division for factor of 2^423+1\n"),
+        "{err}"
+    );
+    let (code, out, err) = run(&["-v", "--nobase2", "2^423+1"]);
+    assert_eq!((code, out.as_str()), (14, expected));
+    assert!(!err.contains("special division"), "{err}");
+    // A multiple: 2^846 - 1 = (2^423 - 1)(2^423 + 1).
+    let (code, out, err) = run(&["-v", "--base2", "-846", "2^423+1"]);
+    assert_eq!((code, out.as_str()), (14, expected));
+    assert!(
+        err.contains("Using special division for factor of 2^846-1\n"),
+        "{err}"
+    );
+    // Forced: the numbers must divide 2^K+-1 (after trial division), the others are errors.
+    let (code, out, err) = run(&["--base2", "-67", "2^67-1", "3*(2^67-1)", "2^67+1", "2^61-1"]);
+    assert_eq!(
+        out,
+        "147573952589676412927 = 193707721 * 761838257287\n\
+         442721857769029238781 = 3 * 193707721 * 761838257287\n\
+         2305843009213693951 = 2305843009213693951\n"
+    );
+    assert_eq!(code, 8 | 1);
+    assert!(
+        err.contains("2^67+1: base2: the number does not divide"),
+        "{err}"
+    );
 }

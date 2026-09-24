@@ -9,7 +9,7 @@ mod ui;
 
 use args::{Cli, status};
 use clap::{Parser, error::ErrorKind};
-use ecm::{Algorithm, Error, Factorizer, Param};
+use ecm::{Algorithm, Base2Mode, Error, Factorizer, Param};
 use rug::Integer;
 use serde_json::{Value, json};
 use std::{
@@ -153,6 +153,11 @@ fn factorizer(cli: &Cli) -> Result<Factorizer, String> {
     }
     if let Some(mb) = cli.maxmem {
         f = f.max_memory(mb.saturating_mul(1 << 20));
+    }
+    if let Some(k) = cli.base2 {
+        f = f.base2(Base2Mode::Force(k));
+    } else if cli.nobase2 {
+        f = f.base2(Base2Mode::Off);
     }
     if let Some(timeout) = cli.timeout {
         f = f.timeout(timeout);
@@ -323,6 +328,10 @@ impl Run<'_> {
         self.busy.store(false, Ordering::SeqCst);
         let time = start.elapsed();
         ui.finish();
+        if let Some(Error::InvalidOption(msg)) = outcome.error {
+            // --base2 with a number that does not divide 2^K+-1.
+            return self.invalid(input, msg.into());
+        }
         let outcome = normalize(outcome);
         // Whether a proper factor was found: the parts are not just `n`.
         let whole = (n.clone(), 1);
@@ -577,6 +586,13 @@ fn print_config() {
     row(
         format!("above {} bits", 64 * max),
         "GMP integers (mpz), plain reduction",
+    );
+    println!(
+        "Special division (GMP-ECM -base2): the numbers dividing 2^k+-1 with {} <= k <= {} x \
+         their bits compute modulo 2^k+-1 when it is faster than the above (from 320 to 1025 \
+         bits); --base2 K forces it, --nobase2 disables it",
+        config::BASE2_MIN_EXPONENT,
+        config::BASE2_THRESHOLD
     );
     println!(
         "Default parametrization: {} (GMP-ECM -param)",

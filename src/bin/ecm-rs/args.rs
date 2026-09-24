@@ -55,6 +55,8 @@ GMP-ECM equivalents:
                                  random, which finds a smooth p+1 half of the time)
   ecm -pm1/-pp1 -x0 X ...      ecm-rs --pm1/--pp1 --x0 X ...
   ecm -maxmem MB               ecm-rs --maxmem MB
+  ecm -base2 K / -nobase2      ecm-rs --base2 K / --nobase2   (by default, as GMP-ECM: the
+                                 numbers dividing 2^k+-1 compute modulo it, when faster)
   ecm -primetest               ecm-rs --primetest
   ecm -printconfig             ecm-rs --printconfig
   ecm -q / -v                  ecm-rs -q / -v
@@ -156,6 +158,22 @@ pub struct Cli {
     #[arg(long, value_name = "MB")]
     pub maxmem: Option<usize>,
 
+    /// Computes modulo 2^K+1 (K > 0) or 2^-K-1 (K < 0), with a reduction by shifts and
+    /// additions, as GMP-ECM's -base2: every composite part must divide it. By default, the
+    /// numbers that divide 2^k+-1 with k at most 1.4 times their size do when it is faster.
+    #[arg(
+        long,
+        value_name = "K",
+        allow_hyphen_values = true,
+        value_parser = parse_base2,
+        conflicts_with = "nobase2"
+    )]
+    pub base2: Option<i64>,
+
+    /// Never computes modulo 2^k+-1 (GMP-ECM's -nobase2).
+    #[arg(long)]
+    pub nobase2: bool,
+
     /// Only tests whether each number is prime: prints "N: prime" or "N: composite".
     #[arg(long, conflicts_with_all = ["one", "pm1", "pp1", "b1"])]
     pub primetest: bool,
@@ -233,6 +251,14 @@ fn parse_x0(s: &str) -> Result<(Integer, Integer), String> {
         return Err(format!("invalid x0 '{s}': zero denominator"));
     }
     Ok((num, den))
+}
+
+/// A non-zero exponent `K` of `--base2`.
+fn parse_base2(s: &str) -> Result<i64, String> {
+    s.parse::<i64>()
+        .ok()
+        .filter(|&k| k != 0)
+        .ok_or_else(|| format!("invalid exponent '{s}' (K for 2^K+1, -K for 2^K-1)"))
 }
 
 fn parse_timeout(s: &str) -> Result<Duration, String> {
