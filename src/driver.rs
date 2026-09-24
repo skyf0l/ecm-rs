@@ -17,8 +17,8 @@
 use crate::{
     cost::Costs,
     ecm::{
-        rand_state, random_sigma, run_curve, sort_factor, stage1_multiplier, trial_division,
-        CurveOutcome, Error, Param,
+        CurveOutcome, Error, Param, rand_state, random_sigma, run_curve, sort_factor,
+        stage1_multiplier, trial_division,
     },
     pm1::Pm1,
     rho::ecm_prob,
@@ -26,7 +26,7 @@ use crate::{
 };
 #[cfg(feature = "progress-bar")]
 use indicatif::ProgressBar;
-use rug::{rand::RandState, Integer};
+use rug::{Integer, rand::RandState};
 use std::{collections::HashMap, rc::Rc};
 
 /// A level of the search: factors of up to `digits` digits, with the bounds of the curves.
@@ -258,7 +258,7 @@ fn find_factor(
             let sigma = random_sigma(n, param, &mut ctx.rand);
             match run_curve(n, param, &sigma, &k, &plan) {
                 CurveOutcome::Setup(g) | CurveOutcome::Stage1(g) | CurveOutcome::Stage2(g) => {
-                    return Ok(g)
+                    return Ok(g);
                 }
                 CurveOutcome::Failed => {}
             }

@@ -18,8 +18,8 @@
 #[path = "../benches/common/mod.rs"]
 mod common;
 
-use common::{curve_point, semiprime_bits, PER_CURVE_ROWS, SEED, SIGMA};
-use ecm::bench::{stage1, stage1_multiplier, stage2, Param, Stage2Plan};
+use common::{PER_CURVE_ROWS, SEED, SIGMA, curve_point, semiprime_bits};
+use ecm::bench::{Param, Stage2Plan, stage1, stage1_multiplier, stage2};
 use std::time::Instant;
 
 fn main() {

@@ -14,12 +14,12 @@
 mod common;
 
 use common::{
-    bounds, curve_point, residues, semiprime_bits, stage2_point, success_rate_number,
-    GMP_ECM_BOUNDS, SEED, SIGMA,
+    GMP_ECM_BOUNDS, SEED, SIGMA, bounds, curve_point, residues, semiprime_bits, stage2_point,
+    success_rate_number,
 };
 use ecm::bench::{
-    run_curve, stage1, stage1_multiplier, stage2, ArithBatch, CurveOutcome, Param, Pm1, Point,
-    Stage2Plan,
+    ArithBatch, CurveOutcome, Param, Pm1, Point, Stage2Plan, run_curve, stage1, stage1_multiplier,
+    stage2,
 };
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use rug::Integer;

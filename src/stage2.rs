@@ -16,7 +16,7 @@
 //! modulo a factor of `n`: that factor is returned right away. This also checks the primes
 //! `l < D`, which are baby steps.
 
-use crate::primes::{primes, PrimesUpTo};
+use crate::primes::{PrimesUpTo, primes};
 use crate::{
     arith::{Arith, Factor, PolyArith},
     cost::Costs,
@@ -759,7 +759,7 @@ mod tests {
     use super::*;
     use crate::{
         arith::Mont,
-        ecm::{curve, stage1, stage1_multiplier, Param},
+        ecm::{Param, curve, stage1, stage1_multiplier},
     };
     use primal::Primes;
 
