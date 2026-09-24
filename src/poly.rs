@@ -156,7 +156,7 @@ pub fn mul_part<A: PolyArith>(
         schoolbook(a, &mut ws.bufs.acc, out, from, x.coeffs, y.coeffs, None);
         return;
     }
-    let bits = a.modulus().significant_bits() as usize;
+    let bits = a.value_bits();
     if let Some((s, rn)) = middle_size(bits, lx, ly, from, from + out.len()) {
         kronecker(a, ws, out, from, x, y, s, Some(rn));
     } else {
@@ -225,7 +225,7 @@ pub fn mul_wrap<A: PolyArith>(
         );
         return lmin;
     }
-    let bits = a.modulus().significant_bits() as usize;
+    let bits = a.value_bits();
     let key = (bits, lx, ly, lmin);
     match *ws
         .shapes

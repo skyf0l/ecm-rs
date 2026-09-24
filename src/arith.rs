@@ -95,7 +95,19 @@ pub enum Factor<E> {
 /// Calls `$body` with `$a` bound to the fastest [`Arith`] implementation for the modulus `$n`.
 ///
 /// `$body` is compiled once per implementation, so it should be a call to a generic function.
+///
+/// With a form `$base2` (an `Option<Base2Form>`, see [`crate::base2`]), the special reduction
+/// modulo `2^k +- 1` of [`crate::base2::Base2`] if it is `Some`.
 macro_rules! with_arith {
+    ($n:expr, $base2:expr, |$a:ident| $body:expr) => {{
+        match $base2 {
+            Some(form) => {
+                let $a = $crate::base2::Base2::new($n, form);
+                $body
+            }
+            None => $crate::arith::with_arith!($n, |$a| $body),
+        }
+    }};
     ($n:expr, |$a:ident| $body:expr) => {{
         let n: &rug::Integer = $n;
         match $crate::arith::mont_limbs(n) {
@@ -183,7 +195,7 @@ pub fn mont_limbs(n: &Integer) -> usize {
 }
 
 /// `x mod n`, in `[0, n)`.
-fn reduce(x: &Integer, n: &Integer) -> Integer {
+pub(crate) fn reduce(x: &Integer, n: &Integer) -> Integer {
     let mut r = Integer::from(x % n);
     if r < 0 {
         r += n;
@@ -221,14 +233,14 @@ thread_local! {
 
 /// `lo + a * b + carry`, as `(low limb, high limb)`: never overflows.
 #[inline(always)]
-fn mac(lo: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
+pub(crate) fn mac(lo: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
     let t = u128::from(lo) + u128::from(a) * u128::from(b) + u128::from(carry);
     (t as u64, (t >> 64) as u64)
 }
 
 /// `a + b + carry` (carry is 0 or 1), as `(sum, carry out)`.
 #[inline(always)]
-fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
+pub(crate) fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
     let (s, c1) = a.overflowing_add(b);
     let (s, c2) = s.overflowing_add(carry);
     (s, u64::from(c1 | c2))
@@ -236,7 +248,7 @@ fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
 
 /// `a - b - borrow` (borrow is 0 or 1), as `(difference, borrow out)`.
 #[inline(always)]
-fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
+pub(crate) fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
     let (d, b1) = a.overflowing_sub(b);
     let (d, b2) = d.overflowing_sub(borrow);
     (d, u64::from(b1 | b2))
@@ -478,6 +490,65 @@ impl<const N: usize> Arith for Mont<N> {
         (s[N - 1], hi) = adc(carry, c, 0);
         self.reduce_once(r, &s, hi);
     }
+}
+
+/// `x^e` for `e > 0`, by left-to-right sliding windows: about one squaring per bit of `e`,
+/// and one multiplication per window.
+pub(crate) fn pow<A: Arith>(a: &A, x: &A::Elem, e: &Integer) -> A::Elem {
+    assert!(*e > 0, "positive exponent");
+    let bits = e.significant_bits();
+    // Window width: the odd powers below 2^width cost 2^(width - 1) multiplications, a window
+    // saves bits/(width + 1) - bits/(width + 2) of them.
+    let width = match bits {
+        0..64 => 2,
+        64..512 => 4,
+        512..8192 => 5,
+        8192..65536 => 6,
+        _ => 7,
+    };
+    // Odd powers x, x^3, ..., x^(2^width - 1).
+    let mut x2 = a.zero();
+    a.sqr(&mut x2, x);
+    let mut odd = vec![x.clone()];
+    for i in 1..1usize << (width - 1) {
+        let mut t = a.zero();
+        a.mul(&mut t, &odd[i - 1], &x2);
+        odd.push(t);
+    }
+    let (mut r, mut t) = (a.zero(), a.zero());
+    let mut first = true;
+    // Bits i and below remain.
+    let mut i = i64::from(bits) - 1;
+    while i >= 0 {
+        if !e.get_bit(i as u32) {
+            a.sqr(&mut t, &r);
+            std::mem::swap(&mut r, &mut t);
+            i -= 1;
+            continue;
+        }
+        // The window i..=j, ending with a one.
+        let mut j = (i - i64::from(width) + 1).max(0);
+        while !e.get_bit(j as u32) {
+            j += 1;
+        }
+        let mut value = 0;
+        for b in (j..=i).rev() {
+            value = (value << 1) | usize::from(e.get_bit(b as u32));
+        }
+        if first {
+            r.clone_from(&odd[value >> 1]);
+            first = false;
+        } else {
+            for _ in j..=i {
+                a.sqr(&mut t, &r);
+                std::mem::swap(&mut r, &mut t);
+            }
+            a.mul(&mut t, &r, &odd[value >> 1]);
+            std::mem::swap(&mut r, &mut t);
+        }
+        i = j - 1;
+    }
+    r
 }
 
 /// GMP's low-level (`mpn`) functions on 64-bit limbs, for the large sizes of [`Mont`] and the
@@ -722,10 +793,16 @@ impl Arith for Plain {
 ///
 /// The polynomial representation of `x` is `x*R' mod n` (`R' = 2^(64*(N + 1))` for [`Mont`],
 /// `R' = 1` for [`Plain`]), a value in `[0, n)`: [`PolyArith::redc_wide`] divides by `R'`, so it
-/// maps the product of two such values back to the representation of the product.
+/// maps the product of two such values back to the representation of the product. For
+/// [`crate::base2::Base2`], `R' = 1` and the value is the residue modulo `M = 2^k +- 1`, below
+/// [`PolyArith::value_bits`] (not `n`).
 pub trait PolyArith: Arith {
-    /// Number of limbs of the values: `n < 2^(64*limbs)`.
+    /// Number of limbs of the values: they are below `2^(64*limbs)`.
     fn limbs(&self) -> usize;
+    /// Bits of the values: they are below `2^value_bits` (those of `n` by default).
+    fn value_bits(&self) -> usize {
+        self.modulus().significant_bits() as usize
+    }
     /// `r` = polynomial representation of the residue `x`.
     fn to_poly(&self, r: &mut Self::Elem, x: &Self::Elem);
     /// Writes the limbs of the value of `x` (polynomial representation) to `out`, of length
@@ -734,7 +811,8 @@ pub trait PolyArith: Arith {
     /// `acc += x*y` (values of the polynomial representation), `acc` having at least
     /// `2*limbs + 1` limbs (the carry out of `acc` is lost).
     fn mul_acc(&self, acc: &mut [u64], x: &Self::Elem, y: &Self::Elem);
-    /// `r = t/R' mod n`, for `t < n*R'` given by at most `2*limbs + 2` limbs.
+    /// `r = t/R' mod n`, for `t < n*R'` (any `t` for `Base2`) given by at most `2*limbs + 2`
+    /// limbs.
     fn redc_wide(&self, r: &mut Self::Elem, t: &[u64]);
 
     /// `r = x*y` in the polynomial representation.
@@ -759,13 +837,13 @@ pub trait PolyArith: Arith {
         let mut r = self.zero();
         self.redc_wide(&mut r, &limbs);
         self.write_limbs(&r, &mut limbs);
-        Integer::from_digits(&limbs, Order::Lsf)
+        Integer::from_digits(&limbs, Order::Lsf) % self.modulus()
     }
 }
 
 /// `acc += x*y` on limbs, `acc` having at least `x.len() + y.len()` limbs; returns the carry
 /// out of `acc`.
-fn mul_acc_limbs(acc: &mut [u64], x: &[u64], y: &[u64]) -> u64 {
+pub(crate) fn mul_acc_limbs(acc: &mut [u64], x: &[u64], y: &[u64]) -> u64 {
     let mut top = 0;
     for (i, &yi) in y.iter().enumerate() {
         let mut c = 0;
@@ -874,9 +952,10 @@ impl PolyArith for Plain {
 
 /// A chain of modular multiplications or squarings on fixed residues, for benchmarks.
 ///
-/// Dispatched like the curve code (Montgomery up to 16 limbs, plain integers above): the setup
-/// (conversion to the internal representation) is done by [`ArithBatch::new`], and
-/// [`ArithBatch::run`] only computes.
+/// Dispatched like the curve code (Montgomery up to 16 limbs, plain integers above, the special
+/// reduction for the divisors of `2^k +- 1` it applies to): the setup (conversion to the
+/// internal representation) is done by [`ArithBatch::new`], and [`ArithBatch::run`] only
+/// computes.
 #[cfg(feature = "bench")]
 pub struct ArithBatch(Box<dyn BatchRun>);
 
@@ -920,13 +999,14 @@ impl ArithBatch {
     #[must_use]
     pub fn new(n: &Integer, values: &[Integer]) -> Self {
         assert!(!values.is_empty());
-        with_arith!(n, |arith| {
+        with_arith!(n, crate::base2::Base2Form::detect(n), |arith| {
             let values = values.iter().map(|x| arith.residue(x)).collect();
             Self(Box::new(Batch { arith, values }))
         })
     }
 
-    /// Number of limbs of the Montgomery implementation used, or `0` for plain integers.
+    /// Number of limbs of the Montgomery implementation for `n`, or `0` for plain integers (the
+    /// special reduction may be used instead, see [`ArithBatch::new`]).
     #[must_use]
     pub fn limbs(n: &Integer) -> usize {
         mont_limbs(n)
@@ -1152,6 +1232,24 @@ mod tests {
         Integer::from(Integer::u_pow_u(2, 64))
             .invert(n)
             .unwrap_or_else(|_| Integer::from(1))
+    }
+
+    #[test]
+    fn pow_matches_integers() {
+        let mut rand = RandState::new();
+        let n = Integer::from(Integer::u_pow_u(2, 300)) - 153u32;
+        for bits in [1, 2, 5, 63, 64, 100, 511, 512, 3000, 9000, 70000] {
+            for _ in 0..2 {
+                let mut e = Integer::from(Integer::random_bits(bits, &mut rand));
+                e.set_bit(bits - 1, true);
+                let x = n.clone().random_below(&mut rand);
+                let expected = x.clone().pow_mod(&e, &n).unwrap();
+                with_arith!(&n, |a| assert_eq!(
+                    a.to_integer(&pow(&a, &a.residue(&x), &e)),
+                    expected
+                ));
+            }
+        }
     }
 
     #[test]

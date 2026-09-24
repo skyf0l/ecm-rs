@@ -33,3 +33,10 @@ pub const MAX_POLY_MEMORY: usize = 256 * 1024 * 1024;
 pub fn bmi2_adx_detected() -> bool {
     std::is_x86_feature_detected!("bmi2") && std::is_x86_feature_detected!("adx")
 }
+
+/// GMP-ECM's `BASE2_THRESHOLD`: largest ratio of `k` to the size of `n` for the special
+/// reduction.
+pub const BASE2_THRESHOLD: f64 = 1.4;
+
+/// GMP-ECM's `MOD_MINBASE2`: smallest `k` for the special reduction.
+pub const BASE2_MIN_EXPONENT: u32 = 16;
