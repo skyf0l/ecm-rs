@@ -258,7 +258,20 @@ impl Stage2Plan {
     ///
     /// If `b1 < 3`.
     #[must_use]
+    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
     pub fn new(n: &Integer, b1: usize, b2: usize) -> Self {
+        Self::with_max_memory(n, b1, b2, MAX_POLY_MEMORY)
+    }
+
+    /// As [`Stage2Plan::new`], with the polynomial continuation limited to `max_memory` bytes
+    /// (the baby-step giant-step one, chosen when no polynomial plan fits, uses at most about
+    /// 32 MiB plus its baby steps).
+    ///
+    /// # Panics
+    ///
+    /// If `b1 < 3`.
+    #[must_use]
+    pub fn with_max_memory(n: &Integer, b1: usize, b2: usize, max_memory: usize) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
         let bits = n.significant_bits() as usize;
         let costs = Costs::new(bits);
@@ -267,7 +280,7 @@ impl Stage2Plan {
         if pairs_always_cheaper(bits, b2) {
             return Self::pairs(b1, b2);
         }
-        let (poly, poly_cost) = best_poly_plan(&costs, b1, b2);
+        let (poly, poly_cost) = best_poly_plan(&costs, b1, b2, max_memory);
         if poly_cost < pairs {
             Self::Poly(poly)
         } else {
@@ -279,11 +292,18 @@ impl Stage2Plan {
     /// [`Stage2Plan::new`] would choose, modulo a number of `bits` bits, is at most `budget`,
     /// without building the plan (nor searching the polynomial ones if the baby-step giant-step
     /// continuation is cheap enough).
-    pub(crate) fn cost_at_most(bits: usize, b1: usize, b2: usize, budget: f64) -> bool {
+    pub(crate) fn cost_at_most(
+        bits: usize,
+        b1: usize,
+        b2: usize,
+        budget: f64,
+        max_memory: usize,
+    ) -> bool {
         let costs = Costs::new(bits);
         let d = giant_step(b1, b2);
         costs.pairs_stage2(b1, b2, d, phi(d)) <= budget
-            || (!pairs_always_cheaper(bits, b2) && best_poly_shape(&costs, b1, b2).1 <= budget)
+            || (!pairs_always_cheaper(bits, b2)
+                && best_poly_shape(&costs, b1, b2, max_memory).1 <= budget)
     }
 
     /// Plan of the baby-step giant-step continuation.
@@ -306,7 +326,7 @@ impl Stage2Plan {
     pub fn poly(n: &Integer, b1: usize, b2: usize) -> Self {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
         let costs = Costs::new(n.significant_bits() as usize);
-        Self::Poly(best_poly_plan(&costs, b1, b2).0)
+        Self::Poly(best_poly_plan(&costs, b1, b2, MAX_POLY_MEMORY).0)
     }
 
     /// Stage 1 bound: stage 2 checks the primes above it.
@@ -350,12 +370,13 @@ pub(crate) const POLY_GIANT_STEPS: [usize; 96] = [
     8978970, 10210200, 11741730, 13123110, 14804790,
 ];
 
-/// Largest memory (in bytes) used by the polynomial continuation.
-const MAX_POLY_MEMORY: f64 = 256.0 * 1024.0 * 1024.0;
+/// Largest memory (in bytes) used by the polynomial continuation, by default.
+pub(crate) const MAX_POLY_MEMORY: usize = 256 * 1024 * 1024;
 
-/// Cheapest polynomial continuation and its cost.
-fn best_poly_plan(costs: &Costs, b1: usize, b2: usize) -> (PolyPlan, f64) {
-    let ((d1, d2, blocks), cost) = best_poly_shape(costs, b1, b2);
+/// Cheapest polynomial continuation using at most `max_memory` bytes, and its cost (infinite
+/// if none fits).
+fn best_poly_plan(costs: &Costs, b1: usize, b2: usize, max_memory: usize) -> (PolyPlan, f64) {
+    let ((d1, d2, blocks), cost) = best_poly_shape(costs, b1, b2, max_memory);
     (PolyPlan::new(b1, b2, d1, d2, blocks), cost)
 }
 
@@ -363,7 +384,12 @@ fn best_poly_plan(costs: &Costs, b1: usize, b2: usize) -> (PolyPlan, f64) {
 /// its cost: the giant step `d1` from GMP-ECM's list, with or without `d2`, and blocks of
 /// `phi(d1)/2` giant steps (the last one partial) or fewer larger blocks, all full (with `F`
 /// padded).
-fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> ((usize, usize, usize), f64) {
+fn best_poly_shape(
+    costs: &Costs,
+    b1: usize,
+    b2: usize,
+    max_memory: usize,
+) -> ((usize, usize, usize), f64) {
     let mut best = ((6, 1, 0), f64::INFINITY);
     let mut cache = HashMap::new();
     let fits = |df: usize| {
@@ -371,7 +397,7 @@ fn best_poly_shape(costs: &Costs, b1: usize, b2: usize) -> ((usize, usize, usize
         // about 52 more coefficients per leaf: the other polynomials, F and its inverse packed
         // for the products, the Kronecker products and GMP's scratch space.
         let coeffs = f64::from(usize::BITS - df.leading_zeros()) + 52.0;
-        coeffs * df as f64 * costs.elem_bytes() <= MAX_POLY_MEMORY
+        coeffs * df as f64 * costs.elem_bytes() <= max_memory as f64
     };
     for d1 in std::iter::once(6).chain(POLY_GIANT_STEPS) {
         if prime_factors(d1).iter().any(|&p| p > b1) {
@@ -845,7 +871,7 @@ mod tests {
                     if pairs_always_cheaper(bits, b2) {
                         let d = giant_step(b1, b2);
                         let pairs = costs.pairs_stage2(b1, b2, d, phi(d));
-                        let poly = best_poly_shape(&costs, b1, b2).1;
+                        let poly = best_poly_shape(&costs, b1, b2, MAX_POLY_MEMORY).1;
                         assert!(pairs <= poly, "{bits} {b1} {b2}: {pairs} > {poly}");
                     }
                     b2 += b2 / 16 + 1;

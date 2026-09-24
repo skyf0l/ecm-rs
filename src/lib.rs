@@ -8,6 +8,8 @@ mod cost;
 mod curve;
 mod driver;
 mod ecm;
+mod events;
+mod factorizer;
 mod pm1;
 mod poly;
 mod primes;
@@ -15,7 +17,11 @@ mod rho;
 mod stage2;
 mod stage2_poly;
 
-pub use crate::ecm::{Error, ecm, ecm_one_factor, ecm_with_params};
+pub use crate::{
+    ecm::{Error, Param, ecm, ecm_one_factor, ecm_with_params},
+    events::{Event, EventHandler, Method, NoEvents},
+    factorizer::{Factorization, Factorizer},
+};
 
 /// Internals exposed for benchmarks only. Not part of the public API, no stability guarantees.
 #[cfg(feature = "bench")]
@@ -23,7 +29,6 @@ pub use crate::ecm::{Error, ecm, ecm_one_factor, ecm_with_params};
 pub mod bench {
     pub use crate::arith::ArithBatch;
     pub use crate::curve::Point;
-    pub use crate::driver::factor;
     pub use crate::ecm::{
         CurveOutcome, Param, batch2_curve, curve, random_sigma, run_curve, square_curve, stage1,
         stage1_multiplier, stage2, suyama_curve, trial_division,

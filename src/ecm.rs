@@ -1,20 +1,26 @@
 use crate::{
     arith::{Arith, Factor, with_arith},
     curve::{Curve, Point},
+    driver::{Engine, Mode},
+    events::NoEvents,
+    factorizer::Factorizer,
     primes::primes,
-    stage2::{Stage2Plan, stage2_with},
+    stage2::{MAX_POLY_MEMORY, Stage2Plan, stage2_with},
 };
-#[cfg(feature = "progress-bar")]
-use indicatif::ProgressBar;
 use rug::{
     Integer,
     integer::IsPrime,
     rand::{RandGen, RandState},
 };
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fmt,
+    time::{Duration, Instant},
+};
 
 /// Error occured during ecm factorization.
-#[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// Bounds should be an even integer.
     #[error("Bounds should be an even integer")]
@@ -28,6 +34,12 @@ pub enum Error {
     /// The number is prime.
     #[error("The number is prime")]
     NumberIsPrime,
+    /// The event handler interrupted the factorization (see [`crate::Factorizer::on_event`]).
+    #[error("The factorization was interrupted")]
+    Interrupted,
+    /// Incompatible options of a [`crate::Factorizer`].
+    #[error("Invalid option: {0}")]
+    InvalidOption(&'static str),
 }
 
 /// Number of rounds of the probabilistic primality test.
@@ -65,6 +77,8 @@ const PRIMALITY_REPS: u32 = 25;
 /// - `max_curve`: Maximum number of curves generated.
 /// - `rgen`: Random number generator.
 ///
+/// Unlike [`Factorizer::find_factor`], runs curves directly, without trial division.
+///
 /// # Errors
 ///
 /// [`Error::BoundsNotEven`] if `b1` or `b2` is odd, [`Error::BoundsTooSmall`] if `b1 < 6` or
@@ -80,65 +94,26 @@ pub fn ecm_one_factor(
     b2: usize,
     max_curve: usize,
     rgen: &mut RandState<'_>,
-    #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<Integer, Error> {
-    if !b1.is_multiple_of(2) || !b2.is_multiple_of(2) {
-        return Err(Error::BoundsNotEven);
-    }
-
-    // Stage 2 skips the primes of its wheel, which must be at most `b1`.
-    if b1 < 6 || b2 < 4 {
-        return Err(Error::BoundsTooSmall);
-    }
-    assert!(*n > 1, "only numbers greater than 1 have a proper factor");
-
-    // BPSW only (rug runs `reps - 24` Miller-Rabin rounds on top of it): no composite is known
-    // to pass it, and the caller usually already knows that `n` is composite.
-    if n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No {
-        return Err(Error::NumberIsPrime);
-    }
-
-    // A perfect power is split by its root at once (modulo a power of a small prime, the curves
-    // may all find its whole power).
-    if let Some((root, _)) = perfect_power(n) {
-        return Ok(root);
-    }
-
-    #[cfg(feature = "progress-bar")]
-    if let Some(pb) = pb {
-        pb.set_length(max_curve as u64);
-        pb.set_position(0);
-    }
-
-    let k = stage1_multiplier(b1);
-    let plan = Stage2Plan::new(n, b1, b2);
-    let param = Param::default();
-
-    for _ in 0..max_curve {
-        #[cfg(feature = "progress-bar")]
-        if let Some(pb) = pb {
-            pb.inc(1);
-        }
-
-        let sigma = random_sigma(n, param, rgen);
-        match run_curve(n, param, &sigma, &k, &plan) {
-            CurveOutcome::Setup(g) | CurveOutcome::Stage1(g) | CurveOutcome::Stage2(g) => {
-                return Ok(g);
-            }
-            CurveOutcome::Failed => {}
-        }
-    }
-
-    // ECM failed, Increase the bounds
-    Err(Error::ECMFailed)
+    let mode = Mode::fixed(b1, b2, Some(max_curve))?;
+    Engine::new(
+        mode,
+        Param::default(),
+        None,
+        false,
+        MAX_POLY_MEMORY,
+        rgen,
+        &mut NoEvents,
+    )
+    .find_one(n, false)
 }
 
 /// Random state seeded with `seed`, to draw the curves.
 ///
 /// Seeding GMP's default generator (a Mersenne Twister) costs about 0.26 ms, a modular
 /// exponentiation with a 20000-bit modulus, which is more than factoring a small number takes.
-pub(crate) fn rand_state(seed: usize) -> RandState<'static> {
-    RandState::new_custom_boxed(Box::new(SplitMix64(seed as u64)))
+pub(crate) fn rand_state(seed: u64) -> RandState<'static> {
+    RandState::new_custom_boxed(Box::new(SplitMix64(seed)))
 }
 
 /// Steele, Lea and Flood's `SplitMix64` generator: fast, and good enough to draw curves.
@@ -154,22 +129,56 @@ impl RandGen for SplitMix64 {
     }
 }
 
-/// Families of curves, named after GMP-ECM's `-param` values.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Families of curves, named after GMP-ECM's `-param` values (their [`Display`](fmt::Display)
+/// and conversions from and to `u8`).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Param {
-    /// Suyama's parametrization (GMP-ECM `-param 0`), see [`suyama_curve`]: `sigma` in
-    /// `[6, n - 1]`.
-    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
+    /// Suyama's parametrization (GMP-ECM `-param 0`): `sigma` in `[6, n - 1]`.
     Suyama,
-    /// GMP-ECM's default parametrization (`-param 1`), see [`square_curve`]: `sigma` in
-    /// `[2, 2^32)`. The cheapest stage 1, but about 1.3 times more curves than with the others
-    /// are needed to find a factor.
-    #[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
+    /// GMP-ECM's default parametrization (`-param 1`): `sigma` in `[2, 2^32)`. The cheapest
+    /// stage 1, but about 1.3 times more curves than with the others are needed to find a
+    /// factor.
     Square,
-    /// GMP-ECM's `-param 2`, see [`batch2_curve`]: `sigma` in `[2, 2^64)`. The default: as
-    /// effective as Suyama's curves, with a stage 1 almost as cheap as with `Square`.
+    /// GMP-ECM's `-param 2`: `sigma` in `[2, 2^64)`. The default: as effective as Suyama's
+    /// curves, with a stage 1 almost as cheap as with `Square`.
     #[default]
     Batch2,
+}
+
+impl From<Param> for u8 {
+    fn from(param: Param) -> Self {
+        match param {
+            Param::Suyama => 0,
+            Param::Square => 1,
+            Param::Batch2 => 2,
+        }
+    }
+}
+
+impl TryFrom<u8> for Param {
+    type Error = Error;
+
+    /// The parametrization of GMP-ECM's `-param` value.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidOption`] if it is not supported (only 0, 1 and 2 are).
+    fn try_from(param: u8) -> Result<Self, Error> {
+        match param {
+            0 => Ok(Self::Suyama),
+            1 => Ok(Self::Square),
+            2 => Ok(Self::Batch2),
+            _ => Err(Error::InvalidOption("unsupported parametrization")),
+        }
+    }
+}
+
+impl fmt::Display for Param {
+    /// GMP-ECM's `-param` value.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", u8::from(*self))
+    }
 }
 
 /// Random `sigma` for the curves of `param`, in the range documented by [`Param`].
@@ -215,6 +224,7 @@ pub enum CurveOutcome {
 /// Runs one ECM curve (curve setup, stage 1 and stage 2) of `param` with the given `sigma`.
 ///
 /// `k` must be the stage 1 multiplier returned by [`stage1_multiplier`] for the `b1` of `plan`.
+#[cfg_attr(not(any(test, feature = "bench")), allow(dead_code))]
 pub fn run_curve(
     n: &Integer,
     param: Param,
@@ -222,6 +232,20 @@ pub fn run_curve(
     k: &Integer,
     plan: &Stage2Plan,
 ) -> CurveOutcome {
+    run_curve_timed::<false>(n, param, sigma, k, plan).0
+}
+
+/// [`run_curve`], with the durations of the setup and stage 1, and of stage 2 if `TIMED` (zero
+/// otherwise).
+pub(crate) fn run_curve_timed<const TIMED: bool>(
+    n: &Integer,
+    param: Param,
+    sigma: &Integer,
+    k: &Integer,
+    plan: &Stage2Plan,
+) -> (CurveOutcome, [Duration; 2]) {
+    let start = TIMED.then(Instant::now);
+    let since = |start: Option<Instant>| start.map_or(Duration::ZERO, |start| start.elapsed());
     let p = match curve(n, param, sigma) {
         Ok(p) => p,
         // The point sigma*(-3, 3) of parametrization 2 has a small order modulo some primes
@@ -230,11 +254,15 @@ pub fn run_curve(
         // all at once whatever sigma: Suyama's curves do not have this problem.
         Err(g) if &g == n && param == Param::Batch2 && *n > 6 => {
             let sigma = sigma % Integer::from(n - 6u32) + 6u32;
-            return run_curve(n, Param::Suyama, &sigma, k, plan);
+            let (outcome, [_, stage2]) =
+                run_curve_timed::<TIMED>(n, Param::Suyama, &sigma, k, plan);
+            return (outcome, [since(start) - stage2, stage2]);
         }
         // If g = 1 or n, try another curve
-        Err(g) if g == 1 || &g == n => return CurveOutcome::Failed,
-        Err(g) => return CurveOutcome::Setup(g),
+        Err(g) if g == 1 || &g == n => {
+            return (CurveOutcome::Failed, [since(start), Duration::ZERO]);
+        }
+        Err(g) => return (CurveOutcome::Setup(g), [since(start), Duration::ZERO]),
     };
 
     let q = stage1(&p, k);
@@ -242,23 +270,28 @@ pub fn run_curve(
 
     // Stage 1 factor
     if &g != n && g != 1 {
-        return CurveOutcome::Stage1(g);
+        return (CurveOutcome::Stage1(g), [since(start), Duration::ZERO]);
     }
 
     // Stage 1 found all the factors at once (frequent when they are small compared to `b1`):
     // look for the point where it finds only some of them.
     if &g == n {
-        return stage1_backoff(n, &p, plan.b1()).map_or(CurveOutcome::Failed, CurveOutcome::Stage1);
+        let outcome =
+            stage1_backoff(n, &p, plan.b1()).map_or(CurveOutcome::Failed, CurveOutcome::Stage1);
+        return (outcome, [since(start), Duration::ZERO]);
     }
 
+    let stage1 = since(start);
+    let start = TIMED.then(Instant::now);
     let g = stage2(&q, plan);
+    let stage2 = since(start);
 
     // Stage 2 Factor found
     if &g != n && g != 1 {
-        return CurveOutcome::Stage2(g);
+        return (CurveOutcome::Stage2(g), [stage1, stage2]);
     }
 
-    CurveOutcome::Failed
+    (CurveOutcome::Failed, [stage1, stage2])
 }
 
 /// Splits `n` with the curve of the starting point `p` when stage 1 up to `b1` finds all its
@@ -602,7 +635,9 @@ pub fn trial_division(n: &Integer) -> (HashMap<Integer, usize>, Integer) {
 /// factor, and Pollard's P-1 method with larger bounds before each size. The time to find a
 /// factor thus depends on its size much more than on the size of `n`.
 ///
-/// Deterministic: the curves are drawn from a fixed seed.
+/// Deterministic: the curves are drawn from a fixed seed. This is `Factorizer::new().factor(n)`:
+/// see [`Factorizer`] for the options (seed, bounds, ...), the progress events and
+/// cancellation.
 ///
 /// # Parameters
 ///
@@ -617,23 +652,16 @@ pub fn trial_division(n: &Integer) -> (HashMap<Integer, usize>, Integer) {
 /// # Panics
 ///
 /// If `n` is not positive.
-pub fn ecm(
-    n: &Integer,
-    #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
-) -> Result<HashMap<Integer, usize>, Error> {
-    crate::driver::factor(
-        n,
-        1234,
-        #[cfg(feature = "progress-bar")]
-        pb,
-    )
+pub fn ecm(n: &Integer) -> Result<HashMap<Integer, usize>, Error> {
+    Factorizer::new().factor(n)
 }
 
 /// Performs factorization using Lenstra's Elliptic curve method, with fixed bounds.
 ///
-/// This function repeatedly calls `ecm_one_factor` to compute the factors
-/// of n. First all the small factors are taken out using trial division.
-/// Then `ecm_one_factor` is used to compute one factor at a time.
+/// First all the small factors are taken out using trial division, then each composite part
+/// runs up to `max_curve` curves (as [`ecm_one_factor`] does) until it is split. This is
+/// `Factorizer::new().seed(seed).b1(b1).b2(b2).curves(max_curve).factor(n)` (see
+/// [`Factorizer`]).
 ///
 /// # Parameters
 ///
@@ -647,7 +675,8 @@ pub fn ecm(
 ///
 /// [`Error::BoundsNotEven`] if `b1` or `b2` is odd, [`Error::BoundsTooSmall`] if `b1 < 6` or
 /// `b2 < 4`, and [`Error::ECMFailed`] if `max_curve` curves do not find a factor of a
-/// composite part of `n`.
+/// composite part of `n` (the other parts are still factored, see
+/// [`Factorizer::factor_partial`]).
 ///
 /// # Panics
 ///
@@ -658,79 +687,31 @@ pub fn ecm_with_params(
     b2: usize,
     max_curve: usize,
     seed: usize,
-    #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
 ) -> Result<HashMap<Integer, usize>, Error> {
-    if !b1.is_multiple_of(2) || !b2.is_multiple_of(2) {
-        return Err(Error::BoundsNotEven);
-    }
-    if b1 < 6 || b2 < 4 {
-        return Err(Error::BoundsTooSmall);
-    }
-    assert!(*n > 0, "only positive numbers can be factored");
-
-    let (mut factors, n) = trial_division(n);
-
-    let mut rand_state = rand_state(seed);
-
-    // Composite factors left to split, with the multiplicity they have in the original number.
-    let mut queue = Vec::new();
-    sort_factor(n, 1, (), &mut factors, &mut queue);
-
-    while let Some((n, exponent, ())) = queue.pop() {
-        let factor = ecm_one_factor(
-            &n,
-            b1,
-            b2,
-            max_curve,
-            &mut rand_state,
-            #[cfg(feature = "progress-bar")]
-            pb,
-        )?;
-
-        // `factor` may itself be composite: both parts go through `sort_factor` again.
-        let mut cofactor = n;
-        let mut multiplicity = 0;
-        while cofactor.is_divisible(&factor) {
-            cofactor /= &factor;
-            multiplicity += 1;
-        }
-        sort_factor(
-            factor,
-            exponent * multiplicity,
-            (),
-            &mut factors,
-            &mut queue,
-        );
-        sort_factor(cofactor, exponent, (), &mut factors, &mut queue);
-    }
-
-    Ok(factors)
+    Factorizer::new()
+        .seed(seed as u64)
+        .b1(b1)
+        .b2(b2)
+        .curves(max_curve)
+        .factor(n)
 }
 
-/// Records `n^exponent`: a prime goes to `factors`, a perfect power is reduced to its root, and
-/// any other composite is queued for factorization, with `state`.
-pub(crate) fn sort_factor<T>(
-    n: Integer,
-    exponent: usize,
-    state: T,
-    factors: &mut HashMap<Integer, usize>,
-    queue: &mut Vec<(Integer, usize, T)>,
-) {
-    if n == 1 {
-        return;
-    }
-    if n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No {
-        *factors.entry(n).or_insert(0) += exponent;
-        return;
-    }
-    match perfect_power(&n) {
-        Some((root, power)) => sort_factor(root, exponent * power as usize, state, factors, queue),
-        None => queue.push((n, exponent, state)),
-    }
+/// Whether `n` is prime (BPSW only: rug runs `reps - 24` Miller-Rabin rounds on top of it; no
+/// composite is known to pass it).
+pub(crate) fn is_prime(n: &Integer) -> bool {
+    n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No
+}
+
+/// The smallest prime factor of `n` below 2^16, if it is not `n` itself.
+pub(crate) fn small_factor(n: &Integer) -> Option<Integer> {
+    primes(TRIAL_DIVISION_BOUND - 1)
+        .take_while(|&p| Integer::from(p) * p <= *n)
+        .find(|&p| n.is_divisible_u(p as u32))
+        .map(Integer::from)
 }
 
 /// Writes `n` as `root^power` with the smallest possible `root`, if it is a perfect power.
-fn perfect_power(n: &Integer) -> Option<(Integer, u32)> {
+pub(crate) fn perfect_power(n: &Integer) -> Option<(Integer, u32)> {
     if !n.is_perfect_power() {
         return None;
     }
@@ -752,29 +733,13 @@ mod tests {
     use super::*;
     use crate::arith::Plain;
 
-    fn ecm(n: &Integer) -> Result<HashMap<Integer, usize>, Error> {
-        super::ecm(
-            n,
-            #[cfg(feature = "progress-bar")]
-            None,
-        )
-    }
-
     fn ecm_one_factor(
         n: &Integer,
         b1: usize,
         b2: usize,
         max_curve: usize,
     ) -> Result<Integer, Error> {
-        super::ecm_one_factor(
-            n,
-            b1,
-            b2,
-            max_curve,
-            &mut RandState::new(),
-            #[cfg(feature = "progress-bar")]
-            None,
-        )
+        super::ecm_one_factor(n, b1, b2, max_curve, &mut RandState::new())
     }
 
     /// 4009823 * 99476569
@@ -1119,15 +1084,7 @@ mod tests {
         b2: usize,
         max_curve: usize,
     ) -> Result<HashMap<Integer, usize>, Error> {
-        super::ecm_with_params(
-            n,
-            b1,
-            b2,
-            max_curve,
-            1234,
-            #[cfg(feature = "progress-bar")]
-            None,
-        )
+        super::ecm_with_params(n, b1, b2, max_curve, 1234)
     }
 
     #[test]

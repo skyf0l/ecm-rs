@@ -11,7 +11,7 @@
 //!
 //! Run with `cargo bench --features bench --bench e2e` (requires Valgrind and `gungraun-runner`).
 
-use ecm::bench::factor;
+use ecm::Factorizer;
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use rug::{Integer, integer::IsPrime, ops::Pow};
 use std::{collections::HashMap, hint::black_box, str::FromStr};
@@ -19,15 +19,9 @@ use std::{collections::HashMap, hint::black_box, str::FromStr};
 /// Factors `n` as `ecm::ecm` does, once per seed, and checks the results.
 fn factor_with_seeds(n: &str, seeds: u64) -> Vec<HashMap<Integer, usize>> {
     let n = Integer::from_str(n).unwrap();
-    (0..seeds as usize)
+    (0..seeds)
         .map(|seed| {
-            let factors = factor(
-                black_box(&n),
-                seed,
-                #[cfg(feature = "progress-bar")]
-                None,
-            )
-            .unwrap();
+            let factors = Factorizer::new().seed(seed).factor(black_box(&n)).unwrap();
             check(&n, &factors);
             factors
         })
