@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 mod arith;
+mod base2;
 mod config;
 mod cost;
 mod curve;
@@ -22,6 +23,7 @@ mod stage2_poly;
 mod stop;
 
 pub use crate::{
+    base2::Base2Mode,
     ecm::{Error, Param, ecm, ecm_one_factor, ecm_with_params},
     events::{Event, EventHandler, Method, NoEvents},
     factorizer::{Algorithm, Factorization, Factorizer},

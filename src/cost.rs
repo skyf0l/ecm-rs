@@ -5,7 +5,7 @@
 //! their ratios matter, which vary much less from one machine to another. The polynomial
 //! costs mirror the operations of [`crate::poly`] one product at a time.
 
-use crate::{poly, stage2_poly::PolyPlan};
+use crate::{base2::Base2Form, poly, stage2_poly::PolyPlan};
 use std::collections::HashMap;
 
 /// Montgomery multiplication, by number of limbs (index 0 unused).
@@ -13,6 +13,40 @@ const MUL_NS: [f64; 17] = [
     0.0, 3.7, 9.7, 16.8, 24.1, 43.6, 56.6, 74.6, 94.8, 120.5, 143.5, 200.0, 241.0, 274.0, 311.0,
     355.0, 402.0,
 ];
+
+/// Step of the stage 1 ladder (a doubling and an addition with a full base point: 6M + 4S and a
+/// multiplication by a small `a24`) with Montgomery's arithmetic, by number of limbs (index 0
+/// unused).
+const STEP_NS: [f64; 17] = [
+    0.0, 21.0, 88.0, 148.0, 235.0, 354.0, 524.0, 701.0, 872.0, 1077.0, 1517.0, 1828.0, 2180.0,
+    2608.0, 2784.0, 3186.0, 3587.0,
+];
+
+/// [`STEP_NS`] with the special reduction modulo `2^k +- 1`, by limbs of `2^k` (index 0 unused).
+const BASE2_STEP_NS: [f64; 25] = [
+    0.0, 254.0, 233.0, 300.0, 361.0, 428.0, 495.0, 584.0, 666.0, 777.0, 939.0, 1050.0, 1143.0,
+    1281.0, 1399.0, 1623.0, 1743.0, 2005.0, 2125.0, 2319.0, 2448.0, 2670.0, 2843.0, 3005.0, 3216.0,
+];
+
+/// The ladder steps measured with [`BASE2_STEP_NS`] run about this much slower in the curves
+/// than the ones of [`STEP_NS`]: the special reduction is used when the measured steps are
+/// faster by at least this factor.
+const BASE2_MARGIN: f64 = 0.9;
+
+/// Whether the arithmetic modulo `2^k +- 1` (`k` bits) is faster than the arithmetic modulo
+/// a number of `bits` bits: from the measured costs of the stage 1 steps with Montgomery's
+/// arithmetic, and above [`crate::arith::MAX_LIMBS`] limbs always (plain integers, whose
+/// division costs more than a product, while `k` is at most 1.4 times `bits`).
+pub(crate) fn base2_faster(bits: u32, k: u32) -> bool {
+    let limbs = bits.div_ceil(64) as usize;
+    let base2 = k.div_ceil(64) as usize;
+    if limbs >= STEP_NS.len() {
+        return true;
+    }
+    BASE2_STEP_NS
+        .get(base2)
+        .is_some_and(|&cost| cost < BASE2_MARGIN * STEP_NS[limbs])
+}
 
 /// Packing and unpacking a coefficient of a Kronecker product, besides its share of a modular
 /// multiplication.
@@ -76,6 +110,22 @@ impl Costs {
     /// Size of a residue in memory.
     pub fn elem_bytes(&self) -> f64 {
         (self.bits.div_ceil(64).max(1) * 8) as f64
+    }
+
+    /// Costs modulo a number of `bits` bits, with the special reduction modulo `base2` if any.
+    pub fn modulo(bits: usize, base2: Option<Base2Form>) -> Self {
+        let Some(form) = base2 else {
+            return Self::new(bits);
+        };
+        // A product (GMP's), then a reduction by additions and shifts.
+        let limbs = form.k.div_ceil(64) as usize;
+        let product = Self::gmp((64 * limbs) as f64);
+        Self {
+            bits: form.k as usize + usize::from(form.plus),
+            mul: 1.2 * product + 25.0,
+            macc: product + 10.0,
+            redc: 20.0 + 2.0 * limbs as f64,
+        }
     }
 
     pub fn new(bits: usize) -> Self {
@@ -321,7 +371,7 @@ mod tests {
 }
 
 /// Measures the constants of this module: `cargo test --release -- --ignored primitive_costs
-/// --nocapture`.
+/// --nocapture` (and `ladder_costs` for the ladder steps).
 #[cfg(test)]
 mod measure {
     use crate::arith::{Arith, mpn, with_arith};
@@ -341,6 +391,53 @@ mod measure {
         }
         std::hint::black_box(r);
         start.elapsed().as_nanos() as f64 / f64::from(reps)
+    }
+
+    /// Nanoseconds per step of the stage 1 ladder (a doubling and an addition).
+    fn step_ns<A: Arith>(a: A) -> f64 {
+        use crate::{arith::Factor, curve::Curve, stop::Stop};
+        let curve = Curve::new(a, &Integer::from(123_456_789));
+        let x = curve
+            .arith
+            .factor(&(Integer::from(Integer::u_pow_u(7, 1000)) % curve.arith.modulus()));
+        let k = Integer::from(Integer::u_pow_u(3, 4000));
+        let reps = 3;
+        let start = Instant::now();
+        for _ in 0..reps {
+            std::hint::black_box(curve.ladder(&x, &Factor::One, &k, Stop::NEVER));
+        }
+        start.elapsed().as_nanos() as f64 / f64::from(reps * k.significant_bits())
+    }
+
+    #[test]
+    #[ignore = "measurement (a minute), prints the constants of this module"]
+    fn ladder_costs() {
+        use crate::base2::{Base2, Base2Form};
+        let mut rand = RandState::new();
+        let mut mont = Vec::new();
+        for limbs in 1..=16u32 {
+            let mut n = Integer::from(Integer::random_bits(64 * limbs, &mut rand));
+            n.set_bit(0, true);
+            n.set_bit(64 * limbs - 1, true);
+            mont.push(format!("{:.0}", with_arith!(&n, |a| step_ns(a))));
+        }
+        eprintln!("STEP_NS: {}", mont.join(", "));
+        let mut base2 = Vec::new();
+        for limbs in 1..=24u32 {
+            // Both forms, k not a multiple of 64 (the shifted reduction).
+            let ns: f64 = [true, false]
+                .map(|plus| {
+                    let form = Base2Form {
+                        k: 64 * limbs - 7,
+                        plus,
+                    };
+                    step_ns(Base2::new(&form.value(), form))
+                })
+                .iter()
+                .sum();
+            base2.push(format!("{:.0}", ns / 2.0));
+        }
+        eprintln!("BASE2_STEP_NS: {}", base2.join(", "));
     }
 
     #[test]
