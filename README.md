@@ -52,6 +52,74 @@ assert_eq!(factors.len(), 4);
 let factor = Factorizer::new().pm1(true).b1(100_000).find_factor(&n);
 ```
 
+## Command line tool
+
+`ecm-rs`, with GMP-ECM-like options (the library alone compiles none of its dependencies):
+
+```sh
+cargo install ecm --features cli
+```
+
+Each number (an argument, or a line of the standard input) is factored completely, and printed
+with its prime factors in increasing order (parts marked `(composite)` when the factorization is
+incomplete: `--one`, `--timeout`, Ctrl-C, `--curves` or `--pm1` exhausted). The numbers can be
+expressions: `+ - * /`, `^`, parentheses, `n!` (factorial), `n#` (primorial), as GMP-ECM's.
+
+```text
+$ ecm-rs '2^67-1' '10!+1' 17
+147573952589676412927 = 193707721 * 761838257287
+3628801 = 11 * 329891
+17 = 17
+
+$ ecm-rs --json '2^67-1'
+{"input":"2^67-1","n":"147573952589676412927","factors":[{"p":"193707721","exponent":1},{"p":"761838257287","exponent":1}],"unfactored":[],"complete":true,"error":null,"time":0.000326099}
+
+$ echo 15658598057181786459081452046251445462002559800474409088109 | ecm-rs -v --b1 11000 --sigma 1:1176292814
+Input number is 15658598057181786459081452046251445462002559800474409088109 (59 digits)
+Trial division below 2^16: no factor, cofactor has 59 digits
+Using B1=11000, B2=1873420 on C59: curves 1
+Curve 1/1: sigma=1:1176292814, Step 1 took 5.2ms, Step 2 took 5.8ms
+********** Factor found by ECM stage 2 (B1=11000, B2=1873420, sigma=1:1176292814): 13507140964289979319
+Found prime factor of 20 digits: 13507140964289979319
+Prime cofactor 1159282937712710938601499347662537052411 has 40 digits
+15658598057181786459081452046251445462002559800474409088109 = 13507140964289979319 * 1159282937712710938601499347662537052411
+```
+
+On a terminal, a progress bar (on stderr) shows the level being run, with the curves done out of
+the expected number and the expected time of the level. Results go to stdout, diagnostics to
+stderr. Ctrl-C and `--timeout SECS` (per number) print what was found so far. See
+`ecm-rs --help` for all the options.
+
+| GMP-ECM              | ecm-rs                                                   |
+| -------------------- | -------------------------------------------------------- |
+| `ecm B1`             | `ecm-rs --b1 B1` (curves until a factor is found)        |
+| `ecm B1 B2`          | `ecm-rs --b1 B1 --b2 B2`                                 |
+| `ecm -c N B1`        | `ecm-rs --b1 B1 -c N`                                    |
+| `ecm -sigma 1:S B1`  | `ecm-rs --b1 B1 --sigma 1:S` (one curve, as GMP-ECM)     |
+| `ecm -param 0 B1`    | `ecm-rs --b1 B1 --param 0`                               |
+| `ecm -one ...`       | `ecm-rs --one ...`                                       |
+| `ecm -pm1 B1 B2`     | `ecm-rs --pm1 --b1 B1 --b2 B2`                           |
+| `ecm -maxmem MB`     | `ecm-rs --maxmem MB`                                     |
+| `ecm -primetest`     | `ecm-rs --primetest` (prints `N: prime` or `N: composite`) |
+| `ecm -printconfig`   | `ecm-rs --printconfig`                                   |
+| `ecm -q`, `ecm -v`   | `ecm-rs -q`, `ecm-rs -v`                                 |
+| (none)               | `ecm-rs N`: complete factorization, bounds by factor size |
+
+Exit status: bits as GMP-ECM's, for the last number (bits 1 and 16 for any number).
+
+| Status | Meaning                                                                 |
+| ------ | ----------------------------------------------------------------------- |
+| 0      | No factor found (curves exhausted; `--primetest`: composite)            |
+| 1      | Error: an invalid number (the others are still processed)               |
+| 2      | A composite factor found, the cofactor is composite (`--one`)           |
+| 6      | A prime factor found, the cofactor is composite (incomplete)            |
+| 8      | The number is prime (or 1)                                              |
+| 10     | A composite factor found, the cofactor is prime (`--one`)               |
+| 14     | Factored completely (`--one`: a prime factor, a prime cofactor)         |
+| +16    | `--timeout` interrupted a factorization                                 |
+| 64     | Invalid command line                                                    |
+| 130    | Interrupted by Ctrl-C                                                   |
+
 ## Algorithm
 
 The implementation started as a translation of sympy's, and now uses the techniques of
