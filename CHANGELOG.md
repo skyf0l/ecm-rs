@@ -13,9 +13,14 @@ smallest to the largest, and a builder with progress events and cancellation.
 - `Error` is `#[non_exhaustive]`, with the new variants `Interrupted` (the event callback
   stopped the factorization) and `InvalidOption` (incompatible `Factorizer` options). It now
   derives `Clone`, `PartialEq` and `Eq`.
-- `ecm_with_params` returns `Error::ECMFailed` when a composite part is not split after
-  `max_curve` curves, instead of returning that composite as if it were a prime factor. The
-  other parts are still factored (`Factorizer::factor_partial` returns them).
+- `ecm` and `ecm_with_params` return `Error::ECMFailed` when a composite part is not split
+  (after `max_curve` curves for `ecm_with_params`), instead of returning that composite as if
+  it were a prime factor. The other parts are still factored (`Factorizer::factor_partial`
+  returns them). A composite factor found by a curve is factored too, instead of being
+  returned as a prime.
+- `ecm_one_factor` runs at most `max_curve` curves (1.x ran one more).
+- `ecm_one_factor` and `ecm_with_params` return `Error::BoundsTooSmall` if `b1 < 6` or
+  `b2 < 4`.
 - `ecm` and `ecm_with_params` panic if `n <= 0` (they used to loop forever on 0), and
   `ecm_one_factor` panics if `n <= 1`: these numbers have no (proper) factorization.
 - Trial division removes the primes below 2^16 (it was the first 100,000 primes, up to
@@ -34,8 +39,11 @@ smallest to the largest, and a builder with progress events and cancellation.
   on failure or interruption) and `find_factor` (one proper factor).
 - `Event` (trial division, P-1 runs, levels with their expected number of curves, curves with
   their `sigma` and stage durations, factors with their `Method`, primes), reported to the
-  `Factorizer::on_event` callback, whose `ControlFlow::Break` interrupts the factorization.
-  Without a callback, the events cost nothing.
+  `Factorizer::on_event` callback, whose `ControlFlow::Break` interrupts the factorization
+  between two curves. Without a callback, the events cost nothing.
+- `Factorizer::interrupt_flag` (an `Arc<AtomicBool>`, for a Ctrl-C handler or another thread)
+  and `Factorizer::timeout` interrupt the factorization even during a curve or P-1: usually
+  within a few milliseconds.
 
 ### Performance
 

@@ -13,10 +13,7 @@ Based on [rug](https://crates.io/crates/rug), it can use [arbitrary-precision nu
 ```rust
 use ecm::{Event, Factorizer, ecm};
 use rug::Integer;
-use std::{
-    ops::ControlFlow,
-    time::{Duration, Instant},
-};
+use std::{ops::ControlFlow, time::Duration};
 
 let n: Integer = "4516511326451341281684513".parse().unwrap();
 
@@ -25,11 +22,12 @@ let factors = ecm(&n).unwrap();
 assert_eq!(factors[&Integer::from(3)], 2);
 assert_eq!(factors.len(), 4);
 
-// With a seed, progress events and a timeout: `factor_partial` also returns what was found
+// With a seed, a timeout and progress events (returning `ControlFlow::Break` interrupts the
+// factorization too, as `interrupt_flag` does): `factor_partial` also returns what was found
 // when the factorization is interrupted (or fails).
-let deadline = Instant::now() + Duration::from_secs(60);
 let result = Factorizer::new()
     .seed(42)
+    .timeout(Duration::from_secs(60))
     .on_event(|event| {
         match event {
             Event::Level { digits: Some(digits), curves: Some(curves), .. } => {
@@ -38,11 +36,7 @@ let result = Factorizer::new()
             Event::Factor { factor, method, .. } => println!("{factor} found by {method}"),
             _ => {}
         }
-        if Instant::now() < deadline {
-            ControlFlow::Continue(())
-        } else {
-            ControlFlow::Break(())
-        }
+        ControlFlow::Continue(())
     })
     .factor_partial(&n);
 println!("primes: {:?}, unfactored: {:?}", result.primes, result.unfactored);
@@ -79,7 +73,7 @@ The implementation started as a translation of sympy's, and now uses the techniq
 - `Factorizer` has all the options (seed, fixed bounds, curves, `sigma`, parametrization,
   P-1 only, stage 2 memory), and reports events (levels, curves with their `sigma` and stage
   durations, P-1 runs, factors and primes) to a callback, which can interrupt the
-  factorization.
+  factorization. An interruption flag or a timeout interrupt it even during a curve.
 
 ## Performance
 
