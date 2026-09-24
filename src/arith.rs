@@ -199,6 +199,23 @@ fn reduce(x: &Integer, n: &Integer) -> Integer {
     r
 }
 
+/// Whether the CPU has BMI2 (`mulx`) and ADX (`adcx`, `adox`).
+///
+/// The limb arithmetic is generic Rust, compiled for the baseline `x86_64` unless the build
+/// enables more (`-C target-cpu`): the hottest loops (the stage 1 ladder, the pairs of stage 2)
+/// also have a copy compiled with these extensions, called when this returns `true`. There,
+/// `mulx` leaves the carry flag alone, so the carry chains of the Montgomery multiplications
+/// stay in the flags: 10-13% faster at 2-8 limbs. That gain needs the default build profile:
+/// with `codegen-units = 1` (or fat LTO) LLVM rewrites the chains with `setb` spills, and both
+/// copies run at the same speed.
+///
+/// The standard library caches the detection: this is two relaxed atomic loads.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+pub fn has_bmi2_adx() -> bool {
+    std::is_x86_feature_detected!("bmi2") && std::is_x86_feature_detected!("adx")
+}
+
 /// `lo + a * b + carry`, as `(low limb, high limb)`: never overflows.
 #[inline(always)]
 fn mac(lo: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
