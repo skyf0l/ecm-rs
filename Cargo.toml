@@ -40,14 +40,12 @@ codegen-units = 1
 
 [features]
 default = []
-progress-bar = ["indicatif"]
 # Exposes internals (`ecm::bench`) for benchmarks. Not part of the public API.
 bench = []
 
 [dependencies]
 # GMP's low-level functions, for the largest Montgomery sizes (the same GMP that rug uses).
 gmp-mpfr-sys = { version = "1.6", default-features = false }
-indicatif = { version = "0.18", optional = true }
 primal = "0.3"
 thiserror = "2.0"
 

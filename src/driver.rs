@@ -13,21 +13,29 @@
 //!
 //! When a factor is found, the cofactor keeps the progress made: its factors are larger than
 //! the ones already searched for.
+//!
+//! With fixed bounds ([`crate::ecm_with_params`]), each composite runs curves with these bounds
+//! only. The searches report [`Event`]s to the handler of the [`crate::Factorizer`], which may
+//! interrupt them.
 
 use crate::{
     cost::Costs,
     ecm::{
-        CurveOutcome, Error, Param, rand_state, random_sigma, run_curve, sort_factor,
-        stage1_multiplier, trial_division,
+        CurveOutcome, Error, Param, is_prime, perfect_power, random_sigma, run_curve_timed,
+        small_factor, stage1_multiplier, trial_division,
     },
+    events::{Event, EventHandler, Method},
+    factorizer::Factorization,
     pm1::Pm1,
     rho::ecm_prob,
     stage2::Stage2Plan,
 };
-#[cfg(feature = "progress-bar")]
-use indicatif::ProgressBar;
 use rug::{Integer, rand::RandState};
-use std::{collections::HashMap, rc::Rc};
+use std::{
+    collections::HashMap,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 /// A level of the search: factors of up to `digits` digits, with the bounds of the curves.
 struct Level {
@@ -111,6 +119,51 @@ const PM1_STAGE2_RATIO: f64 = 1.0;
 /// to miss a factor of the size of the level is then `e^-TOP_LEVEL_ROUNDS`.
 const TOP_LEVEL_ROUNDS: usize = 10;
 
+/// Stage 2 bound for curves with the stage 1 bound `b1` when none is given: GMP-ECM's default
+/// `B2` for the `B1` of the levels, interpolated (and extrapolated) linearly in `log B1`,
+/// `log B2`, rounded to an even number.
+#[must_use]
+pub(crate) fn default_b2(b1: usize) -> usize {
+    let i = LEVELS
+        .iter()
+        .position(|level| level.b1 >= b1)
+        .unwrap_or(LEVELS.len() - 1)
+        .clamp(1, LEVELS.len() - 1);
+    let (lo, hi) = (&LEVELS[i - 1], &LEVELS[i]);
+    let slope = (hi.b2 as f64 / lo.b2 as f64).ln() / (hi.b1 as f64 / lo.b1 as f64).ln();
+    // Below the first level, the ratio B2/B1 of the first level.
+    let slope = if b1 < lo.b1 { 1.0 } else { slope };
+    let b2 = lo.b2 as f64 * (b1 as f64 / lo.b1 as f64).powf(slope);
+    (b2.min(usize::MAX as f64 / 2.0) as usize & !1).max(4)
+}
+
+/// How the composite parts are searched.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Mode {
+    /// Levels of increasing factor size, with P-1 before each ([`crate::ecm()`]).
+    Levels,
+    /// Fixed bounds, with at most `curves` curves per composite part ([`crate::ecm_with_params`]).
+    Fixed {
+        b1: usize,
+        b2: usize,
+        curves: Option<usize>,
+    },
+}
+
+impl Mode {
+    /// Fixed bounds, checked.
+    pub(crate) fn fixed(b1: usize, b2: usize, curves: Option<usize>) -> Result<Self, Error> {
+        if !b1.is_multiple_of(2) || !b2.is_multiple_of(2) {
+            return Err(Error::BoundsNotEven);
+        }
+        // Stage 2 skips the primes of its wheel, which must be at most `b1`.
+        if b1 < 6 || b2 < 4 {
+            return Err(Error::BoundsTooSmall);
+        }
+        Ok(Self::Fixed { b1, b2, curves })
+    }
+}
+
 /// Progress of the search on a number, inherited by its cofactors.
 #[derive(Clone)]
 struct Progress {
@@ -137,17 +190,81 @@ impl Progress {
     }
 }
 
-/// What the curves of a level share.
-struct Context<'a> {
-    rand: RandState<'a>,
+/// The event handler, and whether it interrupted the factorization.
+struct Events<'h, H> {
+    handler: &'h mut H,
+    interrupted: bool,
+}
+
+impl<H: EventHandler> Events<'_, H> {
+    /// Reports `event`, unless the handler already interrupted the factorization: then (or if it
+    /// does now) returns [`Error::Interrupted`].
+    #[inline]
+    fn emit(&mut self, event: Event<'_>) -> Result<(), Error> {
+        if !H::ENABLED {
+            return Ok(());
+        }
+        if !self.interrupted && self.handler.handle(&event).is_continue() {
+            return Ok(());
+        }
+        self.interrupted = true;
+        Err(Error::Interrupted)
+    }
+
+    /// The current time, if the events are wanted (they report durations).
+    #[inline]
+    fn now() -> Option<Instant> {
+        H::ENABLED.then(Instant::now)
+    }
+}
+
+/// Time elapsed since `start` (zero without events).
+fn since(start: Option<Instant>) -> Duration {
+    start.map_or(Duration::ZERO, |start| start.elapsed())
+}
+
+/// A factorization: the options, and what the searches share (random state, stage 1
+/// multipliers and stage 2 plans).
+pub(crate) struct Engine<'a, 'r, H> {
+    mode: Mode,
+    param: Param,
+    /// Parameter of the next curve, if fixed.
+    sigma: Option<Integer>,
+    pm1_only: bool,
+    max_memory: usize,
+    rand: &'a mut RandState<'r>,
+    events: Events<'a, H>,
     /// Stage 1 multipliers by `b1`, and stage 2 plans by bounds and size of the number.
     multipliers: HashMap<usize, Rc<Integer>>,
     plans: HashMap<(usize, usize, u32), Rc<Stage2Plan>>,
-    #[cfg(feature = "progress-bar")]
-    pb: Option<&'a ProgressBar>,
 }
 
-impl Context<'_> {
+impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
+    pub(crate) fn new(
+        mode: Mode,
+        param: Param,
+        sigma: Option<Integer>,
+        pm1_only: bool,
+        max_memory: usize,
+        rand: &'a mut RandState<'r>,
+        handler: &'a mut H,
+    ) -> Self {
+        Self {
+            mode,
+            param,
+            sigma,
+            pm1_only,
+            max_memory,
+            rand,
+            events: Events {
+                handler,
+                interrupted: false,
+            },
+            multipliers: HashMap::new(),
+            plans: HashMap::new(),
+        }
+    }
+
     fn multiplier(&mut self, b1: usize) -> Rc<Integer> {
         self.multipliers
             .entry(b1)
@@ -156,65 +273,350 @@ impl Context<'_> {
     }
 
     fn plan(&mut self, n: &Integer, b1: usize, b2: usize) -> Rc<Stage2Plan> {
+        let max_memory = self.max_memory;
         self.plans
             .entry((b1, b2, n.significant_bits()))
-            .or_insert_with(|| Rc::new(Stage2Plan::new(n, b1, b2)))
+            .or_insert_with(|| Rc::new(Stage2Plan::with_max_memory(n, b1, b2, max_memory)))
             .clone()
+    }
+
+    /// Factors `n` completely (see [`crate::Factorizer::factor_partial`]).
+    ///
+    /// # Panics
+    ///
+    /// If `n` is not positive.
+    pub(crate) fn factor(&mut self, n: &Integer) -> Factorization {
+        assert!(*n > 0, "only positive numbers can be factored");
+        let (factors, cofactor) = trial_division(n);
+        let mut done = Factorization {
+            primes: HashMap::new(),
+            unfactored: Vec::new(),
+            error: None,
+        };
+        let mut queue = Vec::new();
+        let _ = self.events.emit(Event::TrialDivision {
+            factors: &factors,
+            cofactor: &cofactor,
+        });
+        let mut small: Vec<_> = factors.into_iter().collect();
+        small.sort_unstable();
+        for (p, exponent) in small {
+            let _ = self.events.emit(Event::Prime { p: &p, exponent });
+            done.primes.insert(p, exponent);
+        }
+        let pm1 = matches!(self.mode, Mode::Levels).then(Pm1::new);
+        self.sort(
+            cofactor,
+            1,
+            Progress::new(pm1),
+            &mut done.primes,
+            &mut queue,
+        );
+
+        while let Some((n, exponent, mut progress)) = queue.pop() {
+            if self.events.interrupted {
+                done.unfactored.push((n, exponent));
+                continue;
+            }
+            let (factor, method) = match self.find(&n, &mut progress) {
+                Ok(found) => found,
+                Err(error) => {
+                    done.unfactored.push((n, exponent));
+                    if error == Error::Interrupted || done.error.is_none() {
+                        done.error = Some(error);
+                    }
+                    continue;
+                }
+            };
+            let _ = self.events.emit(Event::Factor {
+                n: &n,
+                factor: &factor,
+                method,
+            });
+            let mut cofactor = n;
+            let mut multiplicity = 0;
+            while cofactor.is_divisible(&factor) {
+                cofactor /= &factor;
+                multiplicity += 1;
+            }
+            // A composite factor was found by a curve or P-1 that found all its factors at
+            // once: other curves split it, from the first level.
+            self.sort(
+                factor,
+                exponent * multiplicity,
+                Progress::new(None),
+                &mut done.primes,
+                &mut queue,
+            );
+            self.sort(cofactor, exponent, progress, &mut done.primes, &mut queue);
+        }
+        if self.events.interrupted {
+            done.error = Some(Error::Interrupted);
+        }
+        done
+    }
+
+    /// Records `n^exponent`: a prime goes to `primes`, a perfect power is reduced to its root,
+    /// and any other composite is queued for factorization, with `progress`.
+    fn sort(
+        &mut self,
+        n: Integer,
+        exponent: usize,
+        progress: Progress,
+        primes: &mut HashMap<Integer, usize>,
+        queue: &mut Vec<(Integer, usize, Progress)>,
+    ) {
+        if n == 1 {
+            return;
+        }
+        if is_prime(&n) {
+            let _ = self.events.emit(Event::Prime { p: &n, exponent });
+            *primes.entry(n).or_insert(0) += exponent;
+            return;
+        }
+        match perfect_power(&n) {
+            Some((root, power)) => {
+                let _ = self.events.emit(Event::Factor {
+                    n: &n,
+                    factor: &root,
+                    method: Method::PerfectPower,
+                });
+                self.sort(root, exponent * power as usize, progress, primes, queue);
+            }
+            None => queue.push((n, exponent, progress)),
+        }
+    }
+
+    /// A proper factor of `n > 1` (see [`crate::Factorizer::find_factor`]), after trial
+    /// division if `trial`.
+    ///
+    /// # Panics
+    ///
+    /// If `n <= 1`.
+    pub(crate) fn find_one(&mut self, n: &Integer, trial: bool) -> Result<Integer, Error> {
+        assert!(*n > 1, "only numbers greater than 1 have a proper factor");
+        let (factor, method) = self.find_one_method(n, trial)?;
+        let _ = self.events.emit(Event::Factor {
+            n,
+            factor: &factor,
+            method,
+        });
+        Ok(factor)
+    }
+
+    fn find_one_method(&mut self, n: &Integer, trial: bool) -> Result<(Integer, Method), Error> {
+        if let Some(p) = small_factor(n).filter(|_| trial) {
+            return Ok((p, Method::TrialDivision));
+        }
+        if is_prime(n) {
+            return Err(Error::NumberIsPrime);
+        }
+        // A perfect power is split by its root at once (modulo a power of a small prime, the
+        // curves may all find its whole power).
+        if let Some((root, _)) = perfect_power(n) {
+            return Ok((root, Method::PerfectPower));
+        }
+        let pm1 = matches!(self.mode, Mode::Levels).then(Pm1::new);
+        self.find(n, &mut Progress::new(pm1))
+    }
+
+    /// A proper factor of the composite `n`, resuming the search from `progress`.
+    fn find(&mut self, n: &Integer, progress: &mut Progress) -> Result<(Integer, Method), Error> {
+        match self.mode {
+            Mode::Levels => self.find_by_levels(n, progress),
+            Mode::Fixed { b1, b2, .. } if self.pm1_only => self.pm1_fixed(n, b1, b2),
+            Mode::Fixed { b1, b2, curves } => self.curves(n, (b1, b2), None, curves, &mut 0),
+        }
+    }
+
+    /// Searches `n` level by level, from `progress` on.
+    fn find_by_levels(
+        &mut self,
+        n: &Integer,
+        progress: &mut Progress,
+    ) -> Result<(Integer, Method), Error> {
+        let top = top_level(n);
+        loop {
+            let index = progress.level.min(top);
+            let level = &LEVELS[index];
+            if let Some(found) = self.pm1_level(n, index, progress)? {
+                return Ok(found);
+            }
+
+            if self.pm1_only {
+                if index == top || progress.pm1.is_none() {
+                    return Err(Error::ECMFailed);
+                }
+                progress.level = index + 1;
+                continue;
+            }
+
+            let prob = {
+                let plan = self.plan(n, level.b1, level.b2);
+                ecm_prob(level.b1 as f64, plan.b2() as f64, f64::from(level.digits))
+            };
+            let curves = (1.0 / prob).ceil().max(1.0) as usize;
+            match self.curves(
+                n,
+                (level.b1, level.b2),
+                Some(level.digits),
+                Some(curves),
+                &mut progress.curves,
+            ) {
+                Err(Error::ECMFailed) => {}
+                result => return result,
+            }
+
+            progress.curves = 0;
+            if index < top {
+                progress.level = index + 1;
+            } else {
+                progress.rounds += 1;
+                if progress.rounds >= TOP_LEVEL_ROUNDS {
+                    return Err(Error::ECMFailed);
+                }
+            }
+        }
+    }
+
+    /// Runs curves on `n` with the bounds `(b1, b2)`, `done` of them already run, until
+    /// `curves` in all (without limit if `None`) or a factor is found.
+    fn curves(
+        &mut self,
+        n: &Integer,
+        (b1, b2): (usize, usize),
+        digits: Option<u32>,
+        curves: Option<usize>,
+        done: &mut usize,
+    ) -> Result<(Integer, Method), Error> {
+        let k = self.multiplier(b1);
+        let plan = self.plan(n, b1, b2);
+        self.events.emit(Event::Level {
+            n,
+            digits,
+            b1,
+            b2: plan.b2(),
+            curves,
+            done: *done,
+        })?;
+
+        let param = self.param;
+        while curves.is_none_or(|curves| *done < curves) {
+            *done += 1;
+            let sigma = match &mut self.sigma {
+                Some(sigma) => {
+                    let next = Integer::from(&*sigma + 1u32);
+                    std::mem::replace(sigma, next)
+                }
+                None => random_sigma(n, param, self.rand),
+            };
+            let (outcome, [stage1, stage2]) = if H::ENABLED {
+                run_curve_timed::<true>(n, param, &sigma, &k, &plan)
+            } else {
+                run_curve_timed::<false>(n, param, &sigma, &k, &plan)
+            };
+            let event = self.events.emit(Event::Curve {
+                n,
+                param,
+                sigma: &sigma,
+                index: *done,
+                stage1,
+                stage2,
+            });
+            match outcome {
+                CurveOutcome::Setup(g) => return Ok((g, Method::EcmSetup)),
+                CurveOutcome::Stage1(g) => return Ok((g, Method::EcmStage1)),
+                CurveOutcome::Stage2(g) => return Ok((g, Method::EcmStage2)),
+                CurveOutcome::Failed => event?,
+            }
+        }
+        Err(Error::ECMFailed)
+    }
+
+    /// Extends P-1 for the level `index` (once per level): returns a proper factor of `n` if it
+    /// finds one.
+    fn pm1_level(
+        &mut self,
+        n: &Integer,
+        index: usize,
+        progress: &mut Progress,
+    ) -> Result<Option<(Integer, Method)>, Error> {
+        if progress.pm1_level >= Some(index) {
+            return Ok(None);
+        }
+        progress.pm1_level = Some(index);
+        let Some(pm1) = progress.pm1.as_mut() else {
+            return Ok(None);
+        };
+        let b1 = LEVELS[index].b1 * PM1_B1_RATIO;
+        if b1 <= pm1.b1() {
+            return Ok(None);
+        }
+        let max_memory = self.max_memory;
+        let b2 = || pm1_b2(n, b1, max_memory);
+        let (found, all) = run_pm1(pm1, n, b1, b2, max_memory, &mut self.events)?;
+        if all {
+            // Every p - 1 is smooth: P-1 cannot separate the factors.
+            progress.pm1 = None;
+        }
+        Ok(found)
+    }
+
+    /// P-1 with fixed bounds.
+    fn pm1_fixed(&mut self, n: &Integer, b1: usize, b2: usize) -> Result<(Integer, Method), Error> {
+        let mut pm1 = Pm1::new();
+        let (found, _) = run_pm1(&mut pm1, n, b1, || b2, self.max_memory, &mut self.events)?;
+        found.ok_or(Error::ECMFailed)
     }
 }
 
-/// Factors `n` (see [`crate::ecm()`]), with the random state seeded by `seed`.
-///
-/// # Errors
-///
-/// As [`crate::ecm()`].
-///
-/// # Panics
-///
-/// If `n` is not positive.
-pub fn factor(
+/// Runs P-1 on `n` up to `b1` (resuming `pm1`), then stage 2 up to `b2()` if stage 1 finds
+/// nothing: returns the proper factor found, if any, and whether stage 1 found all the factors
+/// of `n` at once.
+fn run_pm1<H: EventHandler>(
+    pm1: &mut Pm1,
     n: &Integer,
-    seed: usize,
-    #[cfg(feature = "progress-bar")] pb: Option<&ProgressBar>,
-) -> Result<HashMap<Integer, usize>, Error> {
-    assert!(*n > 0, "only positive numbers can be factored");
-    let (mut factors, n) = trial_division(n);
-    let mut ctx = Context {
-        rand: rand_state(seed),
-        multipliers: HashMap::new(),
-        plans: HashMap::new(),
-        #[cfg(feature = "progress-bar")]
-        pb,
-    };
-
-    let mut queue = Vec::new();
-    sort_factor(
-        n,
-        1,
-        Progress::new(Some(Pm1::new())),
-        &mut factors,
-        &mut queue,
-    );
-    while let Some((n, exponent, mut progress)) = queue.pop() {
-        let factor = find_factor(&n, &mut progress, &mut ctx)?;
-        let mut cofactor = n;
-        let mut multiplicity = 0;
-        while cofactor.is_divisible(&factor) {
-            cofactor /= &factor;
-            multiplicity += 1;
+    b1: usize,
+    b2: impl FnOnce() -> usize,
+    max_memory: usize,
+    events: &mut Events<'_, H>,
+) -> Result<(Option<(Integer, Method)>, bool), Error> {
+    let start = Events::<H>::now();
+    let g = pm1.stage1(n, b1);
+    let stage1 = since(start);
+    if g != 1 {
+        let all = &g == n;
+        let found = (!all).then_some((g, Method::Pm1Stage1));
+        let event = events.emit(Event::Pm1 {
+            n,
+            b1,
+            b2: None,
+            stage1,
+            stage2: Duration::ZERO,
+        });
+        // A factor found is kept, even if the handler interrupts.
+        if found.is_none() {
+            event?;
         }
-        // A composite factor was found by a curve or P-1 that found all its factors at once:
-        // other curves split it, from the first level.
-        sort_factor(
-            factor,
-            exponent * multiplicity,
-            Progress::new(None),
-            &mut factors,
-            &mut queue,
-        );
-        sort_factor(cofactor, exponent, progress, &mut factors, &mut queue);
+        return Ok((found, all));
     }
-    Ok(factors)
+    let start = Events::<H>::now();
+    let plan = Stage2Plan::with_max_memory(n, b1, b2(), max_memory);
+    let g = pm1.stage2(n, &plan);
+    let stage2 = since(start);
+    let found = (g != 1 && &g != n).then_some((g, Method::Pm1Stage2));
+    let event = events.emit(Event::Pm1 {
+        n,
+        b1,
+        b2: Some(plan.b2()),
+        stage1,
+        stage2,
+    });
+    // A factor found is kept, even if the handler interrupts.
+    if found.is_none() {
+        event?;
+    }
+    Ok((found, false))
 }
 
 /// Index of the last level for `n`: its smallest factor has at most half its digits.
@@ -227,92 +629,13 @@ fn top_level(n: &Integer) -> usize {
         .unwrap_or(LEVELS.len() - 1)
 }
 
-/// A proper factor of the composite `n`, resuming the search from `progress`.
-fn find_factor(
-    n: &Integer,
-    progress: &mut Progress,
-    ctx: &mut Context<'_>,
-) -> Result<Integer, Error> {
-    let top = top_level(n);
-    let param = Param::default();
-    loop {
-        let index = progress.level.min(top);
-        let level = &LEVELS[index];
-        if let Some(g) = pm1(n, index, progress) {
-            return Ok(g);
-        }
-
-        let k = ctx.multiplier(level.b1);
-        let plan = ctx.plan(n, level.b1, level.b2);
-        let prob = ecm_prob(level.b1 as f64, plan.b2() as f64, f64::from(level.digits));
-        let curves = (1.0 / prob).ceil().max(1.0) as usize;
-
-        #[cfg(feature = "progress-bar")]
-        if let Some(pb) = ctx.pb {
-            pb.set_length(curves as u64);
-            pb.set_position(progress.curves as u64);
-        }
-
-        while progress.curves < curves {
-            progress.curves += 1;
-            #[cfg(feature = "progress-bar")]
-            if let Some(pb) = ctx.pb {
-                pb.inc(1);
-            }
-            let sigma = random_sigma(n, param, &mut ctx.rand);
-            match run_curve(n, param, &sigma, &k, &plan) {
-                CurveOutcome::Setup(g) | CurveOutcome::Stage1(g) | CurveOutcome::Stage2(g) => {
-                    return Ok(g);
-                }
-                CurveOutcome::Failed => {}
-            }
-        }
-
-        progress.curves = 0;
-        if index < top {
-            progress.level = index + 1;
-        } else {
-            progress.rounds += 1;
-            if progress.rounds >= TOP_LEVEL_ROUNDS {
-                return Err(Error::ECMFailed);
-            }
-        }
-    }
-}
-
-/// Extends P-1 for the level `index` (once per level): returns a proper factor of `n` if it
-/// finds one.
-fn pm1(n: &Integer, index: usize, progress: &mut Progress) -> Option<Integer> {
-    if progress.pm1_level >= Some(index) {
-        return None;
-    }
-    progress.pm1_level = Some(index);
-    let pm1 = progress.pm1.as_mut()?;
-    let b1 = LEVELS[index].b1 * PM1_B1_RATIO;
-    if b1 <= pm1.b1() {
-        return None;
-    }
-    let g = pm1.stage1(n, b1);
-    if &g == n {
-        // Every p - 1 is smooth: P-1 cannot separate the factors.
-        progress.pm1 = None;
-        return None;
-    }
-    if g != 1 {
-        return Some(g);
-    }
-    let plan = Stage2Plan::new(n, b1, pm1_b2(n, b1));
-    let g = pm1.stage2(n, &plan);
-    (g != 1 && &g != n).then_some(g)
-}
-
 /// Stage 2 bound of P-1 after a stage 1 up to `b1`: the largest `b1*2^i` whose stage 2 costs at
 /// most [`PM1_STAGE2_RATIO`] times stage 1 (`1.44*b1` modular squarings).
-fn pm1_b2(n: &Integer, b1: usize) -> usize {
+fn pm1_b2(n: &Integer, b1: usize, max_memory: usize) -> usize {
     let bits = n.significant_bits() as usize;
     let budget = PM1_STAGE2_RATIO * 1.44 * b1 as f64 * 1.3 * Costs::new(bits).mul();
     let mut b2 = b1;
-    while b2 < usize::MAX / 4 && Stage2Plan::cost_at_most(bits, b1, 2 * b2, budget) {
+    while b2 < usize::MAX / 4 && Stage2Plan::cost_at_most(bits, b1, 2 * b2, budget, max_memory) {
         b2 *= 2;
     }
     b2
@@ -321,17 +644,12 @@ fn pm1_b2(n: &Integer, b1: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ecm::rand_state, stage2::MAX_POLY_MEMORY};
     use rug::ops::Pow;
     use std::str::FromStr;
 
-    fn factor(n: &Integer, seed: usize) -> HashMap<Integer, usize> {
-        super::factor(
-            n,
-            seed,
-            #[cfg(feature = "progress-bar")]
-            None,
-        )
-        .unwrap()
+    fn factor(n: &Integer, seed: u64) -> HashMap<Integer, usize> {
+        crate::Factorizer::new().seed(seed).factor(n).unwrap()
     }
 
     #[test]
@@ -390,8 +708,21 @@ mod tests {
         let q = Integer::from(10).pow(100) + 267u32;
         let n = Integer::from(&p * &q);
         let mut progress = Progress::new(Some(Pm1::new()));
-        let found = (0..3).find_map(|level| pm1(&n, level, &mut progress).map(|g| (level, g)));
-        assert_eq!(found, Some((1, p)));
+        let (mut rand, mut handler) = (rand_state(0), crate::events::NoEvents);
+        let mut engine = Engine::new(
+            Mode::Levels,
+            Param::default(),
+            None,
+            false,
+            MAX_POLY_MEMORY,
+            &mut rand,
+            &mut handler,
+        );
+        let found = (0..3).find_map(|level| {
+            let found = engine.pm1_level(&n, level, &mut progress).unwrap();
+            found.map(|(g, method)| (level, g, method))
+        });
+        assert_eq!(found, Some((1, p, Method::Pm1Stage2)));
         assert_eq!(progress.pm1.unwrap().b1(), LEVELS[1].b1 * PM1_B1_RATIO);
     }
 
