@@ -489,6 +489,10 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         curves: Option<usize>,
         done: &mut usize,
     ) -> Result<(Integer, Method), Error> {
+        if curves.is_some_and(|curves| *done >= curves) {
+            // Resumed on a cofactor after all the curves of the level.
+            return Err(Error::ECMFailed);
+        }
         let k = self.multiplier(b1);
         let plan = self.plan(n, b1, b2);
         self.events.emit(Event::Level {
