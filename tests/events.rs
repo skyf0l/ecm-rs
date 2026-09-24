@@ -465,6 +465,16 @@ fn invalid_options() {
         Factorizer::new().curves(10),
         Factorizer::new().sigma(Integer::from(7)),
         Factorizer::new().b1(2000).pm1(true).sigma(Integer::from(7)),
+        Factorizer::new().b1(2000).sigma(Integer::from(1)),
+        Factorizer::new().b1(2000).sigma(Integer::from(1) << 64),
+        Factorizer::new()
+            .b1(2000)
+            .param(Param::Square)
+            .sigma(Integer::from(1) << 32),
+        Factorizer::new()
+            .b1(2000)
+            .param(Param::Suyama)
+            .sigma(Integer::from(5)),
     ] {
         assert!(matches!(
             factorizer.factor(&n),
