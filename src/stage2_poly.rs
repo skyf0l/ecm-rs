@@ -28,6 +28,7 @@ use crate::{
     curve::Xz,
     poly::{self, ProductTree, Workspace},
     stage2::{Elem, Normalizer, XLine, baby_steps, phi, prime_factors},
+    stop::Stop,
 };
 use rug::Integer;
 
@@ -186,15 +187,21 @@ impl PolyPlan {
 /// Polynomial stage 2 on the residues of `arith`: `gcd(g, n)`, see [`crate::ecm::stage2`].
 #[cfg(test)]
 pub fn stage2_with<A: PolyArith>(arith: A, q: &crate::curve::Point, plan: &PolyPlan) -> Integer {
-    crate::stage2::stage2_with(arith, q, &crate::stage2::Stage2Plan::Poly(plan.clone()))
+    crate::stage2::stage2_with(
+        arith,
+        q,
+        &crate::stage2::Stage2Plan::Poly(plan.clone()),
+        Stop::NEVER,
+    )
 }
 
 /// Product `g` (polynomial representation), or `Err(g)` with a factor found by a failed
-/// inversion.
+/// inversion. If `stop` is requested, returns early with `1` (or a factor already found).
 pub(crate) fn accumulate<G: XLine>(
     curve: &G,
     q: &Xz<Elem<G>>,
     plan: &PolyPlan,
+    stop: Stop<'_>,
 ) -> Result<Elem<G>, Integer>
 where
     G::A: PolyArith,
@@ -221,7 +228,7 @@ where
         plan.babies,
         &mut normalizer,
     )?;
-    if plan.giants == 0 {
+    if plan.giants == 0 || stop.requested() {
         return Ok(one);
     }
     let zero = a.zero();
@@ -238,9 +245,12 @@ where
     drop(baby);
     // F of degree dF: the first baby step again (H(x) is then just taken several times).
     leaves.resize(df, leaves[0].clone());
-    let tree = ProductTree::new(a, &mut ws, leaves);
+    let tree = ProductTree::new(a, &mut ws, leaves, stop);
+    if stop.requested() {
+        return Ok(one);
+    }
     let f = tree.root();
-    let mut modulus = poly::Modulus::new(a, &mut ws, f);
+    let mut modulus = poly::Modulus::new(a, &mut ws, f, stop);
 
     // Giant steps m*d1*Q from m_lo on, but for the multiples of d2.
     let mut scratch = curve.scratch();
@@ -256,6 +266,9 @@ where
     let mut h: Vec<Elem<G>> = Vec::new();
 
     for first in (0..plan.giants).step_by(df) {
+        if stop.requested() {
+            return Ok(one);
+        }
         let len = df.min(plan.giants - first);
         let mut i = 0;
         while i < len {
@@ -272,7 +285,10 @@ where
         curve.normalize(&mut normalizer, &mut giant_x[..len], &giant_z[..len])?;
         g.clear();
         g.extend(giant_x[..len].iter().map(|x| leaf(x, &mut t)));
-        poly::from_roots(a, &mut ws, &mut g, &mut tmp);
+        poly::from_roots(a, &mut ws, &mut g, &mut tmp, stop);
+        if stop.requested() {
+            return Ok(one);
+        }
         if len == df {
             // G mod F = G - F: both are monic of degree dF.
             for (g, f) in g.iter_mut().zip(f) {
@@ -287,13 +303,19 @@ where
             g.resize(df, a.zero());
             std::mem::swap(&mut h, &mut g);
         } else {
-            poly::mul_mod(a, &mut ws, &mut h, &g, &mut modulus);
+            poly::mul_mod(a, &mut ws, &mut h, &g, &mut modulus, stop);
         }
     }
     debug_assert!(m <= plan.m_hi + 1);
+    if stop.requested() {
+        return Ok(one);
+    }
 
     // g = prod_j H(x_j).
-    let values = poly::evaluate(a, &mut ws, &h, &tree, &mut modulus);
+    let values = poly::evaluate(a, &mut ws, &h, &tree, &mut modulus, stop);
+    if stop.requested() {
+        return Ok(one);
+    }
     let mut acc = one;
     for v in &values {
         a.poly_mul(&mut t, &acc, v);

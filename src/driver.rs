@@ -29,6 +29,7 @@ use crate::{
     pm1::Pm1,
     rho::ecm_prob,
     stage2::Stage2Plan,
+    stop::Stop,
 };
 use rug::{Integer, rand::RandState};
 use std::{
@@ -190,13 +191,31 @@ impl Progress {
     }
 }
 
-/// The event handler, and whether it interrupted the factorization.
+/// The event handler, and whether it (or the [`Stop`]) interrupted the factorization.
 struct Events<'h, H> {
     handler: &'h mut H,
+    stop: Stop<'h>,
     interrupted: bool,
 }
 
 impl<H: EventHandler> Events<'_, H> {
+    /// Whether the factorization is interrupted: by the handler, or now by the [`Stop`].
+    fn interrupted(&mut self) -> bool {
+        if !self.interrupted && self.stop.requested() {
+            self.interrupted = true;
+        }
+        self.interrupted
+    }
+
+    /// [`Error::Interrupted`] if the factorization is interrupted (see [`Events::interrupted`]).
+    fn check(&mut self) -> Result<(), Error> {
+        if self.interrupted() {
+            Err(Error::Interrupted)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Reports `event`, unless the handler already interrupted the factorization: then (or if it
     /// does now) returns [`Error::Interrupted`].
     #[inline]
@@ -240,6 +259,7 @@ pub(crate) struct Engine<'a, 'r, H> {
 }
 
 impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
+    #[allow(clippy::too_many_arguments, reason = "the options of a Factorizer")]
     pub(crate) fn new(
         mode: Mode,
         param: Param,
@@ -248,6 +268,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         max_memory: usize,
         rand: &'a mut RandState<'r>,
         handler: &'a mut H,
+        stop: Stop<'a>,
     ) -> Self {
         Self {
             mode,
@@ -258,6 +279,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             rand,
             events: Events {
                 handler,
+                stop,
                 interrupted: false,
             },
             multipliers: HashMap::new(),
@@ -314,7 +336,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         );
 
         while let Some((n, exponent, mut progress)) = queue.pop() {
-            if self.events.interrupted {
+            if self.events.interrupted() {
                 done.unfactored.push((n, exponent));
                 continue;
             }
@@ -506,6 +528,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
 
         let param = self.param;
         while curves.is_none_or(|curves| *done < curves) {
+            self.events.check()?;
             *done += 1;
             let sigma = match &mut self.sigma {
                 Some(sigma) => {
@@ -514,11 +537,16 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
                 }
                 None => random_sigma(n, param, self.rand),
             };
+            let stop = self.events.stop;
             let (outcome, [stage1, stage2]) = if H::ENABLED {
-                run_curve_timed::<true>(n, param, &sigma, &k, &plan)
+                run_curve_timed::<true>(n, param, &sigma, &k, &plan, stop)
             } else {
-                run_curve_timed::<false>(n, param, &sigma, &k, &plan)
+                run_curve_timed::<false>(n, param, &sigma, &k, &plan, stop)
             };
+            if outcome == CurveOutcome::Failed {
+                // The curve may have stopped early: not reported.
+                self.events.check()?;
+            }
             let event = self.events.emit(Event::Curve {
                 n,
                 param,
@@ -586,7 +614,7 @@ fn run_pm1<H: EventHandler>(
     events: &mut Events<'_, H>,
 ) -> Result<(Option<(Integer, Method)>, bool), Error> {
     let start = Events::<H>::now();
-    let g = pm1.stage1(n, b1);
+    let g = pm1.stage1_until(n, b1, events.stop);
     let stage1 = since(start);
     if g != 1 {
         let all = &g == n;
@@ -604,11 +632,16 @@ fn run_pm1<H: EventHandler>(
         }
         return Ok((found, all));
     }
+    // Stage 1 may have stopped early: it is not reported then.
+    events.check()?;
     let start = Events::<H>::now();
     let plan = Stage2Plan::with_max_memory(n, b1, b2(), max_memory);
-    let g = pm1.stage2(n, &plan);
+    let g = pm1.stage2_until(n, &plan, events.stop);
     let stage2 = since(start);
     let found = (g != 1 && &g != n).then_some((g, Method::Pm1Stage2));
+    if found.is_none() {
+        events.check()?;
+    }
     let event = events.emit(Event::Pm1 {
         n,
         b1,
@@ -721,6 +754,7 @@ mod tests {
             MAX_POLY_MEMORY,
             &mut rand,
             &mut handler,
+            Stop::NEVER,
         );
         let found = (0..3).find_map(|level| {
             let found = engine.pm1_level(&n, level, &mut progress).unwrap();

@@ -16,7 +16,10 @@
 //! A monic polynomial of degree `d` is stored as its `d` low coefficients, the leading `1` is
 //! implicit.
 
-use crate::arith::{PolyArith, mpn};
+use crate::{
+    arith::{PolyArith, mpn},
+    stop::Stop,
+};
 use rug::{Assign, Integer, integer::Order};
 use std::collections::HashMap;
 
@@ -495,9 +498,18 @@ fn height(len: usize) -> usize {
 
 impl<E: Clone> ProductTree<E> {
     /// Product tree of the leaves `leaves` (the constant coefficients `-root`, not empty).
-    pub fn new<A: PolyArith<Elem = E>>(a: &A, ws: &mut Workspace, leaves: Vec<E>) -> Self {
+    /// Incomplete if `stop` is requested (it is checked between the levels).
+    pub fn new<A: PolyArith<Elem = E>>(
+        a: &A,
+        ws: &mut Workspace,
+        leaves: Vec<E>,
+        stop: Stop<'_>,
+    ) -> Self {
         let mut levels = vec![leaves];
         for level in 0..height(levels[0].len()) {
+            if stop.requested() {
+                break;
+            }
             let mut next = vec![a.zero(); levels[0].len()];
             next_level(a, ws, level, &levels[level], &mut next);
             levels.push(next);
@@ -512,16 +524,21 @@ impl<E: Clone> ProductTree<E> {
 }
 
 /// Monic `prod (X - root)` from the leaves `-root` (not empty), without keeping the tree:
-/// `leaves` is overwritten.
+/// `leaves` is overwritten. Meaningless if `stop` is requested (it is checked between the
+/// levels).
 pub fn from_roots<A: PolyArith>(
     a: &A,
     ws: &mut Workspace,
     leaves: &mut Vec<A::Elem>,
     tmp: &mut Vec<A::Elem>,
+    stop: Stop<'_>,
 ) {
     let len = leaves.len();
     tmp.resize(len, a.zero());
     for level in 0..height(len) {
+        if stop.requested() {
+            return;
+        }
         next_level(a, ws, level, leaves, tmp);
         std::mem::swap(leaves, tmp);
     }
@@ -529,7 +546,15 @@ pub fn from_roots<A: PolyArith>(
 
 /// Inverse of the power series `f` (`f[0] = 1`, as for the reverse of a monic polynomial)
 /// modulo `X^len`, by Newton iteration: `g = g - g*(f*g - 1)`, doubling the precision.
-pub fn inverse<A: PolyArith>(a: &A, ws: &mut Workspace, f: &[A::Elem], len: usize) -> Vec<A::Elem> {
+///
+/// Meaningless if `stop` is requested (it is checked between the iterations).
+pub fn inverse<A: PolyArith>(
+    a: &A,
+    ws: &mut Workspace,
+    f: &[A::Elem],
+    len: usize,
+    stop: Stop<'_>,
+) -> Vec<A::Elem> {
     let mut g = vec![a.zero(); len];
     if len == 0 {
         return g;
@@ -538,7 +563,7 @@ pub fn inverse<A: PolyArith>(a: &A, ws: &mut Workspace, f: &[A::Elem], len: usiz
     let mut prec = 1;
     let mut e = Vec::new();
     let mut d = Vec::new();
-    while prec < len {
+    while prec < len && !stop.requested() {
         let next = (2 * prec).min(len);
         let fl = next.min(f.len());
         let h = next - prec;
@@ -582,10 +607,11 @@ pub struct Modulus<E> {
 }
 
 impl<E: Clone> Modulus<E> {
-    /// The modulus `f` (monic, the leading 1 implicit, degree `f.len() >= 1`).
-    pub fn new<A: PolyArith<Elem = E>>(a: &A, ws: &mut Workspace, f: &[E]) -> Self {
+    /// The modulus `f` (monic, the leading 1 implicit, degree `f.len() >= 1`), meaningless if
+    /// `stop` is requested.
+    pub fn new<A: PolyArith<Elem = E>>(a: &A, ws: &mut Workspace, f: &[E], stop: Stop<'_>) -> Self {
         let d = f.len();
-        let inv = inverse(a, ws, &reverse_monic(a, f, d), d);
+        let inv = inverse(a, ws, &reverse_monic(a, f, d), d, stop);
         let mut full = f.to_vec();
         full.push(a.poly_from(&Integer::from(1)));
         Self {
@@ -609,18 +635,24 @@ impl<E: Clone> Modulus<E> {
 /// (a short product), then `p - q*f`: its degree is `< d` and the coefficients of `q*f` of
 /// degree `>= d` are those of `p`, so a wrap-around product modulo `X^L - 1` (`L > d`) is
 /// enough.
+///
+/// Meaningless if `stop` is requested (it is checked between the products).
 pub fn mul_mod<A: PolyArith>(
     a: &A,
     ws: &mut Workspace,
     h: &mut [A::Elem],
     g: &[A::Elem],
     m: &mut Modulus<A::Elem>,
+    stop: Stop<'_>,
 ) {
     let d = m.degree();
     debug_assert!(h.len() == d && !g.is_empty() && g.len() <= d);
     let len = d + g.len() - 1;
     let mut p = vec![a.zero(); len];
     mul(a, ws, &mut p, h, g);
+    if stop.requested() {
+        return;
+    }
     if len <= d {
         h[..len].clone_from_slice(&p);
         h[len..].fill(a.zero());
@@ -632,6 +664,9 @@ pub fn mul_mod<A: PolyArith>(
     let mut rev_q = vec![a.zero(); t];
     let inv = Operand::cached(&m.inv[..t], &mut m.packed_inv);
     mul_part(a, ws, &mut rev_q, 0, Operand::new(&rev_p), inv);
+    if stop.requested() {
+        return;
+    }
     let q: Vec<A::Elem> = rev_q.into_iter().rev().collect();
     // Remainder: coefficient k < d of p - q*f, with (q*f mod (X^L - 1))_k = c_k + c_(k + L)
     // and c_(k + L) = p_(k + L) (degree >= d).
@@ -655,12 +690,15 @@ pub fn mul_mod<A: PolyArith>(
 /// node `P`, keep the first `deg P` coefficients `c_1, c_2, ...` of `(h mod P)/P` as a series in
 /// `1/X`. For a child `Q` of `P = Q*R`, `(h mod Q)/Q` is the part of `R * (h mod P)/P` with
 /// negative powers: a middle product by the sibling `R`. At a leaf `X - x`, `c_1 = h(x)`.
+///
+/// Meaningless if `stop` is requested (it is checked between the levels).
 pub fn evaluate<A: PolyArith>(
     a: &A,
     ws: &mut Workspace,
     h: &[A::Elem],
     tree: &ProductTree<A::Elem>,
     m: &mut Modulus<A::Elem>,
+    stop: Stop<'_>,
 ) -> Vec<A::Elem> {
     let d = h.len();
     debug_assert_eq!(d, m.degree());
@@ -673,6 +711,9 @@ pub fn evaluate<A: PolyArith>(
     let mut t = a.zero();
     let (mut rev, mut buf) = (Vec::new(), Vec::new());
     for level in (0..tree.levels.len() - 1).rev() {
+        if stop.requested() {
+            break;
+        }
         let size = 1 << level;
         let children = &tree.levels[level];
         for start in (0..d).step_by(2 * size) {
@@ -932,7 +973,7 @@ mod tests {
             let mut f = x;
             f[0] = a.poly_from(&Integer::from(1));
             let len = lx + below(40, rand);
-            let g = inverse(a, &mut ws, &f, len);
+            let g = inverse(a, &mut ws, &f, len, Stop::NEVER);
             let p = naive_mul(&values(a, &f), &values(a, &g), &n);
             assert!(
                 p[..len]
@@ -1256,7 +1297,7 @@ mod tests {
                 .iter()
                 .map(|r| a.poly_from(&Integer::from(&n - r)))
                 .collect();
-            let tree = ProductTree::new(a, &mut ws, leaves.clone());
+            let tree = ProductTree::new(a, &mut ws, leaves.clone(), Stop::NEVER);
             let mut f = values(a, tree.root());
             f.push(Integer::from(1));
             for r in &roots {
@@ -1264,12 +1305,12 @@ mod tests {
             }
             let mut leaves = leaves;
             let mut tmp = Vec::new();
-            from_roots(a, &mut ws, &mut leaves, &mut tmp);
+            from_roots(a, &mut ws, &mut leaves, &mut tmp, Stop::NEVER);
             assert_eq!(values(a, &leaves), values(a, tree.root()));
 
             // Inverse of the reverse.
             let rev = reverse_monic(a, tree.root(), d);
-            let inv = inverse(a, &mut ws, &rev, d);
+            let inv = inverse(a, &mut ws, &rev, d, Stop::NEVER);
             let mut p = vec![a.zero(); 2 * d - 1];
             mul(
                 a,
@@ -1288,7 +1329,7 @@ mod tests {
 
             // h*g mod f (several times, reusing the packed f and inverse; with g shorter, and
             // with the largest values), then evaluation at the roots.
-            let mut modulus = Modulus::new(a, &mut ws, tree.root());
+            let mut modulus = Modulus::new(a, &mut ws, tree.root(), Stop::NEVER);
             assert_eq!(values(a, &modulus.inv), values(a, &inv));
             let mut h = random_poly(a, d, rand);
             let mut expected_h = values(a, &h);
@@ -1302,11 +1343,11 @@ mod tests {
                     h = largest_poly(a, d);
                     expected_h = values(a, &h);
                 }
-                mul_mod(a, &mut ws, &mut h, &g, &mut modulus);
+                mul_mod(a, &mut ws, &mut h, &g, &mut modulus, Stop::NEVER);
                 expected_h = naive_rem(&naive_mul(&expected_h, &values(a, &g), &n), &f, &n);
                 assert_eq!(values(a, &h), expected_h, "d = {d}, {i}");
             }
-            let got = evaluate(a, &mut ws, &h, &tree, &mut modulus);
+            let got = evaluate(a, &mut ws, &h, &tree, &mut modulus, Stop::NEVER);
             for (r, got) in roots.iter().zip(values(a, &got)) {
                 assert_eq!(got, eval(&expected_h, r, &n), "d = {d}");
             }
