@@ -3,7 +3,8 @@
 //! Every input is deterministic (fixed seeds, fixed `sigma`), and the setup work
 //! (building curves, stage 2 plans, stage 1 multipliers, ...) is not measured.
 //!
-//! - `arith`: batches of modular multiplications and squarings, per number of limbs.
+//! - `arith`: batches of modular multiplications and squarings, per number of limbs (and with
+//!   the special reduction modulo `2^1024 + 1`).
 //! - `curve`: stage 1 and stage 2 of one curve, and one complete curve at the bounds of the
 //!   `success_rate` example (instructions per curve; the CI report multiplies them by the
 //!   expected number of curves).
@@ -39,6 +40,17 @@ fn arith_input(limbs: u32) -> ArithBatch {
     ArithBatch::new(&n, &residues(&n, ARITH_VALUES, SEED))
 }
 
+/// The Fermat number `2^1024 + 1` (1025 bits, composite): the special reduction modulo itself.
+fn fermat() -> Integer {
+    (Integer::from(1) << 1024u32) + 1u32
+}
+
+/// Modular arithmetic modulo [`fermat`], with the special reduction.
+fn fermat_input() -> ArithBatch {
+    let n = fermat();
+    ArithBatch::new(&n, &residues(&n, ARITH_VALUES, SEED))
+}
+
 #[library_benchmark]
 #[bench::limbs_1(arith_input(1))]
 #[bench::limbs_2(arith_input(2))]
@@ -46,6 +58,7 @@ fn arith_input(limbs: u32) -> ArithBatch {
 #[bench::limbs_8(arith_input(8))]
 #[bench::limbs_11(arith_input(11))]
 #[bench::limbs_16(arith_input(16))]
+#[bench::base2_fermat_1024(fermat_input())]
 fn arith_mul(batch: ArithBatch) -> Integer {
     black_box(black_box(&batch).run(ARITH_OPS, false))
 }
@@ -57,6 +70,7 @@ fn arith_mul(batch: ArithBatch) -> Integer {
 #[bench::limbs_8(arith_input(8))]
 #[bench::limbs_11(arith_input(11))]
 #[bench::limbs_16(arith_input(16))]
+#[bench::base2_fermat_1024(fermat_input())]
 fn arith_sqr(batch: ArithBatch) -> Integer {
     black_box(black_box(&batch).run(ARITH_OPS, true))
 }
@@ -97,6 +111,7 @@ const B2_35: usize = GMP_ECM_BOUNDS[4].2;
 #[bench::bits_1024(stage1_input(1024, B1_20, Param::Batch2))]
 #[bench::square_bits_256(stage1_input(256, B1_20, Param::Square))]
 #[bench::suyama_bits_256(stage1_input(256, B1_20, Param::Suyama))]
+#[bench::base2_fermat_1024((curve_point(&fermat(), Param::Batch2), stage1_multiplier(B1_20)))]
 fn stage1_b1_11k(input: (Point, Integer)) -> Point {
     let (p, k) = black_box(&input);
     black_box(stage1(p, k))

@@ -110,6 +110,7 @@ run) print what was found so far. With `--json`, an invalid input gives `"n": nu
 | `ecm -pp1 -x0 2/7 B1 B2` | `ecm-rs --pp1 --b1 B1 --b2 B2` (seed `2/7` by default; GMP-ECM: random) |
 | `ecm -pm1/-pp1 -x0 X`| `ecm-rs --pm1/--pp1 --x0 X`                              |
 | `ecm -maxmem MB`     | `ecm-rs --maxmem MB`                                     |
+| `ecm -base2 K`, `ecm -nobase2` | `ecm-rs --base2 K`, `ecm-rs --nobase2` (automatic by default, as GMP-ECM) |
 | `ecm -primetest`     | `ecm-rs --primetest` (prints `N: prime` or `N: composite`) |
 | `ecm -printconfig`   | `ecm-rs --printconfig`                                   |
 | `ecm -q`, `ecm -v`   | `ecm-rs -q`, `ecm-rs -v`                                 |
@@ -138,6 +139,13 @@ The implementation started as a translation of sympy's, and now uses the techniq
 
 - Montgomery modular arithmetic on fixed-size limb arrays (up to 1024 bits, with GMP's
   low-level functions from 641 bits; GMP integers above).
+- GMP-ECM's "special division" for the divisors of `2^k +- 1` (Mersenne, Fermat and
+  Cunningham numbers and their cofactors): with `k` at most 1.4 times their size, the curves,
+  P-1 and P+1 compute modulo `2^k +- 1`, where a product is reduced by a shift and an addition
+  instead of a Montgomery reduction, when the measured costs say it is faster (from about 320
+  to 1025 bits, depending on `k`). Stage 1 is 1.2 to 2.8 times faster (2.4 times at 1024 bits,
+  2.6 at 2048 and 4096 bits: as fast as GMP-ECM's), stage 2 up to 1.5 times.
+  `Factorizer::base2` (`Base2Mode`) and `--base2 K`/`--nobase2` force it or turn it off.
 - GMP-ECM's curves with parametrization 2 (`-param 2`): small starting point, same torsion as
   Suyama's curves.
 - Stage 2: baby-step giant-step continuation with prime pairing for small `B2`, and the
@@ -155,7 +163,7 @@ The implementation started as a translation of sympy's, and now uses the techniq
   measured costs).
 - `ecm_with_params` and `ecm_one_factor` run curves with fixed bounds.
 - `Factorizer` has all the options (seed, fixed bounds, curves, `sigma`, parametrization,
-  P-1 or P+1 only, stage 2 memory), and reports events (levels, curves with their `sigma` and
+  P-1 or P+1 only, stage 2 memory, special division), and reports events (levels, curves with their `sigma` and
   stage durations, P-1 and P+1 runs, factors and primes) to a callback, which can interrupt the
   factorization. An interruption flag or a timeout interrupt it even during a curve.
 
