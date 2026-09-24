@@ -213,7 +213,18 @@ fn reduce(x: &Integer, n: &Integer) -> Integer {
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn has_bmi2_adx() -> bool {
+    #[cfg(test)]
+    if GENERIC_ONLY.get() {
+        return false;
+    }
     std::is_x86_feature_detected!("bmi2") && std::is_x86_feature_detected!("adx")
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+thread_local! {
+    /// Tests only: makes [`has_bmi2_adx`] return `false` on this thread, to run the generic
+    /// copies on CPUs that have the extensions.
+    pub static GENERIC_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `lo + a * b + carry`, as `(low limb, high limb)`: never overflows.

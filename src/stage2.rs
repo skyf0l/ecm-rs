@@ -1122,6 +1122,47 @@ mod tests {
         }
     }
 
+    /// Runs `f` with the generic code only, then with the BMI2/ADX copies when the CPU has them.
+    #[cfg(target_arch = "x86_64")]
+    fn generic_and_dispatched<T>(f: impl Fn() -> T) -> (T, T) {
+        crate::arith::GENERIC_ONLY.set(true);
+        let generic = f();
+        crate::arith::GENERIC_ONLY.set(false);
+        (generic, f())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn check_generic_and_dispatched<A: Arith>(arith: A, q: &Point, plan: &PairPlan)
+    where
+        A::Elem: PartialEq + std::fmt::Debug,
+    {
+        let curve = Curve::new(arith, &q.a24);
+        let q = curve.point(&q.x, &q.z);
+        let (generic, dispatched) = generic_and_dispatched(|| accumulate(&curve, &q, plan));
+        assert_eq!(generic, dispatched);
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn generic_and_bmi2_copies_agree() {
+        // On CPUs with BMI2 and ADX, the other tests only run the copies compiled for them.
+        let (b1, b2) = (2000, 300_000);
+        let (k, plan) = (stage1_multiplier(b1), PairPlan::new(b1, b2));
+        for bits in [
+            40u32, 64, 100, 128, 190, 256, 320, 448, 512, 640, 768, 1024, 1100,
+        ] {
+            let p = (Integer::from(Integer::u_pow_u(2, bits / 2)) + 12_345u32).next_prime();
+            let n =
+                p * (Integer::from(Integer::u_pow_u(2, bits - bits / 2 - 2)) * 3u32).next_prime();
+            for sigma in 2..5 {
+                let start = curve(&n, Param::Batch2, &Integer::from(sigma)).unwrap();
+                let (generic, q) = generic_and_dispatched(|| stage1(&start, &k));
+                assert_eq!(generic, q, "{bits} {sigma}");
+                crate::arith::with_arith!(&n, |a| check_generic_and_dispatched(a, &q, &plan));
+            }
+        }
+    }
+
     #[test]
     fn pairs_batch_by_batch() {
         // Without a table, the pairs are recomputed for each batch of giant steps: same product.
