@@ -23,7 +23,9 @@
 //! mod 3` with a smooth `p + 1`. At its best `B1` (1 to 2 times the `B1` of the curves), it finds
 //! them at the rate of the curves, and with more, below it: with the costs measured on 40, 60 and
 //! 100-digit numbers, the expected time to find factors of 15 to 30 digits changes by less than
-//! 0.1% (and grows by 0.3-4% with 10 times the `B1` of the curves). The searches report [`Event`]s to the handler of the [`crate::Factorizer`], which may
+//! 0.1% (and grows by 0.3-4% with 10 times the `B1` of the curves).
+//!
+//! The searches report [`Event`]s to the handler of the [`crate::Factorizer`], which may
 //! interrupt them.
 
 use crate::{
