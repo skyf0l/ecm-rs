@@ -574,9 +574,15 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         }
         match self.mode {
             Mode::Levels if self.parallel() && self.algorithm == Algorithm::Ecm => {
-                self.find_parallel(n, progress, base2, None)
+                // The first level takes less time than starting threads.
+                match self.find_by_levels(n, progress, base2, 1)? {
+                    Some(found) => Ok(found),
+                    None => self.find_parallel(n, progress, base2, None),
+                }
             }
-            Mode::Levels => self.find_by_levels(n, progress, base2),
+            Mode::Levels => self
+                .find_by_levels(n, progress, base2, usize::MAX)
+                .map(|found| found.expect("no last level")),
             Mode::Fixed { b1, b2, .. } if self.algorithm != Algorithm::Ecm => {
                 self.pm_fixed(n, b1, b2, base2)
             }
@@ -588,19 +594,23 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
     }
 
     /// Searches `n` level by level, from `progress` on (with the special reduction modulo
-    /// `base2` if any).
+    /// `base2` if any), up to the level `until` (excluded): `None` when it is reached.
     fn find_by_levels(
         &mut self,
         n: &Integer,
         progress: &mut Progress,
         base2: Option<Base2Form>,
-    ) -> Result<(Integer, Method), Error> {
+        until: usize,
+    ) -> Result<Option<(Integer, Method)>, Error> {
         let top = top_level(n);
         loop {
+            if progress.level >= until {
+                return Ok(None);
+            }
             let index = progress.level.min(top);
             let level = &LEVELS[index];
             if let Some(found) = self.pm_level(n, index, progress, base2)? {
-                return Ok(found);
+                return Ok(Some(found));
             }
 
             if self.algorithm != Algorithm::Ecm {
@@ -625,7 +635,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
                 base2,
             ) {
                 Err(Error::ECMFailed) => {}
-                result => return result,
+                result => return result.map(Some),
             }
 
             progress.curves = 0;
