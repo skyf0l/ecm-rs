@@ -93,6 +93,7 @@ pub struct Factorizer<H = NoEvents> {
     base2: Base2Mode,
     interrupt: Option<Arc<AtomicBool>>,
     timeout: Option<Duration>,
+    threads: usize,
     handler: H,
 }
 
@@ -119,6 +120,7 @@ impl Factorizer {
             base2: Base2Mode::Auto,
             interrupt: None,
             timeout: None,
+            threads: 1,
             handler: NoEvents,
         }
     }
@@ -246,6 +248,26 @@ impl<H: EventHandler> Factorizer<H> {
         self
     }
 
+    /// Number of threads running curves (default: 1; 0 for [`std::thread::available_parallelism`]).
+    ///
+    /// With more than one, the curves of each level (or with fixed bounds) run in parallel, on
+    /// threads started by each factorization, which ends them before returning. Trial division,
+    /// P-1 and P+1 still run on the calling thread, as the callback of
+    /// [`Factorizer::on_event`] (which need not be [`Send`]).
+    ///
+    /// The results do not depend on the number of threads: the curves have the same
+    /// parameters, and the factor found is the one of the first curve (in their order) that
+    /// finds one, once all the curves before it ran (the curves after it are stopped). The
+    /// events are the same, in the same order ([`Event::Curve`] events come in the order of the
+    /// curves, when all the curves before them ran), but for the durations. Only the time taken
+    /// differs, and what an interruption (by the callback, the flag or the timeout) leaves:
+    /// with more threads, more curves may have run.
+    #[must_use]
+    pub const fn threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
+        self
+    }
+
     /// Calls `f` with each [`Event`] of the factorizations: returning [`ControlFlow::Break`]
     /// interrupts the factorization, which returns [`Error::Interrupted`] (see
     /// [`Factorizer::factor_partial`] for what was found so far). The events come between
@@ -269,6 +291,7 @@ impl<H: EventHandler> Factorizer<H> {
             base2: self.base2,
             interrupt: self.interrupt,
             timeout: self.timeout,
+            threads: self.threads,
             handler: f,
         }
     }
@@ -336,6 +359,7 @@ impl<H: EventHandler> Factorizer<H> {
             .timeout
             .and_then(|timeout| Instant::now().checked_add(timeout));
         let stop = Stop::new(self.interrupt.as_deref(), deadline);
+        let threads = self.thread_count();
         Engine::new(
             mode,
             self.param,
@@ -344,9 +368,17 @@ impl<H: EventHandler> Factorizer<H> {
             self.max_memory,
             self.base2,
             rand,
-            &mut self.handler,
-            stop,
+            (&mut self.handler, stop),
+            threads,
         )
+    }
+
+    /// Threads running curves, at least 1.
+    fn thread_count(&self) -> usize {
+        match self.threads {
+            0 => std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+            threads => threads,
+        }
     }
 
     /// Checks the options.

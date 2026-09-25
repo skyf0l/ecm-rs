@@ -106,8 +106,8 @@ pub fn ecm_one_factor(
         MAX_POLY_MEMORY,
         Base2Mode::Auto,
         rgen,
-        &mut NoEvents,
-        Stop::NEVER,
+        (&mut NoEvents, Stop::NEVER),
+        1,
     )
     .find_one(n, false)
 }
@@ -121,9 +121,14 @@ pub(crate) fn rand_state(seed: u64) -> RandState<'static> {
 }
 
 /// Steele, Lea and Flood's `SplitMix64` generator: fast, and good enough to draw curves.
+#[derive(Clone)]
 struct SplitMix64(u64);
 
 impl RandGen for SplitMix64 {
+    fn boxed_clone(&self) -> Option<Box<dyn RandGen>> {
+        Some(Box::new(self.clone()))
+    }
+
     fn r#gen(&mut self) -> u32 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;

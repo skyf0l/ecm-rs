@@ -13,6 +13,7 @@ mod ecm;
 mod events;
 mod factorizer;
 mod lucas;
+mod parallel;
 mod pm1;
 mod poly;
 mod pp1;
