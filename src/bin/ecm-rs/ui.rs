@@ -75,16 +75,19 @@ pub struct Ui {
     level: Level,
     /// The last curve run: `(param, sigma)`, for the factor it may have found.
     last_curve: Option<(Param, Integer)>,
+    /// Threads running the curves.
+    threads: u32,
 }
 
 impl Ui {
     /// `verbose` lines (0: none), and a progress bar if `progress`; `first`: P-1 or P+1 if it
-    /// runs first; `x0`: its seed, if given.
+    /// runs first; `x0`: its seed, if given; `threads`: threads running the curves.
     pub fn new(
         verbose: u8,
         progress: bool,
         first: Option<Algorithm>,
         x0: Option<(Integer, Integer)>,
+        threads: usize,
     ) -> Self {
         let bar = progress.then(|| {
             let bar = ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr());
@@ -100,6 +103,7 @@ impl Ui {
             bar,
             level: Level::default(),
             last_curve: None,
+            threads: u32::try_from(threads).unwrap_or(u32::MAX).max(1),
         }
     }
 
@@ -278,7 +282,8 @@ impl Ui {
                             self.spinner("P-1".to_string());
                         }
                         Some(curves) => {
-                            let mean = level.time / level.timed;
+                            // The curves run on the threads at once.
+                            let mean = level.time / level.timed / self.threads;
                             let expected = mean.saturating_mul(curves as u32);
                             let expected = human(expected);
                             bar.set_message(format!("(expected ~{expected} at this level)"));

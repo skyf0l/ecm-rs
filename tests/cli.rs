@@ -182,6 +182,8 @@ fn usage_errors() {
         &["--base2", "0", "15"],
         &["--base2", "x", "15"],
         &["--base2", "5", "--nobase2", "15"],
+        &["--threads", "0", "15"],
+        &["-t", "x", "15"],
     ] {
         let (code, out, err) = run(args);
         assert_eq!(code, 64, "{args:?}: {err}");
@@ -356,6 +358,36 @@ fn seed_determinism() {
     assert_eq!(sigmas(&a), sigmas(&b));
 }
 
+/// The `-v` lines without their times.
+fn without_times(err: &str) -> String {
+    err.lines()
+        .map(|line| line.split(" took ").next().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn threads() {
+    // A 20-digit factor (level 20, after P-1 and the lower levels), with the default bounds and
+    // with fixed bounds: the same output with any number of threads.
+    let n = "706775311406730222090307327433980448585968287703838870438339";
+    for extra in [&[][..], &["--b1", "11e3"]] {
+        let args = |threads: &'static str| {
+            let mut args = vec!["-v", "-t", threads, n];
+            args.extend_from_slice(extra);
+            args
+        };
+        let (code, out, err) = run(&args("1"));
+        assert_eq!(code, 14);
+        assert!(sigmas(&err).len() > 5, "{err}");
+        for threads in ["2", "5"] {
+            let (code2, out2, err2) = run(&args(threads));
+            assert_eq!((code2, &out2), (code, &out));
+            assert_eq!(without_times(&err2), without_times(&err));
+        }
+    }
+}
+
 #[test]
 fn timeout_prints_partial_results() {
     let n = format!("3*1000003*{P25}");
@@ -474,6 +506,7 @@ fn printconfig() {
     assert!(out.contains("above 1024 bits "), "{out}");
     assert!(out.contains("Stage 2 memory (default): 256 MiB"), "{out}");
     assert!(out.contains("Special division (GMP-ECM -base2)"), "{out}");
+    assert!(out.contains("Threads (default): "), "{out}");
     let (code, _, _) = run(&["--printconfig", "15"]);
     assert_eq!(code, 64);
 }

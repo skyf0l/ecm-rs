@@ -162,6 +162,7 @@ fn factorizer(cli: &Cli) -> Result<Factorizer, String> {
     if let Some(timeout) = cli.timeout {
         f = f.timeout(timeout);
     }
+    f = f.threads(threads(cli));
     // The options are checked before any work: factoring 1 is immediate.
     match f.clone().factor_partial(&Integer::from(1)).error {
         Some(Error::InvalidOption(msg)) => Err(format!("invalid options: {msg}")),
@@ -298,6 +299,7 @@ impl Run<'_> {
                 algorithm => Some(algorithm),
             },
             self.cli.x0.clone(),
+            threads(self.cli),
         );
         if self.cli.verbose > 0 && !self.cli.quiet {
             ui.line(&format!("Input number is {input} ({} digits)", digits(&n)));
@@ -536,6 +538,16 @@ fn bit(cond: bool, bit: u8) -> u8 {
     if cond { bit } else { 0 }
 }
 
+/// Threads running curves: `--threads`, or the available parallelism.
+fn threads(cli: &Cli) -> usize {
+    cli.threads
+        .map_or_else(available_threads, |threads| threads as usize)
+}
+
+fn available_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+}
+
 /// `--printconfig`.
 fn print_config() {
     use gmp_mpfr_sys::gmp;
@@ -600,7 +612,12 @@ fn print_config() {
         Param::default()
     );
     println!(
-        "Stage 2 memory (default): {} MiB",
+        "Stage 2 memory (default): {} MiB per thread",
         config::MAX_POLY_MEMORY >> 20
+    );
+    println!(
+        "Threads (default): {} (available parallelism; --threads N): curves of the levels and \
+         P-1 run in parallel, same results",
+        available_threads()
     );
 }
