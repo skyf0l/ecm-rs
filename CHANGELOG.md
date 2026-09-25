@@ -55,18 +55,19 @@ smallest to the largest, and a builder with progress events and cancellation.
   within a few milliseconds.
 - The `ecm-rs` command line tool (`cargo install ecm --features cli`): complete factorization
   by default, GMP-ECM-like options (`--b1`, `--b2`, `-c`, `--sigma`, `--param`, `--one`,
-  `--pm1`, `--pp1`, `--x0`, `--maxmem`, `--base2`, `--nobase2`, `--primetest`, `--printconfig`, `-q`, `-v`), GMP-ECM's input
-  expressions, `--json`, `--seed`, `--timeout` (for each number) and `--total-timeout`, a
-  progress bar, partial results on Ctrl-C, and GMP-ECM's exit status bits. The `cli` feature
-  only adds its dependencies (`clap`, `ctrlc`, `indicatif`, `serde_json`): the library compiles
-  none of them.
+  `--pm1`, `--pp1`, `--x0`, `--maxmem`, `--base2`, `--nobase2`, `--primetest`, `--printconfig`,
+  `-q`, `-v`), GMP-ECM's input expressions, `--json`, `--seed`, `--timeout` (for each number)
+  and `--total-timeout`, a progress bar, partial results on Ctrl-C, and GMP-ECM's exit status
+  bits. The `cli` feature only adds its dependencies (`clap`, `ctrlc`, `indicatif`,
+  `serde_json`): the library compiles none of them.
 
 ### Performance
 
 - Montgomery arithmetic on fixed-size limb arrays (up to 1024 bits; GMP's low-level functions
   from 641 bits), with BMI2/ADX copies of the hot loops chosen at run time.
 - Special division for the divisors of `2^k +- 1`: stage 1 of the curves and of P-1 2.4 to 2.8
-  times faster from 1024 bits (as fast as GMP-ECM's), stage 2 up to 1.5 times.
+  times faster from 1024 bits (as fast as GMP-ECM's), stage 2 up to 1.5 times (modulo the
+  number when that is cheaper).
 - Stage 1: GMP-ECM's parametrization 2 curves (small starting point), a product-tree
   multiplier.
 - Stage 2: baby-step giant-step continuation with prime pairing for small `B2`, and GMP-ECM's
