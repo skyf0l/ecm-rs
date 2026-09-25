@@ -880,4 +880,204 @@ mod tests {
             }
         }
     }
+
+    /// Values of the representation that make carries and borrows ripple through every limb
+    /// (all-ones limbs, `2^k - 2^j`) and the extremes, for [`adversarial_values`].
+    fn edge_values(form: Base2Form, rand: &mut RandState<'_>) -> Vec<Integer> {
+        let k = form.k;
+        let m = form.value();
+        let top = if form.plus { Integer::from(&m - 1) } else { m };
+        let pow = |j: u32| Integer::from(1) << j;
+        let mut v = vec![
+            Integer::ZERO,
+            Integer::from(1),
+            Integer::from(2),
+            Integer::from(&top - 1),
+            Integer::from(&top - 2),
+            pow(k - 1),
+            pow(k - 1) - 1u32,
+            pow(k - 1) + 1u32,
+            top.clone(),
+        ];
+        for j in [64, 128, 64 * (k / 64), k - 1, k.saturating_sub(64)] {
+            if j > 0 && j <= k {
+                v.push(pow(j) - 1u32);
+            }
+        }
+        for j in [0, 1, 63, 64, 65, k / 2] {
+            if j < k {
+                v.push(pow(k) - pow(j));
+            }
+        }
+        v.extend((0..4).map(|_| Integer::from(top.random_below_ref(rand)) + 1u32));
+        v.retain(|x| *x <= top);
+        v
+    }
+
+    /// Every operation on values anywhere in the representation (not only the residues of
+    /// numbers below `n`), checked modulo `M` itself, for `k` from 2 (below
+    /// [`BASE2_MIN_EXPONENT`], as `Force` allows) to 4097, `n` = `M`, a cofactor or `3`.
+    #[test]
+    fn adversarial_values() {
+        let mut rand = RandState::new();
+        for k in [
+            2, 3, 5, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 191, 192, 1024, 1025,
+            2047, 4096, 4097,
+        ] {
+            for plus in [false, true] {
+                let form = Base2Form { k, plus };
+                let m = form.value();
+                let mut moduli = vec![m.clone(), cofactor(form.signed())];
+                // 3 divides 2^k - 1 for k even, 2^k + 1 for k odd.
+                if (k % 2 == 0) != plus {
+                    moduli.push(Integer::from(3));
+                }
+                for n in moduli.iter().filter(|n| **n > 1) {
+                    check_edges(form, n, &mut rand);
+                }
+            }
+        }
+    }
+
+    fn check_edges(form: Base2Form, n: &Integer, rand: &mut RandState<'_>) {
+        let m = form.value();
+        let a = Base2::new(n, form);
+        let values = edge_values(form, rand);
+        let elem = |x: &Integer| {
+            let mut e = a.zero();
+            x.write_digits(&mut e, Order::Lsf);
+            e
+        };
+        // The value modulo M of a result, checked in range.
+        let value = |r: &[u64]| {
+            assert_in_range(r, &m, form);
+            Integer::from_digits(r, Order::Lsf) % &m
+        };
+        let mut r = a.zero();
+        let mut acc = vec![0; 2 * a.limbs + 2];
+        for x in &values {
+            let ex = elem(x);
+            assert_eq!(a.to_integer(&ex), Integer::from(x % n), "{x} mod {n}");
+            assert_eq!(a.gcd(&ex), Integer::from(x % n).gcd(n));
+            a.sqr(&mut r, &ex);
+            assert_eq!(value(&r), Integer::from(x * x) % &m, "{x}^2 ({form})");
+            for c in [0, 1, 3, 1 << 63, u64::MAX] {
+                a.mul_small(&mut r, &ex, c);
+                assert_eq!(value(&r), Integer::from(x * c) % &m, "{x}*{c} ({form})");
+            }
+            for y in &values {
+                let ey = elem(y);
+                a.mul(&mut r, &ex, &ey);
+                assert_eq!(value(&r), Integer::from(x * y) % &m, "{x}*{y} ({form})");
+                a.add(&mut r, &ex, &ey);
+                assert_eq!(value(&r), Integer::from(x + y) % &m, "{x}+{y} ({form})");
+                a.sub(&mut r, &ex, &ey);
+                assert_eq!(
+                    value(&r),
+                    reduce(&Integer::from(x - y), &m),
+                    "{x}-{y} ({form})"
+                );
+                acc.fill(0);
+                a.mul_acc(&mut acc, &ex, &ey);
+                a.mul_acc(&mut acc, &ex, &ey);
+                a.redc_wide(&mut r, &acc);
+                assert_eq!(
+                    value(&r),
+                    Integer::from(x * y) * 2u32 % &m,
+                    "2*{x}*{y} ({form})"
+                );
+            }
+        }
+        for len in 1..=2 * a.limbs + 2 {
+            let bits = 64 * len as u32;
+            for t in [
+                (Integer::from(1) << bits) - 1u32,
+                Integer::from(1) << (bits - 1),
+                Integer::from(Integer::random_bits(bits, rand)),
+            ] {
+                let mut digits = vec![0; len];
+                t.write_digits(&mut digits, Order::Lsf);
+                a.redc_wide(&mut r, &digits);
+                assert_eq!(value(&r), Integer::from(&t % &m), "{t} ({form})");
+            }
+        }
+        for x in [
+            Integer::from(n * 3u32) + 5u32,
+            Integer::from(-7),
+            Integer::from(-n),
+        ] {
+            let e = a.residue(&x);
+            assert_in_range(&e, &m, form);
+            assert_eq!(a.to_integer(&e), reduce(&x, n));
+        }
+        // The sliding windows exponentiation of P-1.
+        let x = Integer::from(n.random_below_ref(rand));
+        for bits in [1, 7, 300] {
+            let e = Integer::from(Integer::random_bits(bits, rand)) | 1u32;
+            let expected = x.clone().pow_mod(&e, n).unwrap();
+            assert_eq!(
+                a.to_integer(&crate::arith::pow(&a, &a.residue(&x), &e)),
+                expected
+            );
+        }
+    }
+
+    /// Polynomial products of polynomials whose coefficients all are the largest value of the
+    /// representation: the Kronecker slots hold the largest sums of products.
+    #[test]
+    fn worst_case_slots() {
+        use crate::poly::{Operand, Workspace, mul, mul_part, mul_wrap};
+        let small = |k: i64, of: i64| {
+            (
+                Base2Form::from_signed(k).unwrap().value(),
+                cofactor_of(of).1,
+            )
+        };
+        for (n, form) in [64, -64, -127, 1024, -1061, 1025]
+            .map(cofactor_of)
+            .into_iter()
+            .chain([small(64, 1088), small(-61, -610)])
+        {
+            let a = Base2::new(&n, form);
+            let top = if form.plus {
+                form.value() - 1u32
+            } else {
+                form.value()
+            };
+            let mut largest = a.zero();
+            top.write_digits(&mut largest, Order::Lsf);
+            let square = Integer::from(a.to_integer(&largest).square_ref());
+            let mut ws = Workspace::new();
+            for (lx, ly) in [(13, 13), (14, 13), (100, 100), (255, 256), (700, 13)] {
+                let (x, y) = (vec![largest.clone(); lx], vec![largest.clone(); ly]);
+                // Coefficient t is the sum of min(t + 1, lx, ly, lx + ly - 1 - t) squares.
+                let expected: Vec<Integer> = (0..lx + ly - 1)
+                    .map(|t| {
+                        let terms = (t + 1).min(lx).min(ly).min(lx + ly - 1 - t);
+                        Integer::from(&square * terms as u32) % &n
+                    })
+                    .collect();
+                let values = |x: &[Vec<u64>]| x.iter().map(|x| a.to_integer(x)).collect::<Vec<_>>();
+                let mut r = vec![a.zero(); lx + ly - 1];
+                mul(&a, &mut ws, &mut r, &x, &y);
+                assert_eq!(values(&r), expected, "{form} {lx} {ly}");
+                for from in [1, (lx + ly) / 3, lx.max(ly) - 1] {
+                    let mut part = vec![a.zero(); lx + ly - 1 - from];
+                    let (ox, oy) = (Operand::new(&x), Operand::new(&y));
+                    mul_part(&a, &mut ws, &mut part, from, ox, oy);
+                    assert_eq!(values(&part), expected[from..], "{form} {lx} {ly} {from}");
+                }
+                for lmin in [lx.max(ly), lx.max(ly) + 5] {
+                    let mut wrap = vec![a.zero(); lmin];
+                    let (ox, oy) = (Operand::new(&x), Operand::new(&y));
+                    let l = mul_wrap(&a, &mut ws, &mut wrap, 0, ox, oy, lmin);
+                    for (t, w) in values(&wrap).iter().enumerate().take(l.min(lmin)) {
+                        let mut c = expected.get(t).cloned().unwrap_or_default();
+                        c += expected.get(t + l).cloned().unwrap_or_default();
+                        assert_eq!(*w, c % &n, "{form} {lx} {ly} wrap {t}");
+                    }
+                }
+            }
+        }
+    }
 }
