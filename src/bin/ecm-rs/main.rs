@@ -589,8 +589,9 @@ fn print_config() {
     );
     println!(
         "Special division (GMP-ECM -base2): the numbers dividing 2^k+-1 with {} <= k <= {} x \
-         their bits compute modulo 2^k+-1 when it is faster than the above (from 320 to 1025 \
-         bits); --base2 K forces it, --nobase2 disables it",
+         their bits compute modulo 2^k+-1 when it is faster than the above (from about 400 bits \
+         with k close to their size, 770 bits with k up to 1.4 times); --base2 K forces it, \
+         --nobase2 disables it",
         config::BASE2_MIN_EXPONENT,
         config::BASE2_THRESHOLD
     );

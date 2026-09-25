@@ -210,9 +210,10 @@ impl<H: EventHandler> Factorizer<H> {
 
     /// When to compute modulo `2^k +- 1` instead of the number, with a reduction by shifts and
     /// additions instead of Montgomery's (GMP-ECM's "special division", `-base2` and `-nobase2`):
-    /// by default, [`Base2Mode::Auto`], for the composite parts of at least 512 bits that divide
-    /// `2^k +- 1` with `k` at most 1.4 times their size (Mersenne, Fermat and Cunningham numbers
-    /// and their cofactors). Their curves, P-1 and P+1 are then 1.5 to 3 times faster. The
+    /// by default, [`Base2Mode::Auto`], for the composite parts that divide `2^k +- 1` with `k`
+    /// at most 1.4 times their size (Mersenne, Fermat and Cunningham numbers and their
+    /// cofactors), when it is faster: from about 400 bits (see [`Base2Mode::Auto`]). Stage 1 of
+    /// their curves, P-1 and P+1 is then up to 2.8 times faster (2.4 times at 1024 bits). The
     /// factors found are the same (the arithmetic gives the same values modulo the number).
     ///
     /// With [`Base2Mode::Force`], every composite part searched must divide the given `2^k +-

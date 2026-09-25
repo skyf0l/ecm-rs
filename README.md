@@ -142,9 +142,10 @@ The implementation started as a translation of sympy's, and now uses the techniq
 - GMP-ECM's "special division" for the divisors of `2^k +- 1` (Mersenne, Fermat and
   Cunningham numbers and their cofactors): with `k` at most 1.4 times their size, the curves,
   P-1 and P+1 compute modulo `2^k +- 1`, where a product is reduced by a shift and an addition
-  instead of a Montgomery reduction, when the measured costs say it is faster (from about 320
-  to 1025 bits, depending on `k`). Stage 1 is 1.2 to 2.8 times faster (2.4 times at 1024 bits,
-  2.6 at 2048 and 4096 bits: as fast as GMP-ECM's), stage 2 up to 1.5 times.
+  instead of a Montgomery reduction, when the measured costs say it is faster (from about 400
+  bits with `k` close to their size, 770 bits with `k` up to 1.4 times). Stage 1 is 1.1 to 2.8
+  times faster (2.4 times at 1024 bits, 2.6 at 2048 and 4096 bits: as fast as GMP-ECM's),
+  stage 2 up to 1.5 times (it stays modulo the number when that is cheaper).
   `Factorizer::base2` (`Base2Mode`) and `--base2 K`/`--nobase2` force it or turn it off.
 - GMP-ECM's curves with parametrization 2 (`-param 2`): small starting point, same torsion as
   Suyama's curves.
@@ -163,9 +164,10 @@ The implementation started as a translation of sympy's, and now uses the techniq
   measured costs).
 - `ecm_with_params` and `ecm_one_factor` run curves with fixed bounds.
 - `Factorizer` has all the options (seed, fixed bounds, curves, `sigma`, parametrization,
-  P-1 or P+1 only, stage 2 memory, special division), and reports events (levels, curves with their `sigma` and
-  stage durations, P-1 and P+1 runs, factors and primes) to a callback, which can interrupt the
-  factorization. An interruption flag or a timeout interrupt it even during a curve.
+  P-1 or P+1 only, stage 2 memory, special division), and reports events (levels, curves with
+  their `sigma` and stage durations, P-1 and P+1 runs, factors and primes) to a callback, which
+  can interrupt the factorization. An interruption flag or a timeout interrupt it even during a
+  curve.
 
 ## Performance
 

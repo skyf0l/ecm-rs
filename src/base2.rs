@@ -25,8 +25,9 @@ use crate::{
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Base2Mode {
     /// For the numbers that divide `2^k +- 1` with `k` at most 1.4 times their size in bits
-    /// (as GMP-ECM), when it is faster: from about 320 bits (`k` close to their size) to 1025
-    /// bits (`k` 1.4 times their size).
+    /// (as GMP-ECM), when it is faster: from about 400 bits with `k` close to their size, from
+    /// 770 bits with `k` up to 1.4 times their size (stage 2 computes modulo the number when
+    /// that is cheaper, for `k` well above its size).
     #[default]
     Auto,
     /// Never (GMP-ECM's `-nobase2`).
@@ -108,8 +109,9 @@ impl Base2Form {
 
     /// The form `2^k +- 1` of `n` worth using: GMP-ECM's `isbase2` (`k` at least
     /// [`BASE2_MIN_EXPONENT`] and at most [`BASE2_THRESHOLD`] times the size of `n`), if the
-    /// arithmetic modulo `2^k +- 1` is faster than modulo `n` (from 320 to 640 bits depending
-    /// on `k`, see [`crate::cost`]).
+    /// arithmetic modulo `2^k +- 1` is faster than modulo `n` (from about 400 bits with `k`
+    /// close to the size of `n`, from 770 bits with `k` up to 1.4 times, see
+    /// [`crate::cost::base2_faster`]).
     pub fn detect(n: &Integer) -> Option<Self> {
         let bits = n.significant_bits();
         let form = Self::find(n)?;
@@ -120,9 +122,10 @@ impl Base2Form {
         .then_some(form)
     }
 
-    /// The smallest `2^k +- 1` with `k <= 2*(bits(n) - 1)` that `n > 2` divides, if any: with
-    /// `2^lo <= n < 2^(lo + 1)`, `2^(2*lo) mod n` is `2^(2*lo - k)` if `n` divides `2^k - 1`,
-    /// `n - 2^(2*lo - k)` if `n` divides `2^k + 1` (one test, as GMP-ECM's `isbase2`).
+    /// The `2^k +- 1` with `lo < k <= 2*lo` that `n > 2` divides, if any (then unique), or `n`
+    /// itself if it is `2^lo + 1`, with `2^lo <= n < 2^(lo + 1)`: `2^(2*lo) mod n` is
+    /// `2^(2*lo - k)` if `n` divides `2^k - 1`, `n - 2^(2*lo - k)` if `n` divides `2^k + 1` (one
+    /// test, as GMP-ECM's `isbase2`).
     fn find(n: &Integer) -> Option<Self> {
         if *n <= 2 || n.is_even() {
             return None;
