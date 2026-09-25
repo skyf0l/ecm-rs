@@ -331,6 +331,10 @@ fn since(start: Option<Instant>) -> Duration {
     start.map_or(Duration::ZERO, |start| start.elapsed())
 }
 
+/// Stage 2 plans by bounds `(b1, b2)`, size of the number (bits) and form of its special
+/// reduction in stage 1.
+type PlanKey = (usize, usize, u32, Option<Base2Form>);
+
 /// A factorization: the options, and what the searches share (random state, stage 1
 /// multipliers and stage 2 plans).
 pub(crate) struct Engine<'a, 'r, H> {
@@ -346,9 +350,9 @@ pub(crate) struct Engine<'a, 'r, H> {
     rand: &'a mut RandState<'r>,
     events: Events<'a, H>,
     /// Stage 1 multipliers by `b1`, and stage 2 plans by bounds, size of the number and form
-    /// of its special reduction.
+    /// of its special reduction, with the form stage 2 uses (see [`Engine::plan`]).
     multipliers: HashMap<usize, Rc<Integer>>,
-    plans: HashMap<(usize, usize, u32, Option<Base2Form>), Rc<Stage2Plan>>,
+    plans: HashMap<PlanKey, (Rc<Stage2Plan>, Option<Base2Form>)>,
 }
 
 impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
@@ -390,17 +394,24 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             .clone()
     }
 
+    /// The stage 2 plan for `n` with the special reduction modulo `base2` (if any) in stage 1,
+    /// and the form of the special reduction in stage 2: `base2`, or none if computing modulo
+    /// `n` is cheaper there (with [`Base2Mode::Auto`], see [`Stage2Plan::cheapest`]).
     fn plan(
         &mut self,
         n: &Integer,
         b1: usize,
         b2: usize,
         base2: Option<Base2Form>,
-    ) -> Rc<Stage2Plan> {
+    ) -> (Rc<Stage2Plan>, Option<Base2Form>) {
         let max_memory = self.max_memory;
+        let either = self.base2 == Base2Mode::Auto;
         self.plans
             .entry((b1, b2, n.significant_bits(), base2))
-            .or_insert_with(|| Rc::new(Stage2Plan::for_arith(n, b1, b2, max_memory, base2)))
+            .or_insert_with(|| {
+                let (plan, form) = Stage2Plan::cheapest(n, (b1, b2), max_memory, base2, either);
+                (Rc::new(plan), form)
+            })
             .clone()
     }
 
@@ -590,7 +601,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             }
 
             let prob = {
-                let plan = self.plan(n, level.b1, level.b2, base2);
+                let (plan, _) = self.plan(n, level.b1, level.b2, base2);
                 ecm_prob(level.b1 as f64, plan.b2() as f64, f64::from(level.digits))
             };
             let curves = (1.0 / prob).ceil().max(1.0) as usize;
@@ -634,7 +645,8 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             return Err(Error::ECMFailed);
         }
         let k = self.multiplier(b1);
-        let plan = self.plan(n, b1, b2, base2);
+        let (plan, base2_stage2) = self.plan(n, b1, b2, base2);
+        let base2 = [base2, base2_stage2];
         self.events.emit(Event::Level {
             n,
             digits,
@@ -704,8 +716,12 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             return Ok(None);
         }
         let max_memory = self.max_memory;
-        let b2 = || pm1_b2(n, b1, max_memory, base2);
-        let (found, all) = run_plus_minus(pm, n, (b1, b2), max_memory, base2, &mut self.events)?;
+        let either = self.base2 == Base2Mode::Auto;
+        let plan = || {
+            let b2 = pm1_b2(n, b1, max_memory, (base2, either));
+            Stage2Plan::cheapest(n, (b1, b2), max_memory, base2, either)
+        };
+        let (found, all) = run_plus_minus(pm, n, (b1, plan), base2, &mut self.events)?;
         if all {
             // Every p - 1 (or p + 1) is smooth: P-1 (or P+1) cannot separate the factors.
             progress.pm = None;
@@ -723,20 +739,21 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
     ) -> Result<(Integer, Method), Error> {
         let mut pm = self.plus_minus();
         let max_memory = self.max_memory;
-        let events = &mut self.events;
-        let (found, _) = run_plus_minus(&mut pm, n, (b1, || b2), max_memory, base2, events)?;
+        let either = self.base2 == Base2Mode::Auto;
+        let plan = || Stage2Plan::cheapest(n, (b1, b2), max_memory, base2, either);
+        let (found, _) = run_plus_minus(&mut pm, n, (b1, plan), base2, &mut self.events)?;
         found.ok_or(Error::ECMFailed)
     }
 }
 
-/// Runs P-1 (or P+1) on `n` up to `b1` (resuming `pm`), then stage 2 up to `b2()` if stage 1
-/// finds nothing (with the special reduction modulo `base2` if any): returns the proper factor
-/// found, if any, and whether stage 1 found all the factors of `n` at once.
+/// Runs P-1 (or P+1) on `n` up to `b1` (resuming `pm`, with the special reduction modulo
+/// `base2` if any), then stage 2 with `plan()` (the plan and the form of its special reduction)
+/// if stage 1 finds nothing: returns the proper factor found, if any, and whether stage 1 found
+/// all the factors of `n` at once.
 fn run_plus_minus<H: EventHandler>(
     pm: &mut PlusMinus,
     n: &Integer,
-    (b1, b2): (usize, impl FnOnce() -> usize),
-    max_memory: usize,
+    (b1, plan): (usize, impl FnOnce() -> (Stage2Plan, Option<Base2Form>)),
     base2: Option<Base2Form>,
     events: &mut Events<'_, H>,
 ) -> Result<(Option<(Integer, Method)>, bool), Error> {
@@ -757,7 +774,7 @@ fn run_plus_minus<H: EventHandler>(
     // Stage 1 may have stopped early: it is not reported then.
     events.check()?;
     let start = Events::<H>::now();
-    let plan = Stage2Plan::for_arith(n, b1, b2(), max_memory, base2);
+    let (plan, base2) = plan();
     let g = pm.stage2(n, &plan, base2, events.stop);
     let stage2 = since(start);
     let found = (g != 1 && &g != n).then_some((g, method2));
@@ -784,14 +801,25 @@ fn top_level(n: &Integer) -> usize {
 
 /// Stage 2 bound of P-1 after a stage 1 up to `b1`: the largest `b1*2^i` whose stage 2 costs at
 /// most [`PM1_STAGE2_RATIO`] times stage 1 (`1.44*b1` modular squarings), with the special
-/// reduction modulo `base2` if any.
-fn pm1_b2(n: &Integer, b1: usize, max_memory: usize, base2: Option<Base2Form>) -> usize {
+/// reduction modulo `base2` if any (in stage 2 too, unless `either` and computing modulo `n`
+/// is cheaper there, see [`Stage2Plan::cheapest`]).
+fn pm1_b2(
+    n: &Integer,
+    b1: usize,
+    max_memory: usize,
+    (base2, either): (Option<Base2Form>, bool),
+) -> usize {
     let bits = n.significant_bits() as usize;
     let costs = Costs::modulo(bits, base2);
     let budget = PM1_STAGE2_RATIO * 1.44 * b1 as f64 * 1.3 * costs.mul();
-    let modulus = (bits, base2);
+    let fits = |b2| {
+        Stage2Plan::cost_at_most((bits, base2), b1, b2, budget, max_memory)
+            || (either
+                && base2.is_some()
+                && Stage2Plan::cost_at_most((bits, None), b1, b2, budget, max_memory))
+    };
     let mut b2 = b1;
-    while b2 < usize::MAX / 4 && Stage2Plan::cost_at_most(modulus, b1, 2 * b2, budget, max_memory) {
+    while b2 < usize::MAX / 4 && fits(2 * b2) {
         b2 *= 2;
     }
     b2

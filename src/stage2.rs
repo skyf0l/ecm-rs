@@ -287,19 +287,51 @@ impl Stage2Plan {
         max_memory: usize,
         base2: Option<Base2Form>,
     ) -> Self {
+        Self::costed(n, b1, b2, max_memory, base2).0
+    }
+
+    /// [`Stage2Plan::for_arith`] modulo `base2`, or modulo `n` if `either` and the cost model
+    /// finds it cheaper: the products modulo `2^k +- 1` are cheaper, but on values of `k` bits,
+    /// so that the polynomial continuation can cost more with `k` well above the size of `n`
+    /// (up to 1.4 times). Returns the plan and the arithmetic it is for.
+    pub(crate) fn cheapest(
+        n: &Integer,
+        (b1, b2): (usize, usize),
+        max_memory: usize,
+        base2: Option<Base2Form>,
+        either: bool,
+    ) -> (Self, Option<Base2Form>) {
+        let (plan, cost) = Self::costed(n, b1, b2, max_memory, base2);
+        if either && base2.is_some() {
+            let (other, other_cost) = Self::costed(n, b1, b2, max_memory, None);
+            if other_cost < cost {
+                return (other, None);
+            }
+        }
+        (plan, base2)
+    }
+
+    /// [`Stage2Plan::for_arith`], and its estimated cost (in nanoseconds, see [`Costs`]).
+    fn costed(
+        n: &Integer,
+        b1: usize,
+        b2: usize,
+        max_memory: usize,
+        base2: Option<Base2Form>,
+    ) -> (Self, f64) {
         assert!(b1 >= 3, "stage 2 requires b1 >= 3");
         let bits = n.significant_bits() as usize;
         let costs = Costs::modulo(bits, base2);
         let d = giant_step(b1, b2);
         let pairs = costs.pairs_stage2(b1, b2, d, phi(d));
         if pairs_always_cheaper(bits, b2) {
-            return Self::pairs(b1, b2);
+            return (Self::pairs(b1, b2), pairs);
         }
         let (poly, poly_cost) = best_poly_plan(&costs, b1, b2, max_memory);
         if poly_cost < pairs {
-            Self::Poly(poly)
+            (Self::Poly(poly), poly_cost)
         } else {
-            Self::pairs(b1, b2)
+            (Self::pairs(b1, b2), pairs)
         }
     }
 
@@ -897,6 +929,22 @@ mod tests {
         assert_eq!(w.index[1155], u32::MAX);
         assert_eq!(w.index[2309], 479);
         assert_eq!(Wheel::new(6).len, 2);
+    }
+
+    /// Stage 2 computes modulo `n` when `2^k +- 1` is much larger (if allowed), and modulo
+    /// `2^k +- 1` when it is about the size of `n`.
+    #[test]
+    fn cheapest_arithmetic() {
+        let form = |k| Base2Form::from_signed(k).unwrap();
+        let bounds = (50_000, 12_746_592);
+        let large = form(1280).value() / form(256).value();
+        let plan =
+            |n, base2, either| Stage2Plan::cheapest(n, bounds, MAX_POLY_MEMORY, base2, either).1;
+        assert_eq!(plan(&large, Some(form(1280)), true), None);
+        assert_eq!(plan(&large, Some(form(1280)), false), Some(form(1280)));
+        assert_eq!(plan(&large, None, true), None);
+        let fermat = form(2048).value();
+        assert_eq!(plan(&fermat, Some(form(2048)), true), Some(form(2048)));
     }
 
     #[test]
