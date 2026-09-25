@@ -34,6 +34,16 @@ impl<'a> Stop<'a> {
         self.flag.is_none() && self.deadline.is_none()
     }
 
+    /// Whether it stops when a flag is set (not only at a deadline).
+    pub(crate) fn polls_flag(self) -> bool {
+        self.flag.is_some()
+    }
+
+    /// When it stops, if at a deadline.
+    pub(crate) fn deadline(self) -> Option<Instant> {
+        self.deadline
+    }
+
     /// Whether the computation must stop now.
     #[inline]
     pub(crate) fn requested(self) -> bool {

@@ -37,6 +37,7 @@ use crate::{
     },
     events::{Event, EventHandler, Method},
     factorizer::{Algorithm, Factorization},
+    parallel::{Curves, Pool, Timed},
     pm1::Pm1,
     pp1::Pp1,
     rho::ecm_prob,
@@ -46,7 +47,7 @@ use crate::{
 use rug::{Integer, rand::RandState};
 use std::{
     collections::HashMap,
-    rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -351,8 +352,12 @@ pub(crate) struct Engine<'a, 'r, H> {
     events: Events<'a, H>,
     /// Stage 1 multipliers by `b1`, and stage 2 plans by bounds, size of the number and form
     /// of its special reduction, with the form stage 2 uses (see [`Engine::plan`]).
-    multipliers: HashMap<usize, Rc<Integer>>,
-    plans: HashMap<PlanKey, (Rc<Stage2Plan>, Option<Base2Form>)>,
+    multipliers: HashMap<usize, Arc<Integer>>,
+    plans: HashMap<PlanKey, (Arc<Stage2Plan>, Option<Base2Form>)>,
+    /// Threads running curves (see [`crate::Factorizer::threads`]), and their pool, started
+    /// at the first level that runs curves in parallel.
+    threads: usize,
+    pool: Option<Pool>,
 }
 
 impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
@@ -365,8 +370,8 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         max_memory: usize,
         base2: Base2Mode,
         rand: &'a mut RandState<'r>,
-        handler: &'a mut H,
-        stop: Stop<'a>,
+        (handler, stop): (&'a mut H, Stop<'a>),
+        threads: usize,
     ) -> Self {
         Self {
             mode,
@@ -384,13 +389,15 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             },
             multipliers: HashMap::new(),
             plans: HashMap::new(),
+            threads,
+            pool: None,
         }
     }
 
-    fn multiplier(&mut self, b1: usize) -> Rc<Integer> {
+    fn multiplier(&mut self, b1: usize) -> Arc<Integer> {
         self.multipliers
             .entry(b1)
-            .or_insert_with(|| Rc::new(stage1_multiplier(b1)))
+            .or_insert_with(|| Arc::new(stage1_multiplier(b1)))
             .clone()
     }
 
@@ -403,14 +410,14 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         b1: usize,
         b2: usize,
         base2: Option<Base2Form>,
-    ) -> (Rc<Stage2Plan>, Option<Base2Form>) {
+    ) -> (Arc<Stage2Plan>, Option<Base2Form>) {
         let max_memory = self.max_memory;
         let either = self.base2 == Base2Mode::Auto;
         self.plans
             .entry((b1, b2, n.significant_bits(), base2))
             .or_insert_with(|| {
                 let (plan, form) = Stage2Plan::cheapest(n, (b1, b2), max_memory, base2, either);
-                (Rc::new(plan), form)
+                (Arc::new(plan), form)
             })
             .clone()
     }
@@ -656,6 +663,9 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             done: *done,
         })?;
 
+        if self.threads > 1 && curves.is_none_or(|curves| curves - *done > 1) {
+            return self.curves_parallel(n, (k, plan, base2), curves, done);
+        }
         let param = self.param;
         while curves.is_none_or(|curves| *done < curves) {
             self.events.check()?;
@@ -693,6 +703,79 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             }
         }
         Err(Error::ECMFailed)
+    }
+
+    /// [`Engine::curves`] in parallel (see [`crate::parallel`]), with the stage 1 multiplier
+    /// `k`, the stage 2 `plan` and the forms of the special reduction of both stages: same
+    /// curves, same events (but their durations), same result.
+    fn curves_parallel(
+        &mut self,
+        n: &Integer,
+        (k, plan, base2): (Arc<Integer>, Arc<Stage2Plan>, [Option<Base2Form>; 2]),
+        curves: Option<usize>,
+        done: &mut usize,
+    ) -> Result<(Integer, Method), Error> {
+        let param = self.param;
+        let stop = self.events.stop;
+        let shared = Arc::new(Curves {
+            n: Arc::new(n.clone()),
+            param,
+            k,
+            plan,
+            base2,
+            timed: H::ENABLED,
+            deadline: stop.deadline(),
+        });
+        // The parameters of the curves are drawn ahead of the curves reported, from copies of
+        // the random state (or of the next parameter): the state then moves past the curves
+        // reported only, as if they ran one after the other.
+        let mut ahead_rand = self.sigma.is_none().then(|| self.rand.clone());
+        let mut ahead_sigma = self.sigma.clone();
+        let sigma = || match (&mut ahead_sigma, &mut ahead_rand) {
+            (Some(sigma), _) => {
+                let next = Integer::from(&*sigma + 1u32);
+                std::mem::replace(sigma, next)
+            }
+            (None, rand) => random_sigma(n, param, rand.as_mut().expect("a random state")),
+        };
+        let events = &mut self.events;
+        let mut result = Err(Error::ECMFailed);
+        let report = |index, sigma: Integer, (outcome, [stage1, stage2]): Timed| {
+            let event = events.emit(Event::Curve {
+                n,
+                param,
+                sigma: &sigma,
+                index,
+                stage1,
+                stage2,
+            });
+            result = match outcome {
+                CurveOutcome::Setup(g) => Ok((g, Method::EcmSetup)),
+                CurveOutcome::Stage1(g) => Ok((g, Method::EcmStage1)),
+                CurveOutcome::Stage2(g) => Ok((g, Method::EcmStage2)),
+                CurveOutcome::Failed => match event {
+                    Ok(()) => return false,
+                    Err(error) => Err(error),
+                },
+            };
+            true
+        };
+        let pool = self.pool.get_or_insert_with(|| Pool::new(self.threads));
+        let reported = pool.run(&shared, (*done + 1, curves), sigma, stop, report);
+        *done += reported;
+        match &mut self.sigma {
+            Some(sigma) => *sigma += reported,
+            None => {
+                for _ in 0..reported {
+                    random_sigma(n, param, self.rand);
+                }
+            }
+        }
+        if result == Err(Error::ECMFailed) {
+            // Stopped (by the interruption flag or the timeout) before the last curve.
+            self.events.check()?;
+        }
+        result
     }
 
     /// Extends P-1 (or P+1) for the level `index` (once per level): returns a proper factor of
@@ -901,8 +984,8 @@ mod tests {
             MAX_POLY_MEMORY,
             Base2Mode::Auto,
             &mut rand,
-            &mut handler,
-            Stop::NEVER,
+            (&mut handler, Stop::NEVER),
+            1,
         );
         let found = (0..3).find_map(|level| {
             let found = engine.pm_level(&n, level, &mut progress, None).unwrap();
