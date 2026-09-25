@@ -236,20 +236,21 @@ pub fn run_curve(
     k: &Integer,
     plan: &Stage2Plan,
 ) -> CurveOutcome {
-    run_curve_timed::<false>(n, param, sigma, k, plan, Base2Form::detect(n), Stop::NEVER).0
+    let base2 = Base2Form::detect(n);
+    run_curve_timed::<false>(n, param, sigma, k, plan, [base2; 2], Stop::NEVER).0
 }
 
 /// [`run_curve`], with the durations of the setup and stage 1, and of stage 2 if `TIMED` (zero
-/// otherwise), with the special reduction modulo `base2` (a multiple of `n`) if any. If `stop`
-/// is requested, the curve stops early: the outcome is then [`CurveOutcome::Failed`], unless a
-/// factor was found anyway.
+/// otherwise), with the special reduction modulo `base2[0]` in stage 1 and `base2[1]` in stage 2
+/// (multiples of `n`) if any. If `stop` is requested, the curve stops early: the outcome is then
+/// [`CurveOutcome::Failed`], unless a factor was found anyway.
 pub(crate) fn run_curve_timed<const TIMED: bool>(
     n: &Integer,
     param: Param,
     sigma: &Integer,
     k: &Integer,
     plan: &Stage2Plan,
-    base2: Option<Base2Form>,
+    base2: [Option<Base2Form>; 2],
     stop: Stop<'_>,
 ) -> (CurveOutcome, [Duration; 2]) {
     let start = TIMED.then(Instant::now);
@@ -273,7 +274,7 @@ pub(crate) fn run_curve_timed<const TIMED: bool>(
         Err(g) => return (CurveOutcome::Setup(g), [since(start), Duration::ZERO]),
     };
 
-    let q = stage1_until(&p, k, base2, stop);
+    let q = stage1_until(&p, k, base2[0], stop);
     let g = q.z.clone().gcd(n);
 
     // Stage 1 factor
@@ -284,7 +285,7 @@ pub(crate) fn run_curve_timed<const TIMED: bool>(
     // Stage 1 found all the factors at once (frequent when they are small compared to `b1`):
     // look for the point where it finds only some of them.
     if &g == n {
-        let outcome = stage1_backoff(n, &p, plan.b1(), base2, stop)
+        let outcome = stage1_backoff(n, &p, plan.b1(), base2[0], stop)
             .map_or(CurveOutcome::Failed, CurveOutcome::Stage1);
         return (outcome, [since(start), Duration::ZERO]);
     }
@@ -294,7 +295,7 @@ pub(crate) fn run_curve_timed<const TIMED: bool>(
         return (CurveOutcome::Failed, [stage1, Duration::ZERO]);
     }
     let start = TIMED.then(Instant::now);
-    let g = stage2_until(&q, plan, base2, stop);
+    let g = stage2_until(&q, plan, base2[1], stop);
     let stage2 = since(start);
 
     // Stage 2 Factor found
@@ -1433,7 +1434,9 @@ mod tests {
                         )
                         .0
                     };
-                    assert_eq!(run(Some(form)), run(None));
+                    let off = run([None; 2]);
+                    assert_eq!(run([Some(form); 2]), off);
+                    assert_eq!(run([Some(form), None]), off);
                 }
             }
         }
