@@ -1,7 +1,7 @@
 //! Curves in parallel (`Factorizer::threads`): same results and events as with one thread,
 //! interruptions, no deadlock.
 
-use ecm::{Error, Event, Factorization, Factorizer, Method, Param};
+use ecm::{Base2Mode, Error, Event, Factorization, Factorizer, Method, Param};
 use rug::{Integer, ops::Pow, rand::RandState};
 use std::{
     collections::HashMap,
@@ -144,6 +144,62 @@ fn same_results_and_events() {
         }
     }
     assert!(many_curves >= 12, "{many_curves}");
+}
+
+/// A prime `p` of at least `bits` bits with `p - 1` a product of distinct primes below 250.
+fn smooth_prime(bits: u32, seed: u32) -> Integer {
+    let mut rand = RandState::new();
+    rand.seed(&Integer::from(seed));
+    loop {
+        let mut small: Vec<u32> = (3..250u32)
+            .filter(|&q| (2..q).all(|d| q % d != 0))
+            .collect();
+        let mut p = Integer::from(2);
+        while p.significant_bits() < bits {
+            p *= small.swap_remove(rand.below(small.len() as u32) as usize);
+        }
+        p += 1u32;
+        if p.is_probably_prime(30) != rug::integer::IsPrime::No {
+            return p;
+        }
+    }
+}
+
+#[test]
+fn same_results_special_cases() {
+    let q = Integer::from(10u64.pow(19)).next_prime();
+    let (p1, p2) = (smooth_prime(40, 3), smooth_prime(45, 4));
+    let cases = [
+        // P-1 finds the product of two factors (composite, searched again), or all the factors
+        // at once (not run again).
+        (Factorizer::new(), Integer::from(&p1 * &p2) * &q),
+        (Factorizer::new(), Integer::from(&p1 * &p2)),
+        // P-1 finds a 28-digit factor at the second level (stage 2), with curves running.
+        (
+            Factorizer::new(),
+            Integer::from_str_radix("1326262092842391910564284053", 10).unwrap()
+                * (Integer::from(10).pow(60) + 7u32).next_prime(),
+        ),
+        // Special reduction modulo 2^256 + 1 (= p16 * p62).
+        (
+            Factorizer::new().base2(Base2Mode::Force(256)),
+            (Integer::from(1) << 256u32) + 1u32,
+        ),
+        // Several factors of each size, with cofactors resuming the levels.
+        (
+            Factorizer::new().seed(5),
+            numbers(6).into_iter().product::<Integer>(),
+        ),
+    ];
+    for (factorizer, n) in cases {
+        let (single, events) = record(factorizer.clone(), &n, |_| false);
+        assert_eq!(product(&single.clone().into_result().unwrap()), n);
+        for threads in THREADS {
+            let (result, parallel) = record(factorizer.clone().threads(threads), &n, |_| false);
+            assert_eq!(result, single, "{n} {threads}");
+            assert_eq!(parallel, events, "{n} threads {threads}");
+        }
+    }
 }
 
 #[test]

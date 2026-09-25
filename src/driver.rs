@@ -37,7 +37,7 @@ use crate::{
     },
     events::{Event, EventHandler, Method},
     factorizer::{Algorithm, Factorization},
-    parallel::{Curves, Pool, Timed},
+    parallel::Pool,
     pm1::Pm1,
     pp1::Pp1,
     rho::ecm_prob,
@@ -45,6 +45,10 @@ use crate::{
     stop::Stop,
 };
 use rug::{Integer, rand::RandState};
+
+mod pipeline;
+#[cfg(test)]
+pub(crate) use pipeline::PANIC_SIGMA;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -319,12 +323,6 @@ impl<H: EventHandler> Events<'_, H> {
         self.interrupted = true;
         Err(Error::Interrupted)
     }
-
-    /// The current time, if the events are wanted (they report durations).
-    #[inline]
-    fn now() -> Option<Instant> {
-        H::ENABLED.then(Instant::now)
-    }
 }
 
 /// Time elapsed since `start` (zero without events).
@@ -357,7 +355,7 @@ pub(crate) struct Engine<'a, 'r, H> {
     /// Threads running curves (see [`crate::Factorizer::threads`]), and their pool, started
     /// at the first level that runs curves in parallel.
     threads: usize,
-    pool: Option<Pool>,
+    pool: Option<Pool<pipeline::Output>>,
 }
 
 impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
@@ -575,9 +573,15 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             })?;
         }
         match self.mode {
+            Mode::Levels if self.parallel() && self.algorithm == Algorithm::Ecm => {
+                self.find_parallel(n, progress, base2, None)
+            }
             Mode::Levels => self.find_by_levels(n, progress, base2),
             Mode::Fixed { b1, b2, .. } if self.algorithm != Algorithm::Ecm => {
                 self.pm_fixed(n, b1, b2, base2)
+            }
+            Mode::Fixed { b1, b2, curves } if self.parallel() => {
+                self.find_parallel(n, progress, base2, Some((b1, b2, curves)))
             }
             Mode::Fixed { b1, b2, curves } => self.curves(n, (b1, b2), None, curves, &mut 0, base2),
         }
@@ -663,9 +667,6 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             done: *done,
         })?;
 
-        if self.threads > 1 && curves.is_none_or(|curves| curves - *done > 1) {
-            return self.curves_parallel(n, (k, plan, base2), curves, done);
-        }
         let param = self.param;
         while curves.is_none_or(|curves| *done < curves) {
             self.events.check()?;
@@ -703,79 +704,6 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             }
         }
         Err(Error::ECMFailed)
-    }
-
-    /// [`Engine::curves`] in parallel (see [`crate::parallel`]), with the stage 1 multiplier
-    /// `k`, the stage 2 `plan` and the forms of the special reduction of both stages: same
-    /// curves, same events (but their durations), same result.
-    fn curves_parallel(
-        &mut self,
-        n: &Integer,
-        (k, plan, base2): (Arc<Integer>, Arc<Stage2Plan>, [Option<Base2Form>; 2]),
-        curves: Option<usize>,
-        done: &mut usize,
-    ) -> Result<(Integer, Method), Error> {
-        let param = self.param;
-        let stop = self.events.stop;
-        let shared = Arc::new(Curves {
-            n: Arc::new(n.clone()),
-            param,
-            k,
-            plan,
-            base2,
-            timed: H::ENABLED,
-            deadline: stop.deadline(),
-        });
-        // The parameters of the curves are drawn ahead of the curves reported, from copies of
-        // the random state (or of the next parameter): the state then moves past the curves
-        // reported only, as if they ran one after the other.
-        let mut ahead_rand = self.sigma.is_none().then(|| self.rand.clone());
-        let mut ahead_sigma = self.sigma.clone();
-        let sigma = || match (&mut ahead_sigma, &mut ahead_rand) {
-            (Some(sigma), _) => {
-                let next = Integer::from(&*sigma + 1u32);
-                std::mem::replace(sigma, next)
-            }
-            (None, rand) => random_sigma(n, param, rand.as_mut().expect("a random state")),
-        };
-        let events = &mut self.events;
-        let mut result = Err(Error::ECMFailed);
-        let report = |index, sigma: Integer, (outcome, [stage1, stage2]): Timed| {
-            let event = events.emit(Event::Curve {
-                n,
-                param,
-                sigma: &sigma,
-                index,
-                stage1,
-                stage2,
-            });
-            result = match outcome {
-                CurveOutcome::Setup(g) => Ok((g, Method::EcmSetup)),
-                CurveOutcome::Stage1(g) => Ok((g, Method::EcmStage1)),
-                CurveOutcome::Stage2(g) => Ok((g, Method::EcmStage2)),
-                CurveOutcome::Failed => match event {
-                    Ok(()) => return false,
-                    Err(error) => Err(error),
-                },
-            };
-            true
-        };
-        let pool = self.pool.get_or_insert_with(|| Pool::new(self.threads));
-        let reported = pool.run(&shared, (*done + 1, curves), sigma, stop, report);
-        *done += reported;
-        match &mut self.sigma {
-            Some(sigma) => *sigma += reported,
-            None => {
-                for _ in 0..reported {
-                    random_sigma(n, param, self.rand);
-                }
-            }
-        }
-        if result == Err(Error::ECMFailed) {
-            // Stopped (by the interruption flag or the timeout) before the last curve.
-            self.events.check()?;
-        }
-        result
     }
 
     /// Extends P-1 (or P+1) for the level `index` (once per level): returns a proper factor of
@@ -840,36 +768,102 @@ fn run_plus_minus<H: EventHandler>(
     base2: Option<Base2Form>,
     events: &mut Events<'_, H>,
 ) -> Result<(Option<(Integer, Method)>, bool), Error> {
-    let [method1, method2] = pm.methods();
-    let start = Events::<H>::now();
-    let g = pm.stage1(n, b1, base2, events.stop);
-    let stage1 = since(start);
-    if g != 1 {
-        let all = &g == n;
-        let found = (!all).then_some((g, method1));
-        let event = events.emit(pm.event(n, b1, None, [stage1, Duration::ZERO]));
+    let run = PlusMinusRun::new(pm, n, (b1, plan), base2, H::ENABLED, events.stop);
+    run.report(pm, n, b1, events)
+}
+
+/// A run of P-1 (or P+1), to report (see [`run_plus_minus`]).
+pub(super) struct PlusMinusRun {
+    /// The gcd after stage 1.
+    stage1: Integer,
+    /// The gcd after stage 2 and the bound it covered, if it ran.
+    stage2: Option<(Integer, usize)>,
+    /// Durations of the stages (zero if not measured).
+    times: [Duration; 2],
+    /// Whether it stopped early, without finding a factor: not reported.
+    stopped: bool,
+}
+
+impl PlusMinusRun {
+    /// Runs `pm` (see [`run_plus_minus`]), measuring the durations if `timed`.
+    fn new(
+        pm: &mut PlusMinus,
+        n: &Integer,
+        (b1, plan): (usize, impl FnOnce() -> (Stage2Plan, Option<Base2Form>)),
+        base2: Option<Base2Form>,
+        timed: bool,
+        stop: Stop<'_>,
+    ) -> Self {
+        let start = timed.then(Instant::now);
+        let g = pm.stage1(n, b1, base2, stop);
+        let stage1 = since(start);
+        if g != 1 {
+            return Self {
+                stage1: g,
+                stage2: None,
+                times: [stage1, Duration::ZERO],
+                stopped: false,
+            };
+        }
+        if stop.requested() {
+            // Stage 1 may have stopped early.
+            return Self {
+                stage1: g,
+                stage2: None,
+                times: [stage1, Duration::ZERO],
+                stopped: true,
+            };
+        }
+        let start = timed.then(Instant::now);
+        let (plan, base2) = plan();
+        let g = pm.stage2(n, &plan, base2, stop);
+        let stage2 = since(start);
+        let stopped = (g == 1 || &g == n) && stop.requested();
+        Self {
+            stage1: Integer::from(1),
+            stage2: Some((g, plan.b2())),
+            times: [stage1, stage2],
+            stopped,
+        }
+    }
+
+    /// Whether it found a proper factor of `n`.
+    fn found(&self, n: &Integer) -> bool {
+        let proper = |g: &Integer| *g != 1 && g != n;
+        proper(&self.stage1) || self.stage2.as_ref().is_some_and(|(g, _)| proper(g))
+    }
+
+    /// Whether stage 1 found all the factors of `n` at once.
+    fn all(&self, n: &Integer) -> bool {
+        &self.stage1 == n
+    }
+
+    /// Reports the run of `pm` up to `b1` on `n`: returns the proper factor found, if any, and
+    /// whether stage 1 found all the factors of `n` at once, or [`Error::Interrupted`].
+    fn report<H: EventHandler>(
+        self,
+        pm: &PlusMinus,
+        n: &Integer,
+        b1: usize,
+        events: &mut Events<'_, H>,
+    ) -> Result<(Option<(Integer, Method)>, bool), Error> {
+        if self.stopped {
+            events.interrupted = true;
+            return Err(Error::Interrupted);
+        }
+        let [method1, method2] = pm.methods();
+        let all = self.all(n);
+        let (found, b2) = match self.stage2 {
+            None => ((!all).then_some((self.stage1, method1)), None),
+            Some((g, b2)) => ((g != 1 && &g != n).then_some((g, method2)), Some(b2)),
+        };
+        let event = events.emit(pm.event(n, b1, b2, self.times));
         // A factor found is kept, even if the handler interrupts.
         if found.is_none() {
             event?;
         }
-        return Ok((found, all));
+        Ok((found, all))
     }
-    // Stage 1 may have stopped early: it is not reported then.
-    events.check()?;
-    let start = Events::<H>::now();
-    let (plan, base2) = plan();
-    let g = pm.stage2(n, &plan, base2, events.stop);
-    let stage2 = since(start);
-    let found = (g != 1 && &g != n).then_some((g, method2));
-    if found.is_none() {
-        events.check()?;
-    }
-    let event = events.emit(pm.event(n, b1, Some(plan.b2()), [stage1, stage2]));
-    // A factor found is kept, even if the handler interrupts.
-    if found.is_none() {
-        event?;
-    }
-    Ok((found, false))
 }
 
 /// Index of the last level for `n`: its smallest factor has at most half its digits.
