@@ -104,7 +104,7 @@ pub struct Cli {
 
     /// Parameter of the first curve, "P:S" or "S", with P the parametrization (the next curves
     /// take S+1, S+2...). Reproduces a curve of GMP-ECM ("-sigma P:S") or of -v. S is at least
-    /// 6 with P = 0, in [2, 2^32) with P = 1, in [2, 2^64) with P = 2.
+    /// 6 with P = 0, in [2, 2^32) with P = 1, in [2, 2^64) with P = 2 or 12.
     #[arg(
         long,
         value_name = "[P:]S",
@@ -114,11 +114,16 @@ pub struct Cli {
     )]
     pub sigma: Option<(Option<u8>, Integer)>,
 
-    /// Parametrization of the curves, as GMP-ECM's -param: 0 (Suyama), 1, 2 [default: 2].
+    /// Parametrization of the curves, as GMP-ECM's -param: 0 (Suyama), 1, 2 [default: 2]; or
+    /// 12 (not in GMP-ECM): Edwards curves with torsion Z/12.
     #[arg(
         long,
         value_name = "P",
-        value_parser = clap::value_parser!(u8).range(0..=2),
+        value_parser = clap::builder::TypedValueParser::map(
+            clap::builder::PossibleValuesParser::new(["0", "1", "2", "12"]),
+            |p| p.parse::<u8>().unwrap()
+        ),
+        hide_possible_values = true,
         conflicts_with_all = ["pm1", "pp1"]
     )]
     pub param: Option<u8>,
@@ -235,8 +240,8 @@ fn parse_sigma(s: &str) -> Result<(Option<u8>, Integer), String> {
             let p = p
                 .parse::<u8>()
                 .ok()
-                .filter(|&p| p <= 2)
-                .ok_or_else(|| format!("unsupported parametrization '{p}' (0, 1 or 2)"))?;
+                .filter(|&p| p <= 2 || p == 12)
+                .ok_or_else(|| format!("unsupported parametrization '{p}' (0, 1, 2 or 12)"))?;
             (Some(p), sigma)
         }
         None => (None, s),

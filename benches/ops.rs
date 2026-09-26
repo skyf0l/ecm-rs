@@ -112,6 +112,8 @@ const B2_35: usize = GMP_ECM_BOUNDS[4].2;
 #[bench::bits_1024(stage1_input(1024, B1_20, Param::Batch2))]
 #[bench::square_bits_256(stage1_input(256, B1_20, Param::Square))]
 #[bench::suyama_bits_256(stage1_input(256, B1_20, Param::Suyama))]
+#[bench::edwards12_bits_256(stage1_input(256, B1_20, Param::Edwards12))]
+#[bench::edwards12_bits_1024(stage1_input(1024, B1_20, Param::Edwards12))]
 #[bench::base2_fermat_1024((curve_point(&fermat(), Param::Batch2), stage1_multiplier(B1_20)))]
 fn stage1_b1_11k(input: (Point, Integer)) -> Point {
     let (p, k) = black_box(&input);
@@ -141,23 +143,26 @@ fn stage2_poly(input: (Point, Stage2Plan)) -> Integer {
 /// Everything one curve of the `success_rate` example needs for `digits`-digit factors: its
 /// first number (a `digits + 40`-digit `n`), `sigma`, the stage 1 multiplier and the stage 2
 /// plan of the cost model.
-fn one_curve_input(digits: u32) -> (Integer, Integer, Integer, Stage2Plan) {
+fn one_curve_input(digits: u32, param: Param) -> (Integer, Param, Integer, Integer, Stage2Plan) {
     let n = success_rate_number(digits, 0);
     let (b1, b2) = bounds(digits);
     let plan = Stage2Plan::new(&n, b1, b2);
-    (n, Integer::from(SIGMA), stage1_multiplier(b1), plan)
+    (n, param, Integer::from(SIGMA), stage1_multiplier(b1), plan)
 }
 
 // One complete curve (curve setup, stage 1, stage 2) at the bounds of the `success_rate`
 // example (GMP-ECM's for `digits`-digit factors): the cost side of `cost per curve x expected
 // curves`. The curve finds no factor, so both stages run completely.
 #[library_benchmark]
-#[bench::p15(one_curve_input(15))]
-#[bench::p20(one_curve_input(20))]
-#[bench::p25(one_curve_input(25))]
-fn one_curve(input: (Integer, Integer, Integer, Stage2Plan)) -> CurveOutcome {
-    let (n, sigma, k, plan) = black_box(&input);
-    let outcome = run_curve(n, Param::default(), sigma, k, plan);
+#[bench::p15(one_curve_input(15, Param::default()))]
+#[bench::p20(one_curve_input(20, Param::default()))]
+#[bench::p25(one_curve_input(25, Param::default()))]
+#[bench::edwards12_p15(one_curve_input(15, Param::Edwards12))]
+#[bench::edwards12_p20(one_curve_input(20, Param::Edwards12))]
+#[bench::edwards12_p25(one_curve_input(25, Param::Edwards12))]
+fn one_curve(input: (Integer, Param, Integer, Integer, Stage2Plan)) -> CurveOutcome {
+    let (n, param, sigma, k, plan) = black_box(&input);
+    let outcome = run_curve(n, *param, sigma, k, plan);
     assert_eq!(
         outcome,
         CurveOutcome::Failed,
@@ -200,9 +205,11 @@ fn setup_pm1_stage1(input: (Integer, usize)) -> Integer {
 #[bench::suyama_bits_256((semiprime_bits(256, SEED), Param::Suyama))]
 #[bench::square_bits_256((semiprime_bits(256, SEED), Param::Square))]
 #[bench::batch2_bits_256((semiprime_bits(256, SEED), Param::Batch2))]
+#[bench::edwards12_bits_256((semiprime_bits(256, SEED), Param::Edwards12))]
 #[bench::suyama_bits_1024((semiprime_bits(1024, SEED), Param::Suyama))]
 #[bench::square_bits_1024((semiprime_bits(1024, SEED), Param::Square))]
 #[bench::batch2_bits_1024((semiprime_bits(1024, SEED), Param::Batch2))]
+#[bench::edwards12_bits_1024((semiprime_bits(1024, SEED), Param::Edwards12))]
 #[bench::suyama_bits_4096((semiprime_bits(4096, SEED), Param::Suyama))]
 #[bench::square_bits_4096((semiprime_bits(4096, SEED), Param::Square))]
 #[bench::batch2_bits_4096((semiprime_bits(4096, SEED), Param::Batch2))]

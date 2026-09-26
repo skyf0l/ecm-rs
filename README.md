@@ -122,6 +122,7 @@ run) print what was found so far. With `--json`, an invalid input gives `"n": nu
 | `ecm -printconfig`   | `ecm-rs --printconfig`                                   |
 | `ecm -q`, `ecm -v`   | `ecm-rs -q`, `ecm-rs -v`                                 |
 | (none)               | `ecm-rs --b1 B1`: curves until a factor is found         |
+| (none)               | `ecm-rs --param 12 ...`: Edwards curves with torsion `Z/12` (see below) |
 | (none)               | `ecm-rs N`: complete factorization, bounds by factor size |
 
 Exit status: bits as GMP-ECM's, for the last number (bits 1 and 16 for any number).
@@ -156,6 +157,16 @@ The implementation started as a translation of sympy's, and now uses the techniq
   `Factorizer::base2` (`Base2Mode`) and `--base2 K`/`--nobase2` force it or turn it off.
 - GMP-ECM's curves with parametrization 2 (`-param 2`): small starting point, same torsion as
   Suyama's curves.
+- Opt-in, `Param::Edwards12` (`--param 12`, not in GMP-ECM, so `--sigma 12:S` has no GMP-ECM
+  equivalent): Edwards curves `x^2 + y^2 = 1 + d*x^2*y^2` with torsion group `Z/12` and a
+  non-torsion point from `sigma*(-2, -4)` on `y^2 = x^3 - 12*x` (Bernstein, Birkner, Lange and
+  Peters, [EECM-MPFQ](https://eprint.iacr.org/2008/016), theorem 7.8). Stage 1 runs on the
+  Edwards curve in extended coordinates with signed sliding windows (3M + 4S per doubling, 7M
+  per addition of a precomputed point), then maps the point to the equivalent Montgomery curve
+  for stage 2. Stage 1 takes about 13% fewer instructions than with parametrization 2 (10 to 25%
+  less time), and the curves find a factor more often (7 to 9% fewer expected curves at 15 and
+  20 digits): about 15% less expected time to find a factor. The default stays parametrization
+  2, whose curves are GMP-ECM's (same `sigma`, same curve).
 - Stage 2: baby-step giant-step continuation with prime pairing for small `B2`, and the
   polynomial ("FFT") continuation (product trees, multipoint evaluation, Kronecker substitution)
   for large `B2`, chosen by a cost model.

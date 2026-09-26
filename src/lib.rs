@@ -10,6 +10,7 @@ mod cost;
 mod curve;
 mod driver;
 mod ecm;
+mod edwards;
 mod events;
 mod factorizer;
 mod lucas;

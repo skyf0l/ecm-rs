@@ -18,13 +18,15 @@ random. So these three measures are kept separate:
   4, 8, 11 and 16-limb numbers, dispatched as in the curve code (our Montgomery code up to 10
   limbs, GMP's `mpn` functions from 11): shows inlining regressions and the 10/11 limb switch.
 - `curve`: stage 1 (`B1 = 11000`) with the default curves (`-param 2`) at 128 to 1024 bits, and
-  with `-param 1` and Suyama's at 256 bits; stage 2 with the baby-step giant-step continuation
-  (128 bits / `B2 = 1.9M`, 256 bits / 12.7M) and the polynomial one (512 and 1024 bits / 12.7M);
-  `one_curve`: one complete curve at the bounds of `success_rate` for 15, 20 and 25-digit
-  factors, on its first number (a factor times a 40-digit prime).
+  with `-param 1` and Suyama's at 256 bits, and the Edwards curves (`--param 12`) at 256 and
+  1024 bits; stage 2 with the baby-step giant-step continuation (128 bits / `B2 = 1.9M`, 256
+  bits / 12.7M) and the polynomial one (512 and 1024 bits / 12.7M); `one_curve`: one complete
+  curve at the bounds of `success_rate` for 15, 20 and 25-digit factors, on its first number (a
+  factor times a 40-digit prime), with the default curves (`p15`, ..., the rows of the CI's
+  expected cost) and the Edwards curves (`edwards12_p15`, ...).
 - `setup`: stage 2 plan search at 256 bits (`B2 = 1.9M` and 1e9), stage 1 multiplier for
   `B1 = 1M`, P-1 stage 1, and the setup of one curve (starting point and parameter from `sigma`)
-  of each parametrization at 256, 1024 and 4096 bits.
+  of each parametrization at 256, 1024 and 4096 bits (the Edwards curves at 256 and 1024).
 
 ## Instruction counts
 

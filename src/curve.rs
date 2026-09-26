@@ -21,6 +21,9 @@ pub struct Point {
     pub a24: Integer,
     /// Modulus.
     pub n: Integer,
+    /// The same point on an equivalent Edwards curve, where stage 1 runs if it is known (the
+    /// starting points of [`crate::Param::Edwards12`]).
+    pub edwards: Option<Box<crate::edwards::Edwards>>,
 }
 
 impl Point {
@@ -32,6 +35,7 @@ impl Point {
             z: 1.into(),
             a24,
             n: n.clone(),
+            edwards: None,
         }
     }
 }

@@ -134,7 +134,8 @@ impl<H: EventHandler> Factorizer<H> {
         self
     }
 
-    /// Parametrization of the curves (default: [`Param::Batch2`]).
+    /// Parametrization of the curves (default: [`Param::Batch2`], GMP-ECM's default; the
+    /// curves of [`Param::Edwards12`] find a factor faster, but GMP-ECM has no equivalent).
     #[must_use]
     pub const fn param(mut self, param: Param) -> Self {
         self.param = param;
@@ -429,7 +430,7 @@ impl<H: EventHandler> Factorizer<H> {
             let valid = match self.param {
                 Param::Suyama => *sigma >= 6,
                 Param::Square => *sigma >= 2 && *sigma < 1u64 << 32,
-                Param::Batch2 => *sigma >= 2 && sigma.significant_bits() <= 64,
+                Param::Batch2 | Param::Edwards12 => *sigma >= 2 && sigma.significant_bits() <= 64,
             };
             if !valid {
                 return Err(Error::InvalidOption(

@@ -93,7 +93,7 @@ pub enum Event<'a> {
         /// Parametrization of the curve.
         param: Param,
         /// Parameter of the curve: GMP-ECM finds the same factor with `-param {param} -sigma
-        /// {sigma}` and the same bounds.
+        /// {sigma}` and the same bounds (but for [`Param::Edwards12`], not in GMP-ECM).
         sigma: &'a Integer,
         /// Index of the curve in its level, from 1 (see [`Event::Level`]).
         index: usize,

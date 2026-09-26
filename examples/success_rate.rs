@@ -19,7 +19,8 @@
 //!   20 digits, 5000 for 25 digits (each curve costs 5x more there, so fewer successes and a
 //!   wider interval): about 85 s on 4 cores, so about 2 minutes on a CI runner, run on both the
 //!   base and the PR.
-//! - `--param`: family of curves, as GMP-ECM's `-param`: `0` (Suyama), `1` or `2` (default:
+//! - `--param`: family of curves, as GMP-ECM's `-param`: `0` (Suyama), `1` or `2`, or `12`
+//!   (Edwards curves with torsion `Z/12`, not in GMP-ECM) (default:
 //!   the one of `ecm_one_factor`).
 //! - `--json`: writes results in the `customSmallerIsBetter` format of
 //!   github-action-benchmark.
@@ -88,6 +89,7 @@ fn parse_args() -> Args {
                     "0" => Param::Suyama,
                     "1" => Param::Square,
                     "2" => Param::Batch2,
+                    "12" => Param::Edwards12,
                     p => panic!("unknown param {p}"),
                 }
             }
