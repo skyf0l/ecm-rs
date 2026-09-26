@@ -182,7 +182,7 @@ fn usage_errors() {
         &["--base2", "0", "15"],
         &["--base2", "x", "15"],
         &["--base2", "5", "--nobase2", "15"],
-        &["--threads", "0", "15"],
+        &["--threads", "-1", "15"],
         &["-t", "x", "15"],
     ] {
         let (code, out, err) = run(args);
@@ -380,7 +380,8 @@ fn threads() {
         let (code, out, err) = run(&args("1"));
         assert_eq!(code, 14);
         assert!(sigmas(&err).len() > 5, "{err}");
-        for threads in ["2", "5"] {
+        // 0: the available parallelism.
+        for threads in ["2", "5", "0"] {
             let (code2, out2, err2) = run(&args(threads));
             assert_eq!((code2, &out2), (code, &out));
             assert_eq!(without_times(&err2), without_times(&err));
