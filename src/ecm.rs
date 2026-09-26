@@ -1129,9 +1129,10 @@ mod tests {
     fn edwards12_matches_ladder() {
         // k*P on the Edwards curve, mapped to the Montgomery curve, is k*P computed by the
         // Montgomery ladder there: every window width (from the size of k), both signs of the
-        // digits, and every limb count of `Mont`, `Plain` and the special reduction.
+        // digits, and every limb count of `Mont`, `MontLarge` (by one and two limbs, and
+        // subquadratic) and the special reduction.
         let mut rand = RandState::new();
-        let mut moduli: Vec<Integer> = [40, 64, 128, 256, 512, 1024, 1100]
+        let mut moduli: Vec<Integer> = [40, 64, 128, 256, 512, 1024, 1100, 1300, 3400]
             .into_iter()
             .map(|bits| {
                 let mut n = Integer::from(Integer::random_bits(bits, &mut rand));
@@ -1237,9 +1238,9 @@ mod tests {
     #[test]
     fn stage1_matches_reference() {
         let mut rand = RandState::new();
-        // One limb, every limb count of `Mont`, and the `Plain` fallback.
+        // One limb, every limb count of `Mont`, and `MontLarge` (by one and two limbs).
         for bits in [
-            40, 64, 100, 128, 192, 256, 320, 384, 448, 512, 700, 1024, 1025, 1500,
+            40, 64, 100, 128, 192, 256, 320, 384, 448, 512, 700, 1024, 1025, 1300, 1500,
         ] {
             let mut n = Integer::from(Integer::random_bits(bits, &mut rand));
             n.set_bit(bits - 1, true);
@@ -1384,7 +1385,7 @@ mod tests {
 
     #[test]
     fn stage2_checks_all_primes_limbs() {
-        // A small factor times a large prime: every limb count of `Mont`, and `Plain`.
+        // A small factor times a large prime: every limb count of `Mont`, and `MontLarge`.
         let mut rand = RandState::new();
         for bits in [64, 100, 192, 320, 512, 700, 1000, 1100] {
             let mut q = Integer::from(Integer::random_bits(bits, &mut rand));

@@ -860,7 +860,9 @@ mod tests {
     #[test]
     fn products() {
         let mut rand = RandState::new();
-        for bits in [3, 20, 64, 65, 128, 200, 256, 512, 1000, 1024, 1100] {
+        for bits in [
+            3, 20, 64, 65, 128, 200, 256, 512, 1000, 1024, 1100, 1300, 3400,
+        ] {
             for _ in 0..2 {
                 let mut n = Integer::from(Integer::random_bits(bits, &mut rand));
                 n.set_bit(0, true);
@@ -1009,7 +1011,7 @@ mod tests {
     #[test]
     fn random_products() {
         // Random lengths around the schoolbook threshold and largest coefficients, for every
-        // limb count and Plain (even or too large n).
+        // limb count, MontLarge (odd n above 16 limbs) and Plain (even n).
         let mut rand = RandState::new();
         for limbs in 1..=17u32 {
             for n in [
@@ -1181,11 +1183,13 @@ mod tests {
             let n = (Integer::from(1) << (64 * limbs)) - 1u32;
             with_arith!(&n, |a| check_tight(&a, &mut rand));
         }
-        // Odd sizes, and Plain.
+        // Odd sizes, MontLarge (by one, two limbs, subquadratic), and Plain.
         for n in [
             (Integer::from(1) << 100) - 3u32,
             (Integer::from(1) << 700) - 1u32,
             (Integer::from(1) << 1100) - 1u32,
+            (Integer::from(1) << 1300) - 1u32,
+            (Integer::from(1) << 3400) - 1u32,
             (Integer::from(1) << 256) - 2u32,
         ] {
             with_arith!(&n, |a| check_tight(&a, &mut rand));
@@ -1371,7 +1375,7 @@ mod tests {
     #[test]
     fn tree_inverse_mul_mod_evaluate() {
         let mut rand = RandState::new();
-        for bits in [20, 64, 100, 256, 1024, 1100] {
+        for bits in [20, 64, 100, 256, 1024, 1100, 3400] {
             let mut n = Integer::from(Integer::random_bits(bits, &mut rand));
             n.set_bit(0, true);
             n.set_bit(bits - 1, true);
@@ -1383,7 +1387,7 @@ mod tests {
     fn redc_wide_bounds() {
         // Largest input t < n*R': (2^(64(N+1)) - 1) * (n - 1) / 2^0 ... check against integers.
         let mut rand = RandState::new();
-        for bits in [64, 128, 192, 1024] {
+        for bits in [64, 128, 192, 1024, 1088, 1300, 3400] {
             for n in [
                 (Integer::from(1) << bits) - 1u32,
                 (Integer::from(1) << (bits - 1)) + 1u32,
