@@ -205,6 +205,11 @@ impl<H: EventHandler> Factorizer<H> {
     /// [`Factorizer::threads`]): a smaller limit makes it slower. The baby-step giant-step
     /// stage 2, chosen when no polynomial one fits, uses at most about 32 MiB plus its baby
     /// steps.
+    ///
+    /// With several threads, each curve (and P-1) running its stage 2 may use this memory:
+    /// a limit shared by the threads would make the stage 2 (and its bound `B2`) depend on
+    /// the number of threads. The default bounds use much less at 1024 bits (about 40 MiB per
+    /// curve for `B1` = 1M); it matters for large `B2` given with [`Factorizer::b2`].
     #[must_use]
     pub const fn max_memory(mut self, bytes: usize) -> Self {
         self.max_memory = bytes;
@@ -252,7 +257,8 @@ impl<H: EventHandler> Factorizer<H> {
     /// Number of threads running curves (default: 1; 0 for [`std::thread::available_parallelism`]).
     ///
     /// With more than one, the curves run in parallel on worker threads started by each
-    /// factorization (at its second level), which ends them before returning: the curves of a
+    /// factorization (at its second level, or at once with fixed bounds), which ends them
+    /// before returning: the curves of a
     /// level, with P-1 and the curves of the next level alongside them, in the order of the
     /// search on one thread. Trial division, the first level, and P-1 or P+1 alone
     /// ([`Algorithm::Pm1`], [`Algorithm::Pp1`]) run on the calling thread, as the callback of
