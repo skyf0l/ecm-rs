@@ -153,6 +153,12 @@ pub enum Param {
     /// curves, with a stage 1 almost as cheap as with `Square`.
     #[default]
     Batch2,
+    /// Edwards curves with torsion group `Z/12` (`sigma` in `[2, 2^64)`; not in GMP-ECM,
+    /// `12` here): Montgomery's family in the Edwards form of Bernstein, Birkner, Lange and
+    /// Peters (EECM-MPFQ), for the point `sigma*(-2, -4)` of `y^2 = x^3 - 12*x`. Stage 1 runs
+    /// on the Edwards curve with signed sliding windows, stage 2 on the equivalent Montgomery
+    /// curve.
+    Edwards12,
 }
 
 impl From<Param> for u8 {
@@ -161,6 +167,7 @@ impl From<Param> for u8 {
             Param::Suyama => 0,
             Param::Square => 1,
             Param::Batch2 => 2,
+            Param::Edwards12 => 12,
         }
     }
 }
@@ -172,12 +179,13 @@ impl TryFrom<u8> for Param {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidOption`] if it is not supported (only 0, 1 and 2 are).
+    /// [`Error::InvalidOption`] if it is not supported (only 0, 1, 2 and 12 are).
     fn try_from(param: u8) -> Result<Self, Error> {
         match param {
             0 => Ok(Self::Suyama),
             1 => Ok(Self::Square),
             2 => Ok(Self::Batch2),
+            12 => Ok(Self::Edwards12),
             _ => Err(Error::InvalidOption("unsupported parametrization")),
         }
     }
@@ -195,7 +203,7 @@ pub fn random_sigma(n: &Integer, param: Param, rgen: &mut RandState<'_>) -> Inte
     match param {
         Param::Suyama => Integer::from(n - 6).random_below(rgen) + 6,
         Param::Square => Integer::from((1u64 << 32) - 2).random_below(rgen) + 2,
-        Param::Batch2 => Integer::from(u64::MAX - 1).random_below(rgen) + 2,
+        Param::Batch2 | Param::Edwards12 => Integer::from(u64::MAX - 1).random_below(rgen) + 2,
     }
 }
 
@@ -214,6 +222,7 @@ pub fn curve(n: &Integer, param: Param, sigma: &Integer) -> Result<Point, Intege
         Param::Suyama => suyama_curve(n, sigma),
         Param::Square => square_curve(n, sigma),
         Param::Batch2 => batch2_curve(n, sigma),
+        Param::Edwards12 => edwards12_curve(n, sigma),
     }
 }
 
@@ -266,7 +275,7 @@ pub(crate) fn run_curve_timed<const TIMED: bool>(
         // (5, 7, 13, 19, 37, ...): computing it hits the point at infinity modulo them for
         // almost every sigma. When all the factors of n are such primes, the setup finds them
         // all at once whatever sigma: Suyama's curves do not have this problem.
-        Err(g) if &g == n && param == Param::Batch2 && *n > 6 => {
+        Err(g) if &g == n && matches!(param, Param::Batch2 | Param::Edwards12) && *n > 6 => {
             let sigma = sigma % Integer::from(n - 6u32) + 6u32;
             let (outcome, [_, stage2]) =
                 run_curve_timed::<TIMED>(n, Param::Suyama, &sigma, k, plan, base2, stop);
@@ -463,6 +472,7 @@ pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
         z: v_3,
         a24,
         n: n.clone(),
+        edwards: None,
     })
 }
 
@@ -582,6 +592,29 @@ fn batch2_a24<A: Arith>(a: &A, sigma: &Integer) -> Result<Integer, Integer> {
     Ok(a.to_integer(&t1))
 }
 
+/// Builds the starting point of an Edwards curve with torsion group `Z/12` ([`Param::Edwards12`]).
+///
+/// The point is given on the equivalent Montgomery curve too: `(1 + y : 1 - y)`, with
+/// `a24 = 1/(1 - d)`.
+///
+/// # Errors
+///
+/// `Err(g)` with a factor `g` of `n` found by the inversion (`g` may be `n`), and `Err(n)` if
+/// `sigma < 2`.
+pub fn edwards12_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
+    if *sigma < 2 {
+        return Err(n.clone());
+    }
+    let (e, a24) = with_arith!(n, |arith| crate::edwards::curve(&arith, sigma))?;
+    Ok(Point {
+        x: crate::arith::reduce(&Integer::from(&e.y + 1u32), n),
+        z: crate::arith::reduce(&Integer::from(1u32 - &e.y), n),
+        a24,
+        n: n.clone(),
+        edwards: Some(Box::new(e)),
+    })
+}
+
 /// `sigma*(-3 : 3 : 1)` in Jacobian coordinates, on the curve `y^2 = x^3 + 36`.
 fn batch2_multiple<A: Arith>(a: &A, sigma: &Integer) -> (A::Elem, A::Elem, A::Elem) {
     let (px, py) = (a.residue(&Integer::from(-3)), a.residue(&Integer::from(3)));
@@ -669,6 +702,16 @@ fn stage1_until(p: &Point, k: &Integer, base2: Option<Base2Form>, stop: Stop<'_>
 
 fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer, stop: Stop<'_>) -> Point {
     let n: &Integer = &p.n;
+    if let Some(e) = &p.edwards {
+        let [x, z] = crate::edwards::stage1(&arith, e, k, stop);
+        return Point {
+            x: arith.to_integer(&x),
+            z: arith.to_integer(&z),
+            a24: p.a24.clone(),
+            n: n.clone(),
+            edwards: None,
+        };
+    }
     // Normalizing P to z = 1 saves a multiplication per ladder step. If z is not invertible, P
     // is the point at infinity modulo a factor of n, and so is k*P: P has the same gcd.
     let x = if p.z == 1 {
@@ -687,6 +730,7 @@ fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer, stop: Stop<'_>) -> Po
         z: curve.arith.to_integer(&q.z),
         a24: p.a24.clone(),
         n: n.clone(),
+        edwards: None,
     }
 }
 
@@ -973,6 +1017,7 @@ mod tests {
             z: v.pow_mod(&three, n).unwrap(),
             a24,
             n: n.clone(),
+            edwards: None,
         })
     }
 
@@ -1072,6 +1117,80 @@ mod tests {
         }
     }
 
+    /// The Montgomery form of `p`, without its Edwards form: stage 1 runs the ladder.
+    fn montgomery(p: &Point) -> Point {
+        Point {
+            edwards: None,
+            ..p.clone()
+        }
+    }
+
+    #[test]
+    fn edwards12_matches_ladder() {
+        // k*P on the Edwards curve, mapped to the Montgomery curve, is k*P computed by the
+        // Montgomery ladder there: every window width (from the size of k), both signs of the
+        // digits, and every limb count of `Mont`, `Plain` and the special reduction.
+        let mut rand = RandState::new();
+        let mut moduli: Vec<Integer> = [40, 64, 128, 256, 512, 1024, 1100]
+            .into_iter()
+            .map(|bits| {
+                let mut n = Integer::from(Integer::random_bits(bits, &mut rand));
+                n.set_bit(bits - 1, true);
+                n.next_prime()
+            })
+            .collect();
+        moduli.push(crate::base2::cofactor_of(-607).0);
+        for n in &moduli {
+            for sigma in [2u64, 3, 17, 1_234_567, u64::MAX] {
+                let p = curve(n, Param::Edwards12, &Integer::from(sigma)).unwrap();
+                let e = p.edwards.as_ref().unwrap();
+                // The starting point is on x^2 + y^2 = 1 + d*x^2*y^2.
+                let (x2, y2) = (Integer::from(&e.x * &e.x), Integer::from(&e.y * &e.y));
+                let rhs = Integer::from(&x2 * &y2) * &e.d + 1u32;
+                assert!((x2 + y2 - rhs).is_divisible(n));
+                let mut ks = vec![Integer::from(1), Integer::from(2), Integer::from(3)];
+                ks.push(stage1_multiplier(300));
+                for bits in [10, 100, 1000, 5000, 20_000] {
+                    ks.push(Integer::from(Integer::random_bits(bits, &mut rand)) + 1u32);
+                }
+                for k in &ks {
+                    let q = stage1(&p, k);
+                    assert!(q.edwards.is_none());
+                    assert!(
+                        same_point(&q, &stage1(&montgomery(&p), k)),
+                        "{n} {sigma} {k}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn edwards12_torsion() {
+        // The group order modulo p (that of the Edwards curve, x^2 + y^2 = 1 + d*x^2*y^2, so of
+        // the Montgomery curve (4/(1 - d))*v^2 = u^3 + A*u^2 + u) is a multiple of 12.
+        let mut curves = 0;
+        for p in primal::Primes::all().skip_while(|&p| p < 1000).take(60) {
+            let n = Integer::from(p);
+            for sigma in 2u64..20 {
+                let Ok(point) = curve(&n, Param::Edwards12, &Integer::from(sigma)) else {
+                    continue;
+                };
+                let e = point.edwards.unwrap();
+                let a = Integer::from(&point.a24 * 4u32) - 2u32;
+                let b = Integer::from(1u32 - &e.d);
+                let mut order = Integer::from(p + 1);
+                for u in 0..p {
+                    let g = Integer::from(u) * u * u + Integer::from(&a * u) * u + u;
+                    order += (g * &b).legendre(&n);
+                }
+                assert!(order.is_divisible_u(12), "{p} {sigma}: {order}");
+                curves += 1;
+            }
+        }
+        assert!(curves > 900, "{curves}");
+    }
+
     #[test]
     fn multipliers() {
         let naive = |b1: usize| {
@@ -1129,6 +1248,7 @@ mod tests {
             check_stage1(&n, Param::Square, 1_234_567);
             check_stage1(&n, Param::Suyama, 1_234_567);
             check_stage1(&n, Param::Batch2, 1_234_567);
+            check_stage1(&n, Param::Edwards12, 1_234_567);
         }
     }
 
@@ -1227,7 +1347,12 @@ mod tests {
     #[test]
     fn stage2_checks_all_primes() {
         let n = semiprime();
-        for (param, first) in [(Param::Suyama, 6), (Param::Square, 2), (Param::Batch2, 2)] {
+        for (param, first) in [
+            (Param::Suyama, 6),
+            (Param::Square, 2),
+            (Param::Batch2, 2),
+            (Param::Edwards12, 2),
+        ] {
             assert!(check_stage2_primes(&n, param, first..first + 300, 100, 10_000) > 100);
         }
     }
@@ -1250,7 +1375,7 @@ mod tests {
             (1000, 999),
             (2000, 147_397),
         ] {
-            for param in [Param::Square, Param::Batch2] {
+            for param in [Param::Square, Param::Batch2, Param::Edwards12] {
                 checked += check_stage2_primes(&n, param, 2..80, b1, b2);
             }
         }
@@ -1266,7 +1391,8 @@ mod tests {
             q.set_bit(bits - 1, true);
             let n = Integer::from(4_009_823) * q.next_prime();
             let checked = check_stage2_primes(&n, Param::Batch2, 2..60, 100, 5000)
-                + check_stage2_primes(&n, Param::Square, 2..30, 30, 3000);
+                + check_stage2_primes(&n, Param::Square, 2..30, 30, 3000)
+                + check_stage2_primes(&n, Param::Edwards12, 2..30, 100, 5000);
             assert!(checked > 5, "{bits} bits: {checked}");
         }
     }
@@ -1285,7 +1411,12 @@ mod tests {
             if n.is_probably_prime(PRIMALITY_REPS) != IsPrime::No {
                 continue;
             }
-            for (param, first) in [(Param::Suyama, 6), (Param::Square, 2), (Param::Batch2, 2)] {
+            for (param, first) in [
+                (Param::Suyama, 6),
+                (Param::Square, 2),
+                (Param::Batch2, 2),
+                (Param::Edwards12, 2),
+            ] {
                 for (sigma, plan) in
                     (first..first + 20).flat_map(|s| plans.iter().map(move |p| (s, p)))
                 {
@@ -1594,7 +1725,7 @@ mod tests {
             ];
             for sigma in 2..5 {
                 let sigma = Integer::from(sigma);
-                for param in [Param::Batch2, Param::Suyama] {
+                for param in [Param::Batch2, Param::Suyama, Param::Edwards12] {
                     let Ok(p) = curve(&n, param, &sigma) else {
                         continue;
                     };

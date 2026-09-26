@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- `Param::Edwards12` (`--param 12`, `--sigma 12:S`; not in GMP-ECM): Edwards curves with
+  torsion group `Z/12` (EECM-MPFQ's version of Montgomery's family), stage 1 on the Edwards
+  curve with signed sliding windows, stage 2 on the equivalent Montgomery curve. About 15% less
+  expected time to find a 15 to 25-digit factor than the default curves (7 to 9% fewer curves,
+  13% fewer instructions in stage 1). Opt-in: the default stays GMP-ECM's parametrization 2.
+
 ### Performance
 
 - Curve setup: one modular inversion instead of four with parametrization 2 (same curves,
