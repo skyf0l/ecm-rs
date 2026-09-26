@@ -1,19 +1,28 @@
 //! Modular arithmetic for the curve computations.
 //!
-//! Residues modulo an odd `n` of at most [`MAX_LIMBS`] 64-bit limbs are kept in Montgomery
-//! representation (`x` is stored as `x*R mod n` with `R = 2^(64*limbs)`), in fixed-size limb
-//! arrays: a modular multiplication is one interleaved multiply-and-reduce (CIOS) pass (from
-//! [`GMP_LIMBS`] limbs, GMP's product and Montgomery reduction), with no division and no
-//! allocation. Larger (or even) moduli fall back to [`Plain`] big integer arithmetic.
+//! Residues modulo an odd `n` are kept in Montgomery representation (`x` is stored as `x*R mod
+//! n` with `R = 2^(64*limbs)`), with no division and no allocation in the operations:
+//!
+//! - up to [`MAX_LIMBS`] 64-bit limbs, in fixed-size limb arrays ([`Mont`]): a modular
+//!   multiplication is one interleaved multiply-and-reduce (CIOS) pass, or from [`GMP_LIMBS`]
+//!   limbs GMP's product and Montgomery reduction;
+//! - above, in vectors of runtime length ([`MontLarge`]): GMP's product, then GMP's Montgomery
+//!   reduction, one limb at a time, two from [`REDC_2_LIMBS`] limbs, and subquadratic from
+//!   [`REDC_N_LIMBS`] limbs (GMP-ECM's `MOD_MODMULN`, and GMP's reduction for large moduli).
+//!
+//! Even moduli (and the large ones if GMP's limbs are not 64-bit, see [`mpn::ENABLED`]) fall
+//! back to [`Plain`] big integer arithmetic, with a division per product.
 //!
 //! The representation never leaks: values go in with [`Arith::residue`] and out with
 //! [`Arith::to_integer`], and [`Arith::gcd`] gives `gcd(x, n)` directly (`R` is coprime to an
 //! odd `n`).
 
+use std::cell::RefCell;
+
 use rug::{Assign, Integer, integer::Order};
 
-use crate::config::GMP_LIMBS;
 pub use crate::config::MAX_LIMBS;
+use crate::config::{GMP_LIMBS, REDC_2_LIMBS, REDC_N_LIMBS};
 
 /// Arithmetic modulo a fixed `n`, on residues of type [`Arith::Elem`].
 ///
@@ -175,8 +184,12 @@ macro_rules! with_arith {
                 let $a = $crate::arith::Mont::<16>::new(n);
                 $body
             }
-            _ => {
+            0 => {
                 let $a = $crate::arith::Plain::new(n);
+                $body
+            }
+            _ => {
+                let $a = $crate::arith::MontLarge::new(n);
                 $body
             }
         }
@@ -184,10 +197,12 @@ macro_rules! with_arith {
 }
 pub(crate) use with_arith;
 
-/// Number of limbs of the [`Mont`] implementation for `n`, or `0` if `n` needs [`Plain`].
+/// Number of limbs of the Montgomery implementation for `n` ([`Mont`] up to [`MAX_LIMBS`],
+/// [`MontLarge`] above), or `0` if `n` needs [`Plain`] (even, or large without
+/// [`mpn::ENABLED`]).
 pub fn mont_limbs(n: &Integer) -> usize {
     let limbs = n.significant_bits().div_ceil(64) as usize;
-    if n.is_odd() && *n > 1 && limbs <= MAX_LIMBS {
+    if n.is_odd() && *n > 1 && (limbs <= MAX_LIMBS || mpn::ENABLED) {
         limbs
     } else {
         0
@@ -578,6 +593,40 @@ pub(crate) mod mpn {
             invm: gmp::limb_t,
         ) -> gmp::limb_t;
 
+        /// `mpn_redc_2(rp, up, mp, n, mip)`: as `mpn_redc_1`, two limbs at a time, with the two
+        /// limbs `mip = -1/mp mod 2^128`. Returns the carry out of the `n` limbs of `rp`.
+        ///
+        /// Internal to GMP like `mpn_redc_1` (`__GMP_DECLSPEC` in `gmp-impl.h`), with this
+        /// signature since GMP 5.1 (as `mpn_redc_1`); assembly on x86_64, C elsewhere.
+        #[link_name = "__gmpn_redc_2"]
+        fn mpn_redc_2(
+            rp: *mut gmp::limb_t,
+            up: *mut gmp::limb_t,
+            mp: *const gmp::limb_t,
+            n: gmp::size_t,
+            mip: *const gmp::limb_t,
+        ) -> gmp::limb_t;
+
+        /// `mpn_redc_n(rp, up, mp, n, ip)`: subquadratic Montgomery reduction of the `2n` limbs
+        /// `up` modulo the `n > 8` limbs `mp`, with the `n` limbs `ip = 1/mp mod B^n` (`B =
+        /// 2^64`; the opposite sign of `mpn_redc_1`'s inverse): `q = up*ip mod B^n` by a low
+        /// half product (`mpn_mullo_n`), then the high half of `q*mp` by a wrap-around product
+        /// (`mpn_mulmod_bnm1`, whose wrapped part is known from the low half of `up`), and `rp
+        /// = up/B^n - (q*mp)/B^n`, plus `mp` if that is negative: `rp` is `(up - q*mp)/B^n`
+        /// modulo `mp`, below `mp` if `up < mp*B^n`. `up` is left unchanged.
+        ///
+        /// Internal to GMP like `mpn_redc_1` (`__GMP_DECLSPEC` in `gmp-impl.h`), with this
+        /// signature since GMP 5.0; generic C code (the one of `mpz_powm` for large moduli), so
+        /// in every build. Its temporary space is on the stack (`TMP_ALLOC`) at these sizes.
+        #[link_name = "__gmpn_redc_n"]
+        fn mpn_redc_n(
+            rp: *mut gmp::limb_t,
+            up: *mut gmp::limb_t,
+            mp: *const gmp::limb_t,
+            n: gmp::size_t,
+            ip: *const gmp::limb_t,
+        );
+
         /// `mpn_mulmod_bnm1(rp, rn, ap, an, bp, bn, tp)`: `{ap, an} * {bp, bn} mod (B^rn - 1)`
         /// (`B = 2^64`) to the `min(rn, an + bn)` limbs `rp`, for `0 < bn <= an <= rn` and
         /// `an + bn > rn/2`, with the scratch space `tp` of `2*rn + 4` limbs. A non-zero
@@ -709,11 +758,355 @@ pub(crate) mod mpn {
             ) as u64
         }
     }
+
+    /// [`redc`] two limbs at a time, with `ninv = -1/m mod 2^128` (least significant limb
+    /// first).
+    #[inline(always)]
+    pub fn redc_2(r: &mut [u64], t: &mut [u64], m: &[u64], ninv: &[u64; 2]) -> u64 {
+        let n = m.len();
+        assert!(ENABLED && r.len() == n && t.len() == 2 * n && n >= 2 && m[0] & 1 == 1);
+        // SAFETY: as in `redc`, and `ninv` has the two limbs mpn_redc_2 reads.
+        unsafe {
+            mpn_redc_2(
+                r.as_mut_ptr().cast(),
+                t.as_mut_ptr().cast(),
+                m.as_ptr().cast(),
+                n as gmp::size_t,
+                ninv.as_ptr().cast(),
+            ) as u64
+        }
+    }
+
+    /// `r = (t - q*m)/2^(64*n)` modulo `m` in `[0, 2^(64*n))`, for the `q < 2^(64*n)` that makes
+    /// it exact: subquadratic Montgomery reduction of `t` (`2n` limbs, `n > 8`) modulo the odd
+    /// `m` (`n` limbs), with `inv = 1/m mod 2^(64*n)` (`n` limbs). Below `m` if `t < m*2^(64*n)`,
+    /// at most `t/2^(64*n)` in any case.
+    #[inline(always)]
+    pub fn redc_n(r: &mut [u64], t: &mut [u64], m: &[u64], inv: &[u64]) {
+        let n = m.len();
+        assert!(
+            ENABLED && r.len() == n && t.len() == 2 * n && inv.len() == n && n > 8 && m[0] & 1 == 1
+        );
+        // SAFETY: the limbs are 64 bits (ENABLED), the buffers have the sizes mpn_redc_n
+        // expects (checked above; it asserts n > 8), and `r` and `t` are distinct from each
+        // other and from `m` and `inv` (borrowed mutably).
+        unsafe {
+            mpn_redc_n(
+                r.as_mut_ptr().cast(),
+                t.as_mut_ptr().cast(),
+                m.as_ptr().cast(),
+                n as gmp::size_t,
+                inv.as_ptr().cast(),
+            );
+        }
+    }
+
+    /// `r = a + b` (all of the same length), returns the carry out.
+    #[inline(always)]
+    pub fn add(r: &mut [u64], a: &[u64], b: &[u64]) -> u64 {
+        let n = r.len();
+        assert!(ENABLED && a.len() == n && b.len() == n && n > 0);
+        // SAFETY: the limbs are 64 bits (ENABLED), the three operands have n > 0 limbs, and
+        // `r` cannot overlap the operands (it is borrowed mutably).
+        unsafe {
+            gmp::mpn_add_n(
+                r.as_mut_ptr().cast(),
+                a.as_ptr().cast(),
+                b.as_ptr().cast(),
+                n as gmp::size_t,
+            ) as u64
+        }
+    }
+
+    /// `r = a - b` (all of the same length), returns the borrow out.
+    #[inline(always)]
+    pub fn sub(r: &mut [u64], a: &[u64], b: &[u64]) -> u64 {
+        let n = r.len();
+        assert!(ENABLED && a.len() == n && b.len() == n && n > 0);
+        // SAFETY: as in `add`.
+        unsafe {
+            gmp::mpn_sub_n(
+                r.as_mut_ptr().cast(),
+                a.as_ptr().cast(),
+                b.as_ptr().cast(),
+                n as gmp::size_t,
+            ) as u64
+        }
+    }
+
+    /// `r += b`, for `r.len() >= b.len() >= 1`: returns the carry out of `r`.
+    #[inline(always)]
+    pub fn add_assign(r: &mut [u64], b: &[u64]) -> u64 {
+        assert!(ENABLED && r.len() >= b.len() && !b.is_empty());
+        let rp = r.as_mut_ptr().cast();
+        // SAFETY: the limbs are 64 bits (ENABLED), the sizes are those mpn_add requires
+        // (checked above), the destination is the first source (in place, which GMP allows),
+        // and `b` cannot overlap `r` (borrowed mutably).
+        unsafe {
+            gmp::mpn_add(
+                rp,
+                rp,
+                r.len() as gmp::size_t,
+                b.as_ptr().cast(),
+                b.len() as gmp::size_t,
+            ) as u64
+        }
+    }
+
+    /// `r -= b` (of the same length), returns the borrow out.
+    #[inline(always)]
+    pub fn sub_assign(r: &mut [u64], b: &[u64]) -> u64 {
+        let n = r.len();
+        assert!(ENABLED && b.len() == n && n > 0);
+        let rp = r.as_mut_ptr().cast();
+        // SAFETY: as in `add_assign`.
+        unsafe { gmp::mpn_sub_n(rp, rp, b.as_ptr().cast(), n as gmp::size_t) as u64 }
+    }
+
+    /// Whether `a >= b` (of the same length).
+    #[inline(always)]
+    pub fn ge(a: &[u64], b: &[u64]) -> bool {
+        assert!(ENABLED && a.len() == b.len() && !a.is_empty());
+        // SAFETY: the limbs are 64 bits (ENABLED), both operands have the n > 0 limbs read.
+        unsafe { gmp::mpn_cmp(a.as_ptr().cast(), b.as_ptr().cast(), a.len() as gmp::size_t) >= 0 }
+    }
+
+    /// `r = a*c` (of the same length), returns the high limb.
+    #[inline(always)]
+    pub fn mul_1(r: &mut [u64], a: &[u64], c: u64) -> u64 {
+        let n = r.len();
+        assert!(ENABLED && a.len() == n && n > 0);
+        // SAFETY: as in `add`.
+        unsafe {
+            gmp::mpn_mul_1(
+                r.as_mut_ptr().cast(),
+                a.as_ptr().cast(),
+                n as gmp::size_t,
+                c as gmp::limb_t,
+            ) as u64
+        }
+    }
+
+    /// `r += a*c` (of the same length), returns the carry limb out.
+    #[inline(always)]
+    pub fn addmul_1(r: &mut [u64], a: &[u64], c: u64) -> u64 {
+        let n = r.len();
+        assert!(ENABLED && a.len() == n && n > 0);
+        // SAFETY: as in `add`.
+        unsafe {
+            gmp::mpn_addmul_1(
+                r.as_mut_ptr().cast(),
+                a.as_ptr().cast(),
+                n as gmp::size_t,
+                c as gmp::limb_t,
+            ) as u64
+        }
+    }
+}
+
+/// Montgomery reduction of [`MontLarge`], by size of the modulus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Redc {
+    /// GMP's `mpn_redc_1`, one limb at a time (quadratic).
+    One,
+    /// GMP's `mpn_redc_2`, two limbs at a time (quadratic), from [`REDC_2_LIMBS`] limbs.
+    Two,
+    /// GMP's subquadratic `mpn_redc_n`, from [`REDC_N_LIMBS`] limbs.
+    Subquadratic,
+}
+
+/// Montgomery arithmetic modulo an odd `n` of more than [`MAX_LIMBS`] limbs, on residues of
+/// runtime length: vectors of the `limbs` limbs of `x*R mod n` (`R = 2^(64*limbs)`), in
+/// `[0, n)`.
+///
+/// A modular multiplication is GMP's product (`mpn_mul_n` or `mpn_sqr`), then GMP's Montgomery
+/// reduction: `mpn_redc_1` or `mpn_redc_2` (quadratic, GMP-ECM's `MOD_MODMULN`), then the
+/// subquadratic `mpn_redc_n` from [`REDC_N_LIMBS`] limbs; no division and no allocation (the
+/// buffers are the arithmetic's). Only with GMP's low-level functions ([`mpn::ENABLED`]):
+/// without them, these moduli use [`Plain`].
+#[derive(Debug)]
+pub struct MontLarge {
+    /// Limbs of `n`, least significant first.
+    m: Vec<u64>,
+    /// `-1/n mod 2^128`, least significant limb first (`ninv[0] = -1/n mod 2^64`).
+    ninv: [u64; 2],
+    /// `1/n mod R`, for [`Redc::Subquadratic`] (empty otherwise).
+    inv: Vec<u64>,
+    redc: Redc,
+    /// `2^64*R mod n`: multiplying by it maps a residue to the polynomial representation.
+    to_poly: Vec<u64>,
+    /// Products and wide values, of `2*limbs + 2` limbs.
+    scratch: RefCell<Vec<u64>>,
+    n: Integer,
+}
+
+impl MontLarge {
+    /// Arithmetic modulo `n`, which must be odd and above `1`, with [`mpn::ENABLED`].
+    pub fn new(n: &Integer) -> Self {
+        assert!(mpn::ENABLED && n.is_odd() && *n > 1);
+        let limbs = n.significant_bits().div_ceil(64) as usize;
+        let r = Integer::from(1) << (64 * limbs as u32);
+        let inv = n.clone().invert(&r).expect("odd modulus");
+        let two128 = Integer::from(1) << 128;
+        let ninv: Integer = &two128 - Integer::from(&inv % &two128);
+        let mut ninv2 = [0; 2];
+        ninv.write_digits(&mut ninv2, Order::Lsf);
+        let redc = if limbs >= REDC_N_LIMBS {
+            Redc::Subquadratic
+        } else if limbs >= REDC_2_LIMBS {
+            Redc::Two
+        } else {
+            Redc::One
+        };
+        let to_poly = Integer::from(1) << (64 * limbs as u32 + 64);
+        let mut a = Self {
+            m: Vec::new(),
+            ninv: ninv2,
+            inv: Vec::new(),
+            redc,
+            to_poly: Vec::new(),
+            scratch: RefCell::new(vec![0; 2 * limbs + 2]),
+            n: n.clone(),
+        };
+        a.m = a.limbs_of(n);
+        if redc == Redc::Subquadratic {
+            a.inv = a.limbs_of(&inv);
+        }
+        a.to_poly = a.limbs_of(&(to_poly % n));
+        a
+    }
+
+    /// Limbs of `0 <= x < R`.
+    fn limbs_of(&self, x: &Integer) -> Vec<u64> {
+        let mut v = vec![0; self.n.significant_bits().div_ceil(64) as usize];
+        x.write_digits(&mut v, Order::Lsf);
+        v
+    }
+
+    /// `r = r - n` if `r >= n` (with `r = r + carry*R < 2n`).
+    #[inline(always)]
+    fn reduce_once(&self, r: &mut [u64], carry: u64) {
+        if carry != 0 || mpn::ge(r, &self.m) {
+            mpn::sub_assign(r, &self.m);
+        }
+    }
+
+    /// `r = t/R mod n` in `[0, n)`, for `t` of `2*limbs` limbs (clobbered) below `n*(R + 1)`.
+    ///
+    /// Then `(t + q*n)/R < 2n` for the quadratic reductions (`q < R`), and `(t - q*n)/R` is in
+    /// `(-n, n]` for the subquadratic one, which adds `n` if it is negative: one subtraction
+    /// of `n` at most.
+    #[inline(always)]
+    fn redc(&self, r: &mut [u64], t: &mut [u64]) {
+        match self.redc {
+            Redc::One => {
+                let carry = mpn::redc(r, t, &self.m, self.ninv[0]);
+                self.reduce_once(r, carry);
+            }
+            Redc::Two => {
+                let carry = mpn::redc_2(r, t, &self.m, &self.ninv);
+                self.reduce_once(r, carry);
+            }
+            Redc::Subquadratic => {
+                mpn::redc_n(r, t, &self.m, &self.inv);
+                self.reduce_once(r, 0);
+            }
+        }
+    }
+
+    /// `r = a*b/R mod n` (`r = a^2/R mod n` if `b` is `None`).
+    #[inline(always)]
+    fn mul_or_sqr(&self, r: &mut [u64], a: &[u64], b: Option<&[u64]>) {
+        let mut scratch = self.scratch.borrow_mut();
+        let wide = &mut scratch[..2 * self.m.len()];
+        match b {
+            Some(b) => mpn::mul(wide, a, b),
+            None => mpn::sqr(wide, a),
+        }
+        self.redc(r, wide);
+    }
+}
+
+impl Arith for MontLarge {
+    type Elem = Vec<u64>;
+
+    fn modulus(&self) -> &Integer {
+        &self.n
+    }
+
+    fn zero(&self) -> Vec<u64> {
+        vec![0; self.m.len()]
+    }
+
+    fn residue(&self, x: &Integer) -> Vec<u64> {
+        let x = reduce(x, &self.n) << (64 * self.m.len() as u32);
+        self.limbs_of(&(x % &self.n))
+    }
+
+    fn to_integer(&self, x: &Vec<u64>) -> Integer {
+        let mut r = self.zero();
+        {
+            let mut scratch = self.scratch.borrow_mut();
+            let wide = &mut scratch[..2 * self.m.len()];
+            wide.fill(0);
+            wide[..x.len()].copy_from_slice(x);
+            self.redc(&mut r, wide);
+        }
+        Integer::from_digits(&r, Order::Lsf)
+    }
+
+    fn gcd(&self, x: &Vec<u64>) -> Integer {
+        Integer::from_digits(x, Order::Lsf).gcd(&self.n)
+    }
+
+    #[inline(always)]
+    fn mul(&self, r: &mut Vec<u64>, a: &Vec<u64>, b: &Vec<u64>) {
+        self.mul_or_sqr(r, a, Some(b));
+    }
+
+    #[inline(always)]
+    fn sqr(&self, r: &mut Vec<u64>, a: &Vec<u64>) {
+        self.mul_or_sqr(r, a, None);
+    }
+
+    #[inline(always)]
+    fn add(&self, r: &mut Vec<u64>, a: &Vec<u64>, b: &Vec<u64>) {
+        let carry = mpn::add(r, a, b);
+        self.reduce_once(r, carry);
+    }
+
+    #[inline(always)]
+    fn sub(&self, r: &mut Vec<u64>, a: &Vec<u64>, b: &Vec<u64>) {
+        if mpn::sub(r, a, b) != 0 {
+            // Add n back: the carry out cancels the borrow.
+            mpn::add_assign(r, &self.m);
+        }
+    }
+
+    /// As [`Mont`]: the one-limb form of `x` is `c = x*2^64 mod n`, if `c < 2^64`.
+    fn small(&self, x: &Integer) -> Option<u64> {
+        (Integer::from(x << 64) % &self.n).to_u64()
+    }
+
+    /// Montgomery reduction by one limb of `a*c`: `(a*c + q*n)/2^64 < 2n`.
+    #[inline(always)]
+    fn mul_small(&self, r: &mut Vec<u64>, a: &Vec<u64>, c: u64) {
+        let limbs = self.m.len();
+        let mut scratch = self.scratch.borrow_mut();
+        let t = &mut scratch[..limbs + 2];
+        t[limbs] = mpn::mul_1(&mut t[..limbs], a, c);
+        t[limbs + 1] = 0;
+        let q = t[0].wrapping_mul(self.ninv[0]);
+        let carry = mpn::addmul_1(&mut t[..limbs], &self.m, q);
+        mpn::add_assign(&mut t[limbs..], &[carry]);
+        r.copy_from_slice(&t[1..=limbs]);
+        self.reduce_once(r, t[limbs + 1]);
+    }
 }
 
 /// Plain big integer arithmetic modulo any `n`: residues are integers in `[0, n)`.
 ///
-/// Fallback for the moduli [`Mont`] doesn't handle.
+/// Fallback for the moduli [`Mont`] and [`MontLarge`] don't handle.
 #[derive(Debug, Clone)]
 pub struct Plain {
     n: Integer,
@@ -791,8 +1184,8 @@ impl Arith for Plain {
 /// packs whole polynomials into big integers, so a coefficient of a product is a sum of many
 /// products of residues.
 ///
-/// The polynomial representation of `x` is `x*R' mod n` (`R' = 2^(64*(N + 1))` for [`Mont`],
-/// `R' = 1` for [`Plain`]), a value in `[0, n)`: [`PolyArith::redc_wide`] divides by `R'`, so it
+/// The polynomial representation of `x` is `x*R' mod n` (`R' = 2^(64*(limbs + 1))` for [`Mont`]
+/// and [`MontLarge`], `R' = 1` for [`Plain`]), a value in `[0, n)`: [`PolyArith::redc_wide`] divides by `R'`, so it
 /// maps the product of two such values back to the representation of the product. For
 /// [`crate::base2::Base2`], `R' = 1` and the value is the residue modulo `M = 2^k +- 1`, below
 /// [`PolyArith::value_bits`] (not `n`).
@@ -922,6 +1315,43 @@ impl<const N: usize> PolyArith for Mont<N> {
     }
 }
 
+impl PolyArith for MontLarge {
+    fn limbs(&self) -> usize {
+        self.m.len()
+    }
+
+    fn to_poly(&self, r: &mut Vec<u64>, x: &Vec<u64>) {
+        self.mul(r, x, &self.to_poly);
+    }
+
+    fn write_limbs(&self, x: &Vec<u64>, out: &mut [u64]) {
+        out.copy_from_slice(x);
+    }
+
+    fn mul_acc(&self, acc: &mut [u64], x: &Vec<u64>, y: &Vec<u64>) {
+        let mut scratch = self.scratch.borrow_mut();
+        let p = &mut scratch[..2 * self.m.len()];
+        mpn::mul(p, x, y);
+        mpn::add_assign(acc, p);
+    }
+
+    /// Montgomery reduction by one limb, then by `limbs` limbs: for `t < n*R'`, `(t +
+    /// q*n)/2^64 < n*R + n` (`q < 2^64`) fits in `2*limbs` limbs, as [`MontLarge::redc`]
+    /// needs.
+    fn redc_wide(&self, r: &mut Vec<u64>, t: &[u64]) {
+        let limbs = self.m.len();
+        let mut scratch = self.scratch.borrow_mut();
+        let buf = &mut scratch[..2 * limbs + 2];
+        buf[..t.len()].copy_from_slice(t);
+        buf[t.len()..].fill(0);
+        let q = buf[0].wrapping_mul(self.ninv[0]);
+        let carry = mpn::addmul_1(&mut buf[..limbs], &self.m, q);
+        mpn::add_assign(&mut buf[limbs..], &[carry]);
+        debug_assert_eq!(buf[2 * limbs + 1], 0);
+        self.redc(r, &mut buf[1..2 * limbs + 1]);
+    }
+}
+
 impl PolyArith for Plain {
     fn limbs(&self) -> usize {
         self.n.significant_bits().div_ceil(64) as usize
@@ -952,8 +1382,9 @@ impl PolyArith for Plain {
 
 /// A chain of modular multiplications or squarings on fixed residues, for benchmarks.
 ///
-/// Dispatched like the curve code (Montgomery up to 16 limbs, plain integers above, the special
-/// reduction for the divisors of `2^k +- 1` it applies to): the setup (conversion to the
+/// Dispatched like the curve code (Montgomery on fixed-size arrays up to 16 limbs, on vectors
+/// above, plain integers for even moduli, the special reduction for the divisors of `2^k +- 1`
+/// it applies to): the setup (conversion to the
 /// internal representation) is done by [`ArithBatch::new`], and [`ArithBatch::run`] only
 /// computes.
 #[cfg(feature = "bench")]
@@ -1005,8 +1436,9 @@ impl ArithBatch {
         })
     }
 
-    /// Number of limbs of the Montgomery implementation for `n`, or `0` for plain integers (the
-    /// special reduction may be used instead, see [`ArithBatch::new`]).
+    /// Number of limbs of the Montgomery implementation for `n` (on fixed-size arrays up to 16
+    /// limbs, on vectors above), or `0` for plain integers (the special reduction may be used
+    /// instead, see [`ArithBatch::new`]).
     #[must_use]
     pub fn limbs(n: &Integer) -> usize {
         mont_limbs(n)
@@ -1102,10 +1534,20 @@ mod tests {
         x.keep_bits(bits)
     }
 
+    /// Limb counts of the edge case tests: every one of [`Mont`], then [`MontLarge`] around
+    /// its thresholds.
+    fn edge_limbs() -> Vec<u32> {
+        let mut limbs: Vec<u32> = (1..=MAX_LIMBS as u32 + 2).collect();
+        for t in [REDC_2_LIMBS, REDC_N_LIMBS] {
+            limbs.extend([t as u32 - 1, t as u32]);
+        }
+        limbs
+    }
+
     #[test]
     fn mont_edge_cases() {
         let mut rand = RandState::new();
-        for limbs in 1..=MAX_LIMBS as u32 + 1 {
+        for limbs in edge_limbs() {
             let bits = 64 * limbs;
             let r = Integer::from(Integer::u_pow_u(2, bits));
             let mut moduli = vec![
@@ -1125,7 +1567,7 @@ mod tests {
                     continue;
                 }
                 let size = n.significant_bits().div_ceil(64) as usize;
-                let expected = if n.is_odd() && size <= MAX_LIMBS {
+                let expected = if n.is_odd() && (size <= MAX_LIMBS || mpn::ENABLED) {
                     size
                 } else {
                     0
@@ -1260,10 +1702,194 @@ mod tests {
             Integer::from(Integer::u_pow_u(2, 1100)) + 15u32,
             Integer::from(Integer::u_pow_u(3, 1000)),
         ] {
-            assert_eq!(mont_limbs(&n), 0);
+            assert_eq!(mont_limbs(&n) == 0, n.is_even() || !mpn::ENABLED);
             let a = Plain::new(&n);
             check(&a, &mut rand);
             check_small(&a, &Integer::from(12345), &mut rand);
+        }
+    }
+
+    /// Random odd modulus of exactly `limbs` limbs.
+    fn random_modulus(limbs: u32, rand: &mut RandState<'_>) -> Integer {
+        let mut n = Integer::from(Integer::random_bits(64 * limbs, rand));
+        n.set_bit(0, true);
+        n.set_bit(64 * limbs - 1, true);
+        n
+    }
+
+    /// Limb counts of the [`MontLarge`] tests: from the first one, around the thresholds of
+    /// the reductions, and large.
+    fn large_limbs() -> Vec<u32> {
+        let (two, sub) = (REDC_2_LIMBS as u32, REDC_N_LIMBS as u32);
+        let mut limbs = vec![MAX_LIMBS as u32 + 1, MAX_LIMBS as u32 + 2];
+        limbs.extend([
+            two - 1,
+            two,
+            two + 1,
+            32,
+            sub - 1,
+            sub,
+            sub + 1,
+            64,
+            100,
+            128,
+            256,
+            300,
+        ]);
+        limbs
+    }
+
+    /// [`MontLarge`] against [`Plain`], on random operands and chains of operations, including
+    /// the polynomial representation.
+    #[test]
+    fn mont_large_matches_plain() {
+        if !mpn::ENABLED {
+            return;
+        }
+        let mut rand = RandState::new();
+        for limbs in large_limbs() {
+            let r = Integer::from(1) << (64 * limbs);
+            let mut moduli = vec![
+                random_modulus(limbs, &mut rand),
+                Integer::from(&r - 1),
+                Integer::from(&r >> 1) + 1u32,
+                (Integer::from(1) << (64 * limbs - 64)) + 1u32,
+            ];
+            moduli.push(adversarial(64 * limbs, &mut rand) | 1u32);
+            // A known factor f, for the gcds.
+            let f = Integer::from(u64::MAX - 58);
+            moduli.push(&f * random_modulus(limbs - 1, &mut rand));
+            for n in moduli {
+                let size = n.significant_bits().div_ceil(64);
+                assert_eq!(mont_limbs(&n), size as usize);
+                if size as usize <= MAX_LIMBS {
+                    continue;
+                }
+                let (a, p) = (MontLarge::new(&n), Plain::new(&n));
+                let multiple = Integer::from(&f * 12345u32) % &n;
+                compare_with_plain(&a, &p, multiple, &mut rand);
+            }
+        }
+    }
+
+    /// Every operation of `a` against `p`, on random values, the extremes, and `extra`.
+    fn compare_with_plain(a: &MontLarge, p: &Plain, extra: Integer, rand: &mut RandState<'_>) {
+        let n = a.modulus().clone();
+        let mut values: Vec<Integer> = (0..6).map(|_| n.clone().random_below(rand)).collect();
+        values.extend([
+            Integer::ZERO,
+            Integer::from(1),
+            Integer::from(&n - 1),
+            adversarial(n.significant_bits(), rand) % &n,
+            extra,
+        ]);
+        let (mut r, mut rp) = (a.zero(), p.zero());
+        for x in &values {
+            let (ex, px) = (a.residue(x), p.residue(x));
+            assert_eq!(a.to_integer(&ex), *x);
+            assert_eq!(a.gcd(&ex), p.gcd(&px));
+            a.sqr(&mut r, &ex);
+            p.sqr(&mut rp, &px);
+            assert_eq!(a.to_integer(&r), rp, "square mod {n}");
+            for c in [1, 2, 3, u64::MAX, rand.bits(32).into()] {
+                // The residue with the one-limb form c: c/2^64 mod n.
+                let y = Integer::from(c) * inverse_r(&n) % &n;
+                assert_eq!(a.small(&y), Some(c));
+                a.mul_small(&mut r, &ex, c);
+                p.mul(&mut rp, &px, &p.residue(&y));
+                assert_eq!(a.to_integer(&r), rp, "{x}*{c}/2^64 mod {n}");
+            }
+            for y in &values {
+                let (ey, py) = (a.residue(y), p.residue(y));
+                a.mul(&mut r, &ex, &ey);
+                p.mul(&mut rp, &px, &py);
+                assert_eq!(a.to_integer(&r), rp, "product mod {n}");
+                a.add(&mut r, &ex, &ey);
+                p.add(&mut rp, &px, &py);
+                assert_eq!(a.to_integer(&r), rp, "sum mod {n}");
+                a.sub(&mut r, &ex, &ey);
+                p.sub(&mut rp, &px, &py);
+                assert_eq!(a.to_integer(&r), rp, "difference mod {n}");
+                let (f, fp) = (a.factor(y), p.factor(y));
+                a.mul_factor(&mut r, &ex, &f);
+                p.mul_factor(&mut rp, &px, &fp);
+                assert_eq!(a.to_integer(&r), rp, "factor mod {n}");
+                // Polynomial representation.
+                a.poly_mul(&mut r, &a.poly_from(x), &a.poly_from(y));
+                assert_eq!(a.poly_value(&r), Integer::from(x * y) % &n);
+            }
+        }
+        // A chain mixing every operation, from random values: the residues stay reduced.
+        let (mut x, mut y) = (a.residue(&values[0]), a.residue(&values[1]));
+        let (mut px, mut py) = (p.residue(&values[0]), p.residue(&values[1]));
+        let f = a.factor(&Integer::from(12345));
+        let fp = p.factor(&Integer::from(12345));
+        for i in 0..50 {
+            match i % 5 {
+                0 => {
+                    a.mul(&mut r, &x, &y);
+                    p.mul(&mut rp, &px, &py);
+                }
+                1 => {
+                    a.sqr(&mut r, &x);
+                    p.sqr(&mut rp, &px);
+                }
+                2 => {
+                    a.sub(&mut r, &y, &x);
+                    p.sub(&mut rp, &py, &px);
+                }
+                3 => {
+                    a.add(&mut r, &x, &y);
+                    p.add(&mut rp, &px, &py);
+                }
+                _ => {
+                    a.mul_factor(&mut r, &x, &f);
+                    p.mul_factor(&mut rp, &px, &fp);
+                }
+            }
+            std::mem::swap(&mut x, &mut y);
+            std::mem::swap(&mut px, &mut py);
+            std::mem::swap(&mut y, &mut r);
+            std::mem::swap(&mut py, &mut rp);
+            assert!(Integer::from_digits(&y, Order::Lsf) < n, "step {i} mod {n}");
+            assert_eq!(a.to_integer(&y), py, "step {i} mod {n}");
+        }
+    }
+
+    /// The three reductions of [`MontLarge`] agree, whatever the size (the subquadratic one
+    /// needs more than 8 limbs).
+    #[test]
+    fn mont_large_reductions_agree() {
+        if !mpn::ENABLED {
+            return;
+        }
+        let mut rand = RandState::new();
+        for limbs in [17, 20, 33, 47, 48, 64, 130] {
+            let n = random_modulus(limbs, &mut rand);
+            let mut arith = MontLarge::new(&n);
+            let inv = n
+                .clone()
+                .invert(&(Integer::from(1) << (64 * limbs)))
+                .unwrap();
+            arith.inv = arith.limbs_of(&inv);
+            let values: Vec<Vec<u64>> = (0..5)
+                .map(|_| arith.residue(&n.clone().random_below(&mut rand)))
+                .chain([arith.residue(&Integer::from(&n - 1))])
+                .collect();
+            for x in &values {
+                for y in &values {
+                    let results = [Redc::One, Redc::Two, Redc::Subquadratic].map(|redc| {
+                        arith.redc = redc;
+                        let mut r = arith.zero();
+                        arith.mul(&mut r, x, y);
+                        let mut s = arith.zero();
+                        arith.sqr(&mut s, x);
+                        (r, s)
+                    });
+                    assert_eq!(results[0], results[1], "{limbs} limbs");
+                    assert_eq!(results[0], results[2], "{limbs} limbs");
+                }
+            }
         }
     }
 }
