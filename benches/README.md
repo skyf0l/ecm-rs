@@ -5,7 +5,7 @@ random. So these three measures are kept separate:
 
 | What | Where | Measure | CI |
 |---|---|---|---|
-| Cost: modular multiplication/squaring per limb count, stage 1 / stage 2 of one curve, one complete curve at the `success_rate` bounds, setup (stage 2 plan, stage 1 multiplier, P-1 stage 1) | `ops.rs` | Instruction counts (Valgrind), deterministic | yes |
+| Cost: modular multiplication/squaring per limb count, stage 1 / stage 2 of one curve, one complete curve at the `success_rate` bounds, setup (stage 2 plan, stage 1 multiplier, P-1 stage 1, one curve) | `ops.rs` | Instruction counts (Valgrind), deterministic | yes |
 | Driver overhead: complete factorizations of small README numbers, over several seeds | `e2e.rs` | Instruction counts (Valgrind), deterministic | yes |
 | Effectiveness: expected curves to find a 15/20/25-digit factor | `examples/success_rate.rs` | Curves tried / factors found, deterministic | yes |
 | Expected cost to find a factor: expected curves x instructions per curve (`ops::curve::one_curve`) | CI report | Derived | yes |
@@ -23,7 +23,8 @@ random. So these three measures are kept separate:
   `one_curve`: one complete curve at the bounds of `success_rate` for 15, 20 and 25-digit
   factors, on its first number (a factor times a 40-digit prime).
 - `setup`: stage 2 plan search at 256 bits (`B2 = 1.9M` and 1e9), stage 1 multiplier for
-  `B1 = 1M`, P-1 stage 1.
+  `B1 = 1M`, P-1 stage 1, and the setup of one curve (starting point and parameter from `sigma`)
+  of each parametrization at 256, 1024 and 4096 bits.
 
 ## Instruction counts
 

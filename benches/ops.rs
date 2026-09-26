@@ -8,7 +8,8 @@
 //! - `curve`: stage 1 and stage 2 of one curve, and one complete curve at the bounds of the
 //!   `success_rate` example (instructions per curve; the CI report multiplies them by the
 //!   expected number of curves).
-//! - `setup`: work shared by the curves (stage 2 plan, stage 1 multiplier, P-1 stage 1).
+//! - `setup`: work shared by the curves (stage 2 plan, stage 1 multiplier, P-1 stage 1), and
+//!   the setup of one curve of each parametrization.
 //!
 //! Run with `cargo bench --features bench --bench ops` (requires Valgrind and `gungraun-runner`).
 
@@ -194,9 +195,30 @@ fn setup_pm1_stage1(input: (Integer, usize)) -> Integer {
     black_box(Pm1::new().stage1(n, *b1))
 }
 
+// Setup of one curve (its starting point and parameter from sigma).
+#[library_benchmark]
+#[bench::suyama_bits_256((semiprime_bits(256, SEED), Param::Suyama))]
+#[bench::square_bits_256((semiprime_bits(256, SEED), Param::Square))]
+#[bench::batch2_bits_256((semiprime_bits(256, SEED), Param::Batch2))]
+#[bench::suyama_bits_1024((semiprime_bits(1024, SEED), Param::Suyama))]
+#[bench::square_bits_1024((semiprime_bits(1024, SEED), Param::Square))]
+#[bench::batch2_bits_1024((semiprime_bits(1024, SEED), Param::Batch2))]
+#[bench::suyama_bits_4096((semiprime_bits(4096, SEED), Param::Suyama))]
+#[bench::square_bits_4096((semiprime_bits(4096, SEED), Param::Square))]
+#[bench::batch2_bits_4096((semiprime_bits(4096, SEED), Param::Batch2))]
+fn setup_curve(input: (Integer, Param)) -> Point {
+    let (n, param) = black_box(&input);
+    black_box(curve_point(n, *param))
+}
+
 library_benchmark_group!(
     name = setup,
-    benchmarks = [setup_stage2_plan, setup_stage1_multiplier, setup_pm1_stage1]
+    benchmarks = [
+        setup_stage2_plan,
+        setup_stage1_multiplier,
+        setup_pm1_stage1,
+        setup_curve
+    ]
 );
 
 main!(library_benchmark_groups = arith, curve, setup);

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Performance
+
+- Curve setup: one modular inversion instead of four with parametrization 2 (same curves,
+  same factors found by the setup), none with parametrization 1 (`2^-64` by a Montgomery
+  reduction), cubes by multiplications instead of `pow_mod` with Suyama's: 3% to 23% fewer
+  instructions with parametrization 2 at 4096 to 256 bits (its multiple of `(-3, 3)` dominates),
+  1.3 to 7.5 times fewer with the others. Small next to stage 1 either way. Stage 1 no longer
+  inverts the `z = 1` of the starting points of parametrizations 1 and 2.
+
 ## 2.0.0
 
 A port of GMP-ECM's techniques: much faster curves, a driver that finds the factors from the
