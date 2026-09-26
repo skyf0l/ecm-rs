@@ -77,6 +77,9 @@ pub struct Ui {
     last_curve: Option<(Param, Integer)>,
     /// Threads running the curves.
     threads: u32,
+    /// Relations SIQS needs, and the tenth of them last reported by `-v`.
+    siqs_needed: usize,
+    siqs_tenth: usize,
 }
 
 impl Ui {
@@ -104,6 +107,8 @@ impl Ui {
             level: Level::default(),
             last_curve: None,
             threads: u32::try_from(threads).unwrap_or(u32::MAX).max(1),
+            siqs_needed: 0,
+            siqs_tenth: 0,
         }
     }
 
@@ -336,6 +341,72 @@ impl Ui {
                     ));
                 }
             }
+            Event::Siqs {
+                n,
+                multiplier,
+                factor_base,
+                interval,
+                large_prime_bound,
+                needed,
+                ..
+            } => {
+                (self.siqs_needed, self.siqs_tenth) = (needed, 0);
+                if self.verbose > 0 {
+                    self.line(&format!(
+                        "SIQS on C{}: multiplier {multiplier}, factor base of {factor_base} \
+                         primes, sieve interval {interval}, large primes below \
+                         {large_prime_bound}: {needed} relations needed",
+                        digits(n)
+                    ));
+                }
+                if let Some(bar) = &self.bar {
+                    bar.set_prefix(format!("SIQS C{}", digits(n)));
+                    bar.set_message("");
+                    bar.set_style(siqs_style());
+                    bar.set_length(needed as u64);
+                    bar.reset();
+                }
+            }
+            Event::SiqsRelations {
+                full,
+                combined,
+                needed,
+                polynomials,
+                elapsed,
+                ..
+            } => {
+                let found = full + combined;
+                let tenth = (10 * found / needed.max(1)).min(10);
+                if self.verbose > 1 || (self.verbose > 0 && tenth > self.siqs_tenth) {
+                    self.siqs_tenth = tenth;
+                    self.line(&format!(
+                        "SIQS: {found}/{needed} relations ({full} full, {combined} from \
+                         partial ones), {polynomials} polynomials, {}",
+                        human(elapsed)
+                    ));
+                }
+                if let Some(bar) = &self.bar {
+                    bar.set_length(needed.max(self.siqs_needed) as u64);
+                    bar.set_position(found.min(needed) as u64);
+                    bar.set_message(format!("{polynomials} polynomials"));
+                }
+            }
+            Event::SiqsMatrix {
+                rows,
+                columns,
+                dependencies,
+                duration,
+                ..
+            } => {
+                if self.verbose > 0 {
+                    self.line(&format!(
+                        "SIQS linear algebra: {rows} x {columns} matrix, {dependencies} \
+                         dependencies, took {}",
+                        ms(duration)
+                    ));
+                }
+                self.spinner("SIQS square roots".to_string());
+            }
             Event::Prime { p, exponent, .. } if self.verbose > 1 => {
                 self.line(&format!("Prime factor: {}", product([(p, exponent)])));
             }
@@ -378,6 +449,12 @@ fn spinner_style() -> ProgressStyle {
 
 fn bar_style() -> ProgressStyle {
     ProgressStyle::with_template("{prefix} [{wide_bar}] {pos}/{len} curves {elapsed} {msg}")
+        .expect("valid template")
+        .progress_chars("=> ")
+}
+
+fn siqs_style() -> ProgressStyle {
+    ProgressStyle::with_template("{prefix} [{wide_bar}] {pos}/{len} relations {elapsed} {msg}")
         .expect("valid template")
         .progress_chars("=> ")
 }
