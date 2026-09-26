@@ -201,9 +201,10 @@ impl<H: EventHandler> Factorizer<H> {
         self
     }
 
-    /// Memory (in bytes) the polynomial stage 2 may use (default: 256 MiB): a smaller limit
-    /// makes it slower. The baby-step giant-step stage 2, chosen when no polynomial one fits,
-    /// uses at most about 32 MiB plus its baby steps.
+    /// Memory (in bytes) the polynomial stage 2 may use (default: 256 MiB), per thread (see
+    /// [`Factorizer::threads`]): a smaller limit makes it slower. The baby-step giant-step
+    /// stage 2, chosen when no polynomial one fits, uses at most about 32 MiB plus its baby
+    /// steps.
     #[must_use]
     pub const fn max_memory(mut self, bytes: usize) -> Self {
         self.max_memory = bytes;
@@ -250,18 +251,21 @@ impl<H: EventHandler> Factorizer<H> {
 
     /// Number of threads running curves (default: 1; 0 for [`std::thread::available_parallelism`]).
     ///
-    /// With more than one, the curves of each level (or with fixed bounds) run in parallel, on
-    /// threads started by each factorization, which ends them before returning. Trial division,
-    /// P-1 and P+1 still run on the calling thread, as the callback of
-    /// [`Factorizer::on_event`] (which need not be [`Send`]).
+    /// With more than one, the curves run in parallel on worker threads started by each
+    /// factorization (at its second level), which ends them before returning: the curves of a
+    /// level, with P-1 and the curves of the next level alongside them, in the order of the
+    /// search on one thread. Trial division, the first level, and P-1 or P+1 alone
+    /// ([`Algorithm::Pm1`], [`Algorithm::Pp1`]) run on the calling thread, as the callback of
+    /// [`Factorizer::on_event`] (which need not be [`Send`]). [`Factorizer::max_memory`] is per
+    /// thread.
     ///
     /// The results do not depend on the number of threads: the curves have the same
-    /// parameters, and the factor found is the one of the first curve (in their order) that
-    /// finds one, once all the curves before it ran (the curves after it are stopped). The
-    /// events are the same, in the same order ([`Event::Curve`] events come in the order of the
-    /// curves, when all the curves before them ran), but for the durations. Only the time taken
-    /// differs, and what an interruption (by the callback, the flag or the timeout) leaves:
-    /// with more threads, more curves may have run.
+    /// parameters, and the factor found is the one of the first curve or P-1 run (in the order
+    /// of the search on one thread) that finds one, once all the ones before it ran (the ones
+    /// after it are stopped, and not reported). The events are the same, in the same order
+    /// ([`Event::Curve`] events come in the order of the curves, once all the curves before
+    /// them ran), but for their durations. Only the time taken differs, and what an
+    /// interruption (by the callback, the flag or the timeout) leaves.
     #[must_use]
     pub const fn threads(mut self, threads: usize) -> Self {
         self.threads = threads;

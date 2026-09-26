@@ -41,6 +41,11 @@ let result = Factorizer::new()
     .factor_partial(&n);
 println!("primes: {:?}, unfactored: {:?}", result.primes, result.unfactored);
 
+// On 4 threads (by default, 1): the same factors, curves and events (but their durations)
+// as with one; the callback still runs on this thread.
+let factors = Factorizer::new().threads(4).factor(&n).unwrap();
+assert_eq!(factors.len(), 4);
+
 // Fixed bounds (as GMP-ECM's `ecm -c 100 11000 1873422`), or only P-1 or P+1 (as
 // `ecm -pp1 -x0 2/7 100000`).
 let factors = Factorizer::new()
@@ -91,6 +96,9 @@ Found prime factor of 20 digits: 13507140964289979319
 Prime cofactor 1159282937712710938601499347662537052411 has 40 digits
 15658598057181786459081452046251445462002559800474409088109 = 13507140964289979319 * 1159282937712710938601499347662537052411
 ```
+
+The curves run on all the available threads by default (`-t N` to choose): the output is the
+same with any number of threads (but the times of `-v`).
 
 On a terminal, a progress bar (on stderr) shows the level being run, with the curves done out of
 the expected number and the expected time of the level. Results go to stdout, diagnostics to
@@ -163,10 +171,14 @@ The implementation started as a translation of sympy's, and now uses the techniq
   do not make the search faster (expected time within 0.1% at best, by GMP-ECM's model with
   measured costs).
 - `ecm_with_params` and `ecm_one_factor` run curves with fixed bounds.
+- Threads (`Factorizer::threads`, `-t`): the curves run in parallel, with P-1 and the curves
+  of the next level alongside them, in the order of a search on one thread, whose results they
+  give: the factor found is the one of the first curve (or P-1 run) in this order that finds
+  one, once all the ones before it ran. The first level runs on the calling thread.
 - `Factorizer` has all the options (seed, fixed bounds, curves, `sigma`, parametrization,
-  P-1 or P+1 only, stage 2 memory, special division), and reports events (levels, curves with
-  their `sigma` and stage durations, P-1 and P+1 runs, factors and primes) to a callback, which
-  can interrupt the factorization. An interruption flag or a timeout interrupt it even during a
+  P-1 or P+1 only, stage 2 memory, special division, threads), and reports events (levels,
+  curves with their `sigma` and stage durations, P-1 and P+1 runs, factors and primes) to a
+  callback, which can interrupt the factorization. An interruption flag or a timeout interrupt it even during a
   curve.
 
 ## Performance
@@ -202,6 +214,21 @@ below 0.1x to 5x the mean. ecm-rs 1.0.2 chose its bounds from the size of the nu
 | 20 digits | 60 digits | 0.55s  | 1.10s (11000)   |
 | 25 digits | 60 digits | 7.3s   | 14.8s (50000)   |
 | 30 digits | 80 digits | 72s    | 138s (250000)   |
+
+With threads (`Factorizer::threads`, `ecm-rs -t N`), same machine (6 cores, 12 hardware
+threads), mean time to factor completely the numbers above (60 digits with a 20 or 25-digit
+factor: 3 numbers x 5 or 3 seeds; 80 digits with a 30-digit factor: 3 numbers), and curves per
+second with fixed bounds on a 77-digit number. The results are the same with any number of
+threads; the second hardware thread of a core adds little (the arithmetic saturates it).
+
+| Threads                    | 1      | 2      | 4      | 6      | 12     |
+| -------------------------- | ------ | ------ | ------ | ------ | ------ |
+| 20 digits, 60-digit number | 0.35s  | 0.19s  | 0.11s  | 0.11s  | 0.10s  |
+| 25 digits, 60-digit number | 6.2s   | 3.2s   | 1.7s   | 1.4s   | 1.4s   |
+| 30 digits, 80-digit number | 99s    | 50s    | 28s    | 22s    | 22s    |
+| curves/s, `B1` = 11000     | 155    | 302    | 581    | 758    | 818    |
+| curves/s, `B1` = 50000     | 29.8   | 58.9   | 106    | 126    | 134    |
+| curves/s, `B1` = 250000    | 6.1    | 12.0   | 22.9   | 26.1   | 28.8   |
 
 ## Credits
 
