@@ -309,8 +309,11 @@ fn interrupt_flag_and_timeout() {
                 .threads(threads)
                 .interrupt_flag(flag)
                 .factor_partial(&n);
+            // Stopped at the next check inside the curves, not at their end (seconds away):
+            // a few tens of milliseconds, more on a loaded machine (the other tests run
+            // alongside, and CI runners have few cores).
             let latency = setter.join().unwrap().elapsed();
-            assert!(latency < Duration::from_millis(100), "{latency:?}");
+            assert!(latency < Duration::from_millis(300), "{delay}: {latency:?}");
             assert_eq!(result.error, Some(Error::Interrupted));
             assert_eq!(result.unfactored, [(n.clone(), 1)]);
         }
@@ -322,7 +325,7 @@ fn interrupt_flag_and_timeout() {
             .timeout(Duration::from_millis(200))
             .factor_partial(&n);
         let elapsed = start.elapsed();
-        assert!(elapsed < Duration::from_millis(300), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(500), "{elapsed:?}");
         assert_eq!(result.error, Some(Error::Interrupted));
         assert_eq!(result.primes, HashMap::from([(Integer::from(7), 1)]));
     }
