@@ -53,10 +53,16 @@ smallest to the largest, and a builder with progress events and cancellation.
 - `Factorizer::interrupt_flag` (an `Arc<AtomicBool>`, for a Ctrl-C handler or another thread)
   and `Factorizer::timeout` interrupt the factorization even during a curve or P-1: usually
   within a few milliseconds.
+- `Factorizer::threads` (default 1; 0 for the available parallelism): the curves run in
+  parallel, with P-1 and the next levels alongside them, with the same results (factors,
+  curves, events but their durations) whatever the number of threads. The callback stays on
+  the calling thread (no `Send` bound). `ecm`, `ecm_with_params` and `ecm_one_factor` use one
+  thread.
 - The `ecm-rs` command line tool (`cargo install ecm --features cli`): complete factorization
   by default, GMP-ECM-like options (`--b1`, `--b2`, `-c`, `--sigma`, `--param`, `--one`,
   `--pm1`, `--pp1`, `--x0`, `--maxmem`, `--base2`, `--nobase2`, `--primetest`, `--printconfig`,
-  `-q`, `-v`), GMP-ECM's input expressions, `--json`, `--seed`, `--timeout` (for each number)
+  `-q`, `-v`), `-t`/`--threads` (default: the available parallelism), GMP-ECM's input
+  expressions, `--json`, `--seed`, `--timeout` (for each number)
   and `--total-timeout`, a progress bar, partial results on Ctrl-C, and GMP-ECM's exit status
   bits. The `cli` feature only adds its dependencies (`clap`, `ctrlc`, `indicatif`,
   `serde_json`): the library compiles none of them.

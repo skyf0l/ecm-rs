@@ -165,7 +165,7 @@ pub struct Cli {
     #[arg(long, value_name = "SECS", value_parser = parse_timeout)]
     pub total_timeout: Option<Duration>,
 
-    /// Memory for stage 2, in MiB [default: 256].
+    /// Memory for stage 2, in MiB, per thread [default: 256].
     #[arg(long, value_name = "MB")]
     pub maxmem: Option<usize>,
 

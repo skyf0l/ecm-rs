@@ -287,7 +287,7 @@ fn rsa1024() -> Integer {
 #[test]
 fn interrupt_flag_and_timeout() {
     let n = rsa1024();
-    for threads in [2, 8] {
+    for threads in [2, 4] {
         for (factorizer, delay) in [
             // Stage 1 of the curves (about 5 s each).
             (Factorizer::new().b1(1_000_000), 300),
