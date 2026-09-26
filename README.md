@@ -27,6 +27,12 @@ Using a `Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz` CPU, the following results we
 | 4269021180054189416198169786894227 | 1.916s  | 0.018s | 106.44x faster |
 | 7060005655815754299976961394452809 | 13.555s | 3.467s | 3.91x faster   |
 
+## Credits
+
+The code is translated from [SymPy](https://github.com/sympy/sympy)'s ECM
+(`sympy.ntheory.ecm`), Copyright (c) 2006-2023 SymPy Development Team, under the BSD 3-Clause
+license (see [LICENSE-SYMPY](LICENSE-SYMPY)).
+
 ## License
 
 Licensed under either of
