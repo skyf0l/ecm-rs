@@ -145,15 +145,10 @@ pub struct Cli {
     #[arg(long, value_name = "SEED")]
     pub seed: Option<u64>,
 
-    /// Threads running the curves (and P-1 alongside them) [default: the available
+    /// Threads running the curves (and P-1 alongside them) [default, or 0: the available
     /// parallelism]. The results (factors, curves, -v lines but for the times) do not depend on
     /// it.
-    #[arg(
-        short,
-        long,
-        value_name = "N",
-        value_parser = clap::value_parser!(u32).range(1..)
-    )]
+    #[arg(short, long, value_name = "N")]
     pub threads: Option<u32>,
 
     /// Gives up on each number after SECS seconds, printing what was found.

@@ -538,10 +538,12 @@ fn bit(cond: bool, bit: u8) -> u8 {
     if cond { bit } else { 0 }
 }
 
-/// Threads running curves: `--threads`, or the available parallelism.
+/// Threads running curves: `--threads`, or (without it or with 0) the available parallelism.
 fn threads(cli: &Cli) -> usize {
-    cli.threads
-        .map_or_else(available_threads, |threads| threads as usize)
+    match cli.threads {
+        None | Some(0) => available_threads(),
+        Some(threads) => threads as usize,
+    }
 }
 
 fn available_threads() -> usize {
