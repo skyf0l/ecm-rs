@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790446346768,
+  "lastUpdate": 1790446348182,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -1801,6 +1801,48 @@ window.BENCHMARK_DATA = {
             "value": 58.8235294117647,
             "unit": "curves",
             "extra": "found 17/1000 curves (stage 1: 1, stage 2: 16, setup: 0)\n95% CI: 37..94 curves\nGMP-ECM reference: ~90 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "e9e75ad8c1790ead368fe25426b3b116705cf956",
+          "message": "test: measure the interruption latency from the Break, not the whole run\n\ncallback_interruptions and the event interruption helper timed the whole\nfactorization up to the interrupting event, which failed on slow runners\n(12.7 s under coverage instrumentation). They now time from the callback\nreturning Break to the return of the factorization. The latency bounds of\nthe interruption flag (300 ms) and of the timeout (200 ms + 300 ms) are\nthe ones of the thread tests, for loaded CI runners.",
+          "timestamp": "2026-09-26T22:07:44+04:00",
+          "tree_id": "b10a0a85299f1a5279136c780b4343cd72886456",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/e9e75ad8c1790ead368fe25426b3b116705cf956"
+        },
+        "date": 1790446348166,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 27.247956403269754,
+            "unit": "curves",
+            "extra": "found 367/10000 curves (stage 1: 40, stage 2: 327, setup: 0)\n95% CI: 25..30 curves\nGMP-ECM model: 34 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 73.52941176470588,
+            "unit": "curves",
+            "extra": "found 136/10000 curves (stage 1: 12, stage 2: 124, setup: 0)\n95% CI: 62..87 curves\nGMP-ECM model: 86 curves"
+          },
+          {
+            "name": "expected curves, 25-digit factor (B1=50000, B2=12746592)",
+            "value": 238.0952380952381,
+            "unit": "curves",
+            "extra": "found 21/5000 curves (stage 1: 2, stage 2: 19, setup: 0)\n95% CI: 156..364 curves\nGMP-ECM model: 221 curves"
           }
         ]
       }
