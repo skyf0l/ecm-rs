@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn stage2_checks_all_primes_limbs() {
-        // Every limb count of `Mont`, and `Plain`.
+        // Every limb count of `Mont`, and `MontLarge`.
         let mut rand = RandState::new();
         let primes: Vec<u64> = Primes::all()
             .skip_while(|&p| p < 10_000)
