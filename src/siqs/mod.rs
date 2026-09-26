@@ -41,6 +41,13 @@ const BLOCK: usize = 1 << BLOCK_BITS;
 /// The primes below this bound are not sieved, but for their contribution to the threshold.
 const SMALL_PRIME: u32 = 40;
 
+/// Preferred size of the primes of `A`, relative to the largest prime of the factor base: small
+/// primes make many polynomials per `A`, over which its setup is amortized.
+const Q_RATIO: f64 = 0.004;
+
+/// Most primes in an `A`: at most `2^(MAX_A_PRIMES - 1)` polynomials per batch.
+const MAX_A_PRIMES: usize = 12;
+
 /// Relations beyond the columns of the matrix.
 const EXTRA_RELATIONS: usize = 64;
 
@@ -61,76 +68,77 @@ struct Row {
     fudge: f64,
 }
 
+// Measured on balanced semiprimes (see the `siqs` example).
 const PARAMS: [Row; 10] = [
     Row {
         digits: 20,
-        fb: 60,
-        blocks: 1,
-        lp_mult: 20,
-        fudge: 4.0,
-    },
-    Row {
-        digits: 30,
-        fb: 150,
+        fb: 80,
         blocks: 1,
         lp_mult: 30,
-        fudge: 4.0,
-    },
-    Row {
-        digits: 40,
-        fb: 350,
-        blocks: 1,
-        lp_mult: 40,
-        fudge: 5.0,
-    },
-    Row {
-        digits: 50,
-        fb: 1000,
-        blocks: 2,
-        lp_mult: 50,
-        fudge: 6.0,
-    },
-    Row {
-        digits: 60,
-        fb: 2500,
-        blocks: 2,
-        lp_mult: 60,
-        fudge: 7.0,
-    },
-    Row {
-        digits: 70,
-        fb: 6000,
-        blocks: 4,
-        lp_mult: 70,
         fudge: 8.0,
     },
     Row {
-        digits: 80,
-        fb: 13000,
-        blocks: 6,
-        lp_mult: 80,
-        fudge: 9.0,
-    },
-    Row {
-        digits: 90,
-        fb: 28000,
-        blocks: 8,
-        lp_mult: 90,
+        digits: 30,
+        fb: 200,
+        blocks: 1,
+        lp_mult: 30,
         fudge: 10.0,
     },
     Row {
-        digits: 100,
-        fb: 55000,
-        blocks: 12,
-        lp_mult: 100,
+        digits: 40,
+        fb: 500,
+        blocks: 1,
+        lp_mult: 40,
         fudge: 11.0,
     },
     Row {
-        digits: 110,
-        fb: 90000,
-        blocks: 16,
-        lp_mult: 110,
+        digits: 50,
+        fb: 1_800,
+        blocks: 1,
+        lp_mult: 40,
         fudge: 12.0,
+    },
+    Row {
+        digits: 60,
+        fb: 6_000,
+        blocks: 2,
+        lp_mult: 40,
+        fudge: 13.0,
+    },
+    Row {
+        digits: 70,
+        fb: 18_000,
+        blocks: 4,
+        lp_mult: 50,
+        fudge: 13.0,
+    },
+    Row {
+        digits: 80,
+        fb: 40_000,
+        blocks: 6,
+        lp_mult: 60,
+        fudge: 14.0,
+    },
+    Row {
+        digits: 90,
+        fb: 65_000,
+        blocks: 8,
+        lp_mult: 70,
+        fudge: 14.0,
+    },
+    Row {
+        digits: 100,
+        fb: 100_000,
+        blocks: 10,
+        lp_mult: 80,
+        fudge: 15.0,
+    },
+    Row {
+        digits: 110,
+        fb: 120_000,
+        blocks: 12,
+        lp_mult: 90,
+        fudge: 15.0,
     },
 ];
 
@@ -140,6 +148,10 @@ struct Params {
     blocks: usize,
     lp_mult: u32,
     fudge: f64,
+    /// Primes below it are not sieved.
+    small: u32,
+    /// Preferred size of the primes of `A`, relative to the largest of the factor base.
+    q_ratio: f64,
 }
 
 impl Params {
@@ -160,8 +172,11 @@ impl Params {
             blocks: lerp(lo.blocks as f64, hi.blocks as f64).round() as usize,
             lp_mult: lerp(f64::from(lo.lp_mult), f64::from(hi.lp_mult)).round() as u32,
             fudge: lerp(lo.fudge, hi.fudge),
+            small: SMALL_PRIME,
+            q_ratio: Q_RATIO,
         };
-        // Tuning only (the `siqs` example): `SIQS_TUNE=fb,blocks,lp_mult,fudge` (0: default).
+        // Tuning only (the `siqs` example): `SIQS_TUNE=fb,blocks,lp_mult,fudge,small,q_ratio`
+        // (0: default).
         #[cfg(feature = "bench")]
         if let Ok(v) = std::env::var("SIQS_TUNE") {
             let v: Vec<f64> = v.split(',').map(|x| x.parse().unwrap()).collect();
@@ -176,6 +191,14 @@ impl Params {
             }
             if v[3] > 0.0 {
                 params.fudge = v[3];
+            }
+            if v.len() > 5 {
+                if v[4] > 0.0 {
+                    params.small = v[4] as u32;
+                }
+                if v[5] > 0.0 {
+                    params.q_ratio = v[5];
+                }
             }
         }
         params
@@ -341,14 +364,23 @@ impl Siqs {
         let lp_bound = (u64::from(pmax) * u64::from(params.lp_mult))
             .min(u64::from(pmax) * u64::from(pmax))
             .max(u64::from(pmax) + 1);
-        let threshold = ((log_q - (lp_bound as f64).log2() - params.fudge) * scale)
-            .clamp(8.0, 250.0)
-            .round() as u8;
         let first_sieved = fb
             .primes
             .iter()
-            .position(|&p| p >= SMALL_PRIME)
+            .position(|&p| p >= params.small)
             .unwrap_or(fb.len());
+        // The expected contribution of the primes not sieved (2 roots each, one for 2 and the
+        // primes dividing the multiplier).
+        let unsieved: f64 = (0..first_sieved)
+            .map(|i| {
+                let p = f64::from(fb.primes[i]);
+                let roots = if i == 0 || fb.divides_k[i] { 1.0 } else { 2.0 };
+                roots * p.log2() / (p - 1.0)
+            })
+            .sum();
+        let threshold = ((log_q - (lp_bound as f64).log2() - params.fudge - unsieved) * scale)
+            .clamp(8.0, 250.0)
+            .round() as u8;
         let first_large = fb
             .primes
             .iter()
@@ -375,8 +407,10 @@ impl Siqs {
         }
         // A: s primes near 2^(a_bits / s), of a size depending on the factor base.
         let a_bits = (f64::from(kn.significant_bits()) + 1.0) / 2.0 - f64::from(m).log2();
-        let preferred = (f64::from(pmax) / 8.0).clamp(300.0, 4000.0).log2();
-        let s = ((a_bits / preferred).round() as usize).max(1);
+        let preferred = (f64::from(pmax) * params.q_ratio)
+            .clamp(300.0, 4000.0)
+            .log2();
+        let s = ((a_bits / preferred).round() as usize).clamp(1, MAX_A_PRIMES);
         let q_bits = a_bits / s as f64;
         let range_of = |lo: f64, hi: f64| {
             let lo = fb.primes.partition_point(|&p| f64::from(p) < lo);
