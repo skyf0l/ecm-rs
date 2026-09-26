@@ -145,8 +145,10 @@ Exit status: bits as GMP-ECM's, for the last number (bits 1 and 16 for any numbe
 The implementation started as a translation of sympy's, and now uses the techniques of
 [GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm) (whose code and papers it follows closely):
 
-- Montgomery modular arithmetic on fixed-size limb arrays (up to 1024 bits, with GMP's
-  low-level functions from 641 bits; GMP integers above).
+- Montgomery modular arithmetic, with no division: on fixed-size limb arrays up to 1024 bits
+  (with GMP's low-level functions from 641 bits), on limb vectors above (GMP's products and
+  Montgomery reductions: one limb at a time, two from 1217 bits, subquadratic from 3265
+  bits). GMP integers only for even moduli.
 - GMP-ECM's "special division" for the divisors of `2^k +- 1` (Mersenne, Fermat and
   Cunningham numbers and their cofactors): with `k` at most 1.4 times their size, the curves,
   P-1 and P+1 compute modulo `2^k +- 1`, where a product is reduced by a shift and an addition

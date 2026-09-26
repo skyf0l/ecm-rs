@@ -18,6 +18,11 @@
   instructions with parametrization 2 at 4096 to 256 bits (its multiple of `(-3, 3)` dominates),
   1.3 to 7.5 times fewer with the others. Small next to stage 1 either way. Stage 1 no longer
   inverts the `z = 1` of the starting points of parametrizations 1 and 2.
+- Montgomery arithmetic on limb vectors above 1024 bits (GMP's products, then its Montgomery
+  reductions: one limb at a time, two from 1217 bits, subquadratic from 3265 bits), instead of
+  GMP integers with a division per product: stage 1 takes 9 to 30% fewer instructions from
+  1025 bits (no more jump from 1024 to 1025 bits), stage 2 10 to 20%, about as many as
+  GMP-ECM's.
 
 ## 2.0.0
 
