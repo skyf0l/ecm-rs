@@ -34,7 +34,9 @@ const ARITH_OPS: usize = 10_000;
 const ARITH_VALUES: usize = 16;
 
 /// Modular arithmetic on a modulus of `limbs` 64-bit limbs, as the curve code dispatches it
-/// (Montgomery up to 10 limbs, with GMP's `mpn` functions from 11).
+/// (Montgomery on fixed-size arrays up to 16 limbs, with GMP's `mpn` functions from 11; on
+/// vectors above, with GMP's reductions by one limb at a time, by two from 20 limbs, and the
+/// subquadratic one from 52).
 fn arith_input(limbs: u32) -> ArithBatch {
     let n = semiprime_bits(64 * limbs, SEED);
     assert_eq!(ArithBatch::limbs(&n), limbs as usize);
@@ -59,6 +61,11 @@ fn fermat_input() -> ArithBatch {
 #[bench::limbs_8(arith_input(8))]
 #[bench::limbs_11(arith_input(11))]
 #[bench::limbs_16(arith_input(16))]
+#[bench::limbs_17(arith_input(17))]
+#[bench::limbs_20(arith_input(20))]
+#[bench::limbs_32(arith_input(32))]
+#[bench::limbs_52(arith_input(52))]
+#[bench::limbs_64(arith_input(64))]
 #[bench::base2_fermat_1024(fermat_input())]
 fn arith_mul(batch: ArithBatch) -> Integer {
     black_box(black_box(&batch).run(ARITH_OPS, false))
@@ -71,6 +78,11 @@ fn arith_mul(batch: ArithBatch) -> Integer {
 #[bench::limbs_8(arith_input(8))]
 #[bench::limbs_11(arith_input(11))]
 #[bench::limbs_16(arith_input(16))]
+#[bench::limbs_17(arith_input(17))]
+#[bench::limbs_20(arith_input(20))]
+#[bench::limbs_32(arith_input(32))]
+#[bench::limbs_52(arith_input(52))]
+#[bench::limbs_64(arith_input(64))]
 #[bench::base2_fermat_1024(fermat_input())]
 fn arith_sqr(batch: ArithBatch) -> Integer {
     black_box(black_box(&batch).run(ARITH_OPS, true))
@@ -110,6 +122,7 @@ const B2_35: usize = GMP_ECM_BOUNDS[4].2;
 #[bench::bits_256(stage1_input(256, B1_20, Param::Batch2))]
 #[bench::bits_512(stage1_input(512, B1_20, Param::Batch2))]
 #[bench::bits_1024(stage1_input(1024, B1_20, Param::Batch2))]
+#[bench::bits_2048(stage1_input(2048, B1_20, Param::Batch2))]
 #[bench::square_bits_256(stage1_input(256, B1_20, Param::Square))]
 #[bench::suyama_bits_256(stage1_input(256, B1_20, Param::Suyama))]
 #[bench::edwards12_bits_256(stage1_input(256, B1_20, Param::Edwards12))]

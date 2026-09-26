@@ -15,9 +15,12 @@ random. So these three measures are kept separate:
 `ops.rs` groups:
 
 - `arith`: 10000 chained multiplications (`arith_mul`) or squarings (`arith_sqr`) modulo 1, 2,
-  4, 8, 11 and 16-limb numbers, dispatched as in the curve code (our Montgomery code up to 10
-  limbs, GMP's `mpn` functions from 11): shows inlining regressions and the 10/11 limb switch.
-- `curve`: stage 1 (`B1 = 11000`) with the default curves (`-param 2`) at 128 to 1024 bits, and
+  4, 8, 11, 16, 17, 20, 32, 52 and 64-limb numbers, dispatched as in the curve code (our
+  Montgomery code on fixed-size arrays up to 10 limbs, GMP's `mpn` functions from 11; on
+  vectors of runtime length above 16 limbs, with GMP's `mpn_redc_1`, `mpn_redc_2` from 20
+  limbs and the subquadratic `mpn_redc_n` from 52): shows inlining regressions and the 10/11,
+  16/17, 19/20 and 51/52 limb switches.
+- `curve`: stage 1 (`B1 = 11000`) with the default curves (`-param 2`) at 128 to 2048 bits, and
   with `-param 1` and Suyama's at 256 bits, and the Edwards curves (`--param 12`) at 256 and
   1024 bits; stage 2 with the baby-step giant-step continuation (128 bits / `B2 = 1.9M`, 256
   bits / 12.7M) and the polynomial one (512 and 1024 bits / 12.7M); `one_curve`: one complete
