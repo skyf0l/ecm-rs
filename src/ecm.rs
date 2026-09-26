@@ -440,10 +440,11 @@ pub(crate) fn product(mut values: Vec<Integer>) -> Integer {
 ///
 /// `Err(g)` with `g = gcd(2*u^3*v, n)` when the curve cannot be built (`g` may be `n`).
 pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
-    let three = Integer::from(3);
+    // x^3 mod n, in [0, n).
+    let cube = |x: &Integer| crate::arith::reduce(&(Integer::from(x * x) % n * x), n);
     let u = (Integer::from(sigma * sigma) - 5u32) % n;
     let v = Integer::from(sigma * 4u32) % n;
-    let u_3 = u.clone().pow_mod(&three, n).unwrap();
+    let u_3 = cube(&u);
 
     // We use the elliptic curve y^2 = x^3 + a*x^2 + x
     // where a = (v - u)^3 * (3*u + v) / (4*u^3*v) - 2
@@ -451,12 +452,12 @@ pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     // to use a24 = (a + 2) / 4 in the calculation.
     let u_3_v = Integer::from(&u_3 * &v);
     let a24 = match Integer::from(&u_3_v * 16u32).invert(n) {
-        Ok(inv) => Integer::from(&v - &u).pow_mod(&three, n).unwrap() * (3u32 * u + &v) * inv % n,
+        Ok(inv) => cube(&Integer::from(&v - &u)) * (3u32 * u + &v) * inv % n,
         // If the invert(16*u^3*v, n) doesn't exist (i.e., g != 1)
         Err(_) => return Err((u_3_v * 2u32).gcd(n)),
     };
 
-    let v_3 = v.pow_mod(&three, n).unwrap();
+    let v_3 = cube(&v);
     Ok(Point {
         x: u_3,
         z: v_3,
@@ -481,9 +482,15 @@ pub fn suyama_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
 ///
 /// If `n` is even.
 pub fn square_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
-    let inv = Integer::from(Integer::u_pow_u(2, 64))
-        .invert(n)
-        .expect("n must be odd");
+    assert!(n.is_odd(), "n must be odd");
+    // 2^-64 mod n = (1 + m*n)/2^64 with m = -1/n mod 2^64 (a Montgomery reduction of 1): no
+    // modular inversion.
+    let n0 = n.to_u64_wrapping();
+    let mut inv = n0; // 1/n mod 2^3, then twice as many bits per Newton step
+    for _ in 0..5 {
+        inv = inv.wrapping_mul(2u64.wrapping_sub(n0.wrapping_mul(inv)));
+    }
+    let inv = (Integer::from(inv.wrapping_neg()) * n + 1u32) >> 64u32;
     let d = Integer::from(sigma * sigma) * inv % n;
     if d == 0 || d == 1 {
         return Err(n.clone());
@@ -509,36 +516,74 @@ pub fn batch2_curve(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
     if *sigma < 2 {
         return Err(n.clone());
     }
-    let md = |x: Integer| -> Integer {
-        let mut x = x % n;
-        if x < 0 {
-            x += n;
-        }
-        x
+    with_arith!(n, |arith| batch2_a24(&arith, sigma)).map(|a24| Point::start(a24, n))
+}
+
+/// `a24 = (a + 2)/4` of the curve of [`batch2_curve`], with a single modular inversion.
+///
+/// With `sigma*(-3, 3) = (X : Y : Z)` in Jacobian coordinates, `x3 = N/D` where
+/// `N = 3*X*Z + Y + 6*Z^3` and `D = 2*(Y - 3*Z^3)`, so that
+/// `a24 = (8*N^3*D - 3*N^4 - 6*N^2*D^2 + D^4)/(16*N^3*D)`: the inverse of `16*Z*N^3*D`
+/// replaces the inversions of `z`, `2*(y - 3)`, `4*x3^3` and `4` of the affine computation
+/// (GMP-ECM's), with the same result. When it does not exist, the error is the gcd of the
+/// first of those that fails, as in the affine computation: `gcd(Z, n)`, then `gcd(D, n)`,
+/// then `gcd(N^3, n)` (the affine values are these ones times units for an odd `n`).
+fn batch2_a24<A: Arith>(a: &A, sigma: &Integer) -> Result<Integer, Integer> {
+    let (x, y, z) = batch2_multiple(a, sigma);
+    let [mut t0, mut t1, mut t2, mut t3] = std::array::from_fn(|_| a.zero());
+    let [mut num, mut den, mut n2, mut n3, mut d2] = std::array::from_fn(|_| a.zero());
+    a.sqr(&mut t0, &z);
+    a.mul(&mut t1, &t0, &z); // Z^3
+    a.add(&mut t2, &t1, &t1);
+    a.add(&mut t3, &t2, &t1); // 3*Z^3
+    a.sub(&mut t0, &y, &t3);
+    a.add(&mut den, &t0, &t0); // D = 2*(Y - 3*Z^3)
+    a.add(&mut t1, &t3, &t3); // 6*Z^3
+    a.add(&mut t2, &y, &t1);
+    a.mul(&mut t0, &x, &z);
+    a.add(&mut t1, &t0, &t0);
+    a.add(&mut t3, &t1, &t0); // 3*X*Z
+    a.add(&mut num, &t2, &t3); // N = 3*X*Z + Y + 6*Z^3
+    a.sqr(&mut n2, &num);
+    a.mul(&mut n3, &n2, &num);
+    a.sqr(&mut d2, &den);
+    a.mul(&mut t0, &n3, &den); // N^3*D
+    a.mul(&mut t1, &t0, &z);
+    for _ in 0..4 {
+        a.add(&mut t2, &t1, &t1);
+        std::mem::swap(&mut t1, &mut t2);
+    }
+    // t1 = 16*Z*N^3*D
+    let Ok(inv) = a.to_integer(&t1).invert(a.modulus()) else {
+        return Err([&z, &den, &n3]
+            .into_iter()
+            .map(|v| a.gcd(v))
+            .find(|g| *g != 1)
+            .unwrap_or_else(|| Integer::from(4).gcd(a.modulus())));
     };
-    let inv =
-        |x: &Integer| -> Result<Integer, Integer> { x.clone().invert(n).map_err(|x| x.gcd(n)) };
-
-    let (x, y, z) = with_arith!(n, |arith| batch2_multiple(&arith, sigma));
-
-    // Affine coordinates.
-    let z_inv = inv(&z)?;
-    let z_inv2 = md(z_inv.clone().square());
-    let x = md(x * &z_inv2);
-    let y = md(y * z_inv2 * z_inv);
-
-    let x3 = md((3 * x + &y + 6) * inv(&md(2 * (y - 3)))?);
-    let x3_2 = md(x3.clone().square());
-    // a = -(3*x3^4 + 6*x3^2 - 1)/(4*x3^3), and a24 = (a + 2)/4
-    let x3_4: Integer = x3_2.clone().square();
-    let numerator: Integer = x3_4 * 3u32 + Integer::from(&x3_2 * 6u32) - 1u32;
-    let a = md(-numerator * inv(&md(4 * x3_2 * x3))?);
-    let a24 = md((a + 2) * inv(&Integer::from(4))?);
-    Ok(Point::start(a24, n))
+    for _ in 0..3 {
+        a.add(&mut t1, &t0, &t0);
+        std::mem::swap(&mut t0, &mut t1);
+    }
+    // t0 = 8*N^3*D
+    a.sqr(&mut t1, &n2); // N^4
+    a.add(&mut t2, &t1, &t1);
+    a.add(&mut t3, &t2, &t1);
+    a.sub(&mut t1, &t0, &t3); // 8*N^3*D - 3*N^4
+    a.mul(&mut t0, &n2, &d2); // N^2*D^2
+    a.add(&mut t2, &t0, &t0);
+    a.add(&mut t3, &t2, &t0);
+    a.add(&mut t2, &t3, &t3);
+    a.sub(&mut t0, &t1, &t2); // 8*N^3*D - 3*N^4 - 6*N^2*D^2
+    a.sqr(&mut t1, &d2);
+    a.add(&mut t2, &t0, &t1); // + D^4
+    a.mul(&mut t0, &t2, &z);
+    a.mul(&mut t1, &t0, &a.residue(&inv));
+    Ok(a.to_integer(&t1))
 }
 
 /// `sigma*(-3 : 3 : 1)` in Jacobian coordinates, on the curve `y^2 = x^3 + 36`.
-fn batch2_multiple<A: Arith>(a: &A, sigma: &Integer) -> (Integer, Integer, Integer) {
+fn batch2_multiple<A: Arith>(a: &A, sigma: &Integer) -> (A::Elem, A::Elem, A::Elem) {
     let (px, py) = (a.residue(&Integer::from(-3)), a.residue(&Integer::from(3)));
     let (mut x, mut y, mut z) = (px.clone(), py.clone(), a.residue(&Integer::from(1)));
     let [
@@ -605,7 +650,7 @@ fn batch2_multiple<A: Arith>(a: &A, sigma: &Integer) -> (Integer, Integer, Integ
             a.sub(&mut z, &t5, &t1); // z3 = (z + H)^2 - Z1Z1 - HH
         }
     }
-    (a.to_integer(&x), a.to_integer(&y), a.to_integer(&z))
+    (x, y, z)
 }
 
 /// Stage 1: computes `k*P`, for `k >= 1` (with the special reduction modulo `2^k +- 1` if
@@ -626,10 +671,14 @@ fn stage1_with<A: Arith>(arith: A, p: &Point, k: &Integer, stop: Stop<'_>) -> Po
     let n: &Integer = &p.n;
     // Normalizing P to z = 1 saves a multiplication per ladder step. If z is not invertible, P
     // is the point at infinity modulo a factor of n, and so is k*P: P has the same gcd.
-    let Ok(z_inv) = p.z.clone().invert(n) else {
-        return p.clone();
+    let x = if p.z == 1 {
+        p.x.clone()
+    } else {
+        let Ok(z_inv) = p.z.clone().invert(n) else {
+            return p.clone();
+        };
+        Integer::from(&p.x * &z_inv) % n
     };
-    let x = Integer::from(&p.x * &z_inv) % n;
 
     let curve = Curve::new(arith, &p.a24);
     let q = curve.ladder(&curve.arith.factor(&x), &Factor::One, k, stop);
@@ -865,6 +914,134 @@ mod tests {
                 "sigma = {sigma}"
             );
         }
+    }
+
+    thread_local! {
+        /// Failures of each inversion of [`batch2_curve_affine`].
+        static AFFINE_FAILURES: std::cell::RefCell<[usize; 3]> = const { std::cell::RefCell::new([0; 3]) };
+    }
+
+    /// [`batch2_curve`] as GMP-ECM computes it, with affine coordinates and four inversions.
+    fn batch2_curve_affine(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
+        if *sigma < 2 {
+            return Err(n.clone());
+        }
+        let md = |x: Integer| crate::arith::reduce(&x, n);
+        let inv = |x: &Integer| x.clone().invert(n).map_err(|x| x.gcd(n));
+        let (x, y, z) = with_arith!(n, |arith| {
+            let (x, y, z) = batch2_multiple(&arith, sigma);
+            (
+                arith.to_integer(&x),
+                arith.to_integer(&y),
+                arith.to_integer(&z),
+            )
+        });
+        let failed = |i: usize| {
+            move |g| {
+                AFFINE_FAILURES.with(|f| f.borrow_mut()[i] += 1);
+                g
+            }
+        };
+        let z_inv = inv(&z).map_err(failed(0))?;
+        let z_inv2 = md(z_inv.clone().square());
+        let x = md(x * &z_inv2);
+        let y = md(y * z_inv2 * z_inv);
+        let x3 = md((3 * x + &y + 6) * inv(&md(2 * (y - 3))).map_err(failed(1))?);
+        let x3_2 = md(x3.clone().square());
+        let x3_4: Integer = x3_2.clone().square();
+        let numerator: Integer = x3_4 * 3u32 + Integer::from(&x3_2 * 6u32) - 1u32;
+        let a = md(-numerator * inv(&md(4 * x3_2 * x3)).map_err(failed(2))?);
+        let a24 = md((a + 2) * inv(&Integer::from(4))?);
+        Ok(Point::start(a24, n))
+    }
+
+    /// The curve setups before they were made cheaper (`pow_mod`, inversion of `2^64`).
+    fn suyama_curve_before(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
+        let three = Integer::from(3);
+        let u = (Integer::from(sigma * sigma) - 5u32) % n;
+        let v = Integer::from(sigma * 4u32) % n;
+        let u_3 = u.clone().pow_mod(&three, n).unwrap();
+        let u_3_v = Integer::from(&u_3 * &v);
+        let a24 = match Integer::from(&u_3_v * 16u32).invert(n) {
+            Ok(inv) => {
+                Integer::from(&v - &u).pow_mod(&three, n).unwrap() * (3u32 * u + &v) * inv % n
+            }
+            Err(_) => return Err((u_3_v * 2u32).gcd(n)),
+        };
+        Ok(Point {
+            x: u_3,
+            z: v.pow_mod(&three, n).unwrap(),
+            a24,
+            n: n.clone(),
+        })
+    }
+
+    fn square_curve_before(n: &Integer, sigma: &Integer) -> Result<Point, Integer> {
+        let inv = Integer::from(Integer::u_pow_u(2, 64)).invert(n).unwrap();
+        let d = Integer::from(sigma * sigma) * inv % n;
+        if d == 0 || d == 1 {
+            return Err(n.clone());
+        }
+        Ok(Point::start(d, n))
+    }
+
+    #[test]
+    fn curve_setups_match_before() {
+        let mut rand = RandState::new();
+        // Random moduli of every size, and products of small primes modulo which the setups
+        // fail (5, 7, 13, 19 and 37 for parametrization 2), with or without a large prime.
+        let mut moduli: Vec<Integer> = [40, 64, 100, 128, 256, 512, 700, 1024, 1100, 2048]
+            .into_iter()
+            .map(|bits| Integer::from(Integer::random_bits(bits, &mut rand)) | 1u32)
+            .collect();
+        let large = Integer::from(10u32).pow(30).next_prime();
+        for small in [
+            5u32,
+            7,
+            5 * 7,
+            3 * 5 * 7,
+            13 * 19,
+            5 * 37,
+            9,
+            25,
+            125,
+            49 * 13,
+        ] {
+            moduli.push(Integer::from(small));
+            moduli.push(Integer::from(small) * &large);
+            moduli.push(Integer::from(small) * &large * &large);
+        }
+        let mut failures = 0;
+        for n in &moduli {
+            if *n <= 3 {
+                continue;
+            }
+            let sigmas = (0..200u64)
+                .map(Integer::from)
+                .chain((0..50).map(|_| Integer::from(Integer::random_bits(64, &mut rand))));
+            for sigma in sigmas {
+                let new = batch2_curve(n, &sigma);
+                failures += usize::from(new.is_err() && sigma >= 2);
+                assert_eq!(new, batch2_curve_affine(n, &sigma), "{n} {sigma}");
+                if sigma >= 6 {
+                    assert_eq!(
+                        suyama_curve(n, &sigma),
+                        suyama_curve_before(n, &sigma),
+                        "{n} {sigma}"
+                    );
+                }
+                let small = Integer::from(&sigma % (1u64 << 32));
+                assert_eq!(
+                    square_curve(n, &small),
+                    square_curve_before(n, &small),
+                    "{n} {sigma}"
+                );
+            }
+        }
+        // Failures at each of the inversions happen.
+        let each = AFFINE_FAILURES.with(|f| *f.borrow());
+        assert!(each.iter().all(|&f| f > 20), "{each:?}");
+        assert_eq!(each.iter().sum::<usize>(), failures);
     }
 
     /// `p` and `q` are the same projective point: `x_p * z_q = x_q * z_p (mod n)`.
