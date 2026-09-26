@@ -6,7 +6,8 @@
 use gmp_mpfr_sys::gmp;
 
 /// Largest number of 64-bit limbs handled by the Montgomery arithmetic on fixed-size arrays
-/// (`Mont`); larger moduli use GMP integers (`Plain`).
+/// (`Mont`); larger odd moduli use the Montgomery arithmetic of runtime length (`MontLarge`,
+/// with GMP's `mpn` functions), or GMP integers (`Plain`) if [`MPN_ENABLED`] is `false`.
 pub const MAX_LIMBS: usize = 16;
 
 /// Smallest number of limbs from which `Mont` multiplies and squares with GMP's `mpn`
@@ -16,6 +17,21 @@ pub const MAX_LIMBS: usize = 16;
 /// the same, but GMP's compiled code does not depend on the build profile, while our unrolled
 /// CIOS got up to 30% slower from 13 limbs up with `lto = "fat"` and `codegen-units = 1`.
 pub const GMP_LIMBS: usize = 11;
+
+/// Smallest number of limbs from which `MontLarge` reduces with GMP's `mpn_redc_2` (two limbs
+/// at a time) instead of `mpn_redc_1`.
+///
+/// Measured on chains of modular multiplications and squarings (GMP's product, then each
+/// reduction; the fastest of 40 interleaved batches, on an i7-8750H): `mpn_redc_1` is 1-4%
+/// faster at 17-19 limbs, they are equal at 20-22, `mpn_redc_2` is 3-6% faster from 24.
+pub const REDC_2_LIMBS: usize = 20;
+
+/// Smallest number of limbs from which `MontLarge` reduces with GMP's subquadratic
+/// `mpn_redc_n` (a low half product and a wrap-around product) instead of `mpn_redc_2`.
+///
+/// Measured as [`REDC_2_LIMBS`]: `mpn_redc_n` is slower up to 44 limbs, equal at 48-52,
+/// faster from 56 (by 3%, 6% at 64 limbs, 21% at 128, 35% at 256).
+pub const REDC_N_LIMBS: usize = 52;
 
 /// Whether GMP's limbs are our 64-bit limbs (and `mpn_redc_1` returns its carry, from GMP
 /// 5.1): if not, GMP's `mpn` functions are never called.

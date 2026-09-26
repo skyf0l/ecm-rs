@@ -597,10 +597,26 @@ fn print_config() {
             "Montgomery, fixed-size limb arrays (GMP mpn product + REDC)",
         );
     }
-    row(
-        format!("above {} bits", 64 * max),
-        "GMP integers (mpz), plain reduction",
-    );
+    if config::MPN_ENABLED {
+        let (redc2, redcn) = (config::REDC_2_LIMBS, config::REDC_N_LIMBS);
+        row(
+            format!("{} to {} bits", 64 * max + 1, 64 * (redc2 - 1)),
+            "Montgomery, runtime-length limb vectors (GMP mpn product + REDC)",
+        );
+        row(
+            format!("{} to {} bits", 64 * (redc2 - 1) + 1, 64 * (redcn - 1)),
+            "Montgomery, runtime-length limb vectors (GMP mpn product + REDC 2 limbs at a time)",
+        );
+        row(
+            format!("above {} bits", 64 * (redcn - 1)),
+            "Montgomery, runtime-length limb vectors (GMP mpn product + subquadratic REDC)",
+        );
+    } else {
+        row(
+            format!("above {} bits", 64 * max),
+            "GMP integers (mpz), plain reduction",
+        );
+    }
     println!(
         "Special division (GMP-ECM -base2): the numbers dividing 2^k+-1 with {} <= k <= {} x \
          their bits compute modulo 2^k+-1 when it is faster than the above (from about 400 bits \

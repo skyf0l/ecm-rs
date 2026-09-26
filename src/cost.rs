@@ -5,7 +5,7 @@
 //! their ratios matter, which vary much less from one machine to another. The polynomial
 //! costs mirror the operations of [`crate::poly`] one product at a time.
 
-use crate::{base2::Base2Form, poly, stage2_poly::PolyPlan};
+use crate::{arith::mpn, base2::Base2Form, poly, stage2_poly::PolyPlan};
 use std::collections::HashMap;
 
 /// Montgomery multiplication, by number of limbs (index 0 unused).
@@ -28,24 +28,68 @@ const BASE2_STEP_NS: [f64; 25] = [
     1281.0, 1399.0, 1623.0, 1743.0, 2005.0, 2125.0, 2319.0, 2448.0, 2670.0, 2843.0, 3005.0, 3216.0,
 ];
 
+/// Limb counts at which the costs above [`crate::arith::MAX_LIMBS`] limbs (the Montgomery
+/// arithmetic of runtime length, GMP's products and reductions) were measured; in between and
+/// beyond, they are interpolated on a log-log scale ([`large`]). Measured with the fastest of
+/// repeated runs, scaled to the costs at 16 limbs of [`MUL_NS`], [`STEP_NS`] and
+/// [`BASE2_STEP_NS`] measured in the same run (`large_costs` below).
+pub(crate) const LARGE_LIMBS: [usize; 10] = [17, 20, 24, 32, 48, 64, 96, 128, 192, 256];
+
+/// Montgomery multiplication, at [`LARGE_LIMBS`] limbs.
+const LARGE_MUL_NS: [f64; 10] = [
+    433.0, 562.0, 782.0, 1296.0, 2705.0, 4255.0, 8088.0, 12983.0, 23549.0, 38456.0,
+];
+
+/// Step of the stage 1 ladder as [`STEP_NS`], at [`LARGE_LIMBS`] limbs.
+const LARGE_STEP_NS: [f64; 10] = [
+    3852.0, 5142.0, 7091.0, 11699.0, 24377.0, 38778.0, 74236.0, 122712.0, 218019.0, 353342.0,
+];
+
+/// [`LARGE_STEP_NS`] with the special reduction modulo `2^k +- 1`, for `k = 64*limbs - 7`.
+const LARGE_BASE2_STEP_NS: [f64; 10] = [
+    1964.0, 2446.0, 3211.0, 4975.0, 9321.0, 14696.0, 27588.0, 43284.0, 79040.0, 122516.0,
+];
+
+/// Cost at `limbs` limbs from the costs `ns` measured at [`LARGE_LIMBS`]: interpolated on a
+/// log-log scale, extrapolated with the slope of the nearest two points.
+fn large(ns: &[f64; 10], limbs: usize) -> f64 {
+    let x = (limbs as f64).ln();
+    let points = LARGE_LIMBS.map(|l| (l as f64).ln());
+    let i = points
+        .iter()
+        .rposition(|&p| p <= x)
+        .unwrap_or(0)
+        .min(points.len() - 2);
+    let slope = (ns[i + 1].ln() - ns[i].ln()) / (points[i + 1] - points[i]);
+    (ns[i].ln() + slope * (x - points[i])).exp()
+}
+
 /// The ladder steps measured with [`BASE2_STEP_NS`] run about this much slower in the curves
 /// than the ones of [`STEP_NS`]: the special reduction is used when the measured steps are
 /// faster by at least this factor.
 const BASE2_MARGIN: f64 = 0.9;
 
 /// Whether the arithmetic modulo `2^k +- 1` (`k` bits) is faster than the arithmetic modulo
-/// a number of `bits` bits: from the measured costs of the stage 1 steps with Montgomery's
-/// arithmetic, and above [`crate::arith::MAX_LIMBS`] limbs always (plain integers, whose
-/// division costs more than a product, while `k` is at most 1.4 times `bits`).
+/// a number of `bits` bits: from the measured costs of the stage 1 steps with both, and
+/// always above [`crate::arith::MAX_LIMBS`] limbs without GMP's low-level functions (plain
+/// integers, whose division costs more than a product, while `k` is at most 1.4 times
+/// `bits`).
 pub(crate) fn base2_faster(bits: u32, k: u32) -> bool {
     let limbs = bits.div_ceil(64) as usize;
-    let base2 = k.div_ceil(64) as usize;
-    if limbs >= STEP_NS.len() {
+    let base2 = k.div_ceil(64).max(1) as usize;
+    let mont = if limbs < STEP_NS.len() {
+        STEP_NS[limbs]
+    } else if mpn::ENABLED {
+        large(&LARGE_STEP_NS, limbs)
+    } else {
         return true;
-    }
-    BASE2_STEP_NS
-        .get(base2)
-        .is_some_and(|&cost| cost < BASE2_MARGIN * STEP_NS[limbs])
+    };
+    let cost = if base2 < BASE2_STEP_NS.len() {
+        BASE2_STEP_NS[base2]
+    } else {
+        large(&LARGE_BASE2_STEP_NS, base2)
+    };
+    cost < BASE2_MARGIN * mont
 }
 
 /// Packing and unpacking a coefficient of a Kronecker product, besides its share of a modular
@@ -130,17 +174,33 @@ impl Costs {
 
     pub fn new(bits: usize) -> Self {
         let limbs = bits.div_ceil(64).max(1);
-        let mul = if limbs < MUL_NS.len() {
-            MUL_NS[limbs]
-        } else {
+        if limbs < MUL_NS.len() {
+            let mul = MUL_NS[limbs];
+            return Self {
+                bits,
+                mul,
+                macc: 0.6 * mul,
+                redc: 0.8 * mul,
+            };
+        }
+        if !mpn::ENABLED {
             // Plain arithmetic: roughly quadratic, and slower than Montgomery's.
-            2.0 * MUL_NS[16] * (limbs as f64 / 16.0).powf(1.8)
-        };
+            let mul = 2.0 * MUL_NS[16] * (limbs as f64 / 16.0).powf(1.8);
+            return Self {
+                bits,
+                mul,
+                macc: 0.6 * mul,
+                redc: 0.8 * mul,
+            };
+        }
+        // GMP's product, then its Montgomery reduction: the product alone is about 45% of a
+        // multiplication (50% at 17 limbs, 40% from 64 limbs), the reduction 60%.
+        let mul = large(&LARGE_MUL_NS, limbs);
         Self {
             bits,
             mul,
-            macc: 0.6 * mul,
-            redc: 0.8 * mul,
+            macc: 0.45 * mul,
+            redc: 0.6 * mul,
         }
     }
 
@@ -359,6 +419,33 @@ mod tests {
     }
 
     #[test]
+    fn large_interpolation() {
+        // Exact at the measured sizes, increasing, and continuing the costs up to 16 limbs.
+        for (i, &limbs) in LARGE_LIMBS.iter().enumerate() {
+            assert!((large(&LARGE_MUL_NS, limbs) / LARGE_MUL_NS[i] - 1.0).abs() < 1e-9);
+        }
+        let mut prev = MUL_NS[16];
+        for limbs in 17..2000 {
+            let mul = Costs::new(64 * limbs).mul();
+            assert!(mul > prev, "{limbs}");
+            prev = mul;
+        }
+        assert!(large(&LARGE_STEP_NS, 17) > STEP_NS[16]);
+        assert!((large(&LARGE_BASE2_STEP_NS, 24) / BASE2_STEP_NS[24] - 1.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn base2_above_16_limbs() {
+        // The special reduction stays faster above 16 limbs, even with k at 1.4 times the
+        // size of n (a product 1.4 times larger, but no Montgomery reduction).
+        for bits in [1025, 1100, 1536, 2048, 3072, 4096, 8192, 16384, 40000] {
+            for k in [bits + 1, bits * 5 / 4, bits * 7 / 5] {
+                assert!(base2_faster(bits, k), "{bits} bits, k = {k}");
+            }
+        }
+    }
+
+    #[test]
     fn prime_counts() {
         for (x, pi) in [
             (1_000_000, 78_498.0),
@@ -371,7 +458,8 @@ mod tests {
 }
 
 /// Measures the constants of this module: `cargo test --release -- --ignored primitive_costs
-/// --nocapture` (and `ladder_costs` for the ladder steps).
+/// --nocapture` (and `ladder_costs` for the ladder steps, `large_costs` for the costs above 16
+/// limbs).
 #[cfg(test)]
 mod measure {
     use crate::arith::{Arith, mpn, with_arith};
@@ -407,6 +495,89 @@ mod measure {
             std::hint::black_box(curve.ladder(&x, &Factor::One, &k, Stop::NEVER));
         }
         start.elapsed().as_nanos() as f64 / f64::from(reps * k.significant_bits())
+    }
+
+    /// Nanoseconds per modular multiplication, the fastest of 5 runs (the others were slowed
+    /// by other processes), with fewer repetitions for large sizes.
+    fn min_mul_ns<A: Arith>(a: &A) -> f64 {
+        let limbs = a.modulus().significant_bits().div_ceil(64);
+        let reps = (4_000_000 / (limbs * limbs)).max(200);
+        let mut rand = RandState::new();
+        let x = a.residue(&a.modulus().clone().random_below(&mut rand));
+        let (mut r, mut t) = (x.clone(), x.clone());
+        let mut best = f64::INFINITY;
+        for _ in 0..5 {
+            let start = Instant::now();
+            for _ in 0..reps {
+                a.mul(&mut t, &r, &x);
+                std::mem::swap(&mut t, &mut r);
+            }
+            best = best.min(start.elapsed().as_nanos() as f64 / f64::from(reps));
+        }
+        std::hint::black_box(r);
+        best
+    }
+
+    /// Nanoseconds per step of the stage 1 ladder, the fastest of 5 ladders of 1585 bits.
+    fn min_step_ns<A: Arith>(a: A) -> f64 {
+        use crate::{arith::Factor, curve::Curve, stop::Stop};
+        let curve = Curve::new(a, &Integer::from(123_456_789));
+        let x = curve
+            .arith
+            .factor(&(Integer::from(Integer::u_pow_u(7, 1000)) % curve.arith.modulus()));
+        let k = Integer::from(Integer::u_pow_u(3, 1000));
+        let mut best = f64::INFINITY;
+        for _ in 0..5 {
+            let start = Instant::now();
+            std::hint::black_box(curve.ladder(&x, &Factor::One, &k, Stop::NEVER));
+            best = best.min(start.elapsed().as_nanos() as f64 / f64::from(k.significant_bits()));
+        }
+        best
+    }
+
+    #[test]
+    #[ignore = "measurement (minutes), prints the constants of this module"]
+    fn large_costs() {
+        use crate::base2::{Base2, Base2Form};
+        let mut rand = RandState::new();
+        // Costs at `limbs` limbs: a multiplication and a step, and a step modulo 2^k +- 1 (both
+        // forms, k not a multiple of 64: the shifted reduction).
+        let mut measure = |limbs: u32| {
+            let mut n = Integer::from(Integer::random_bits(64 * limbs, &mut rand));
+            n.set_bit(0, true);
+            n.set_bit(64 * limbs - 1, true);
+            let mul = with_arith!(&n, |a| min_mul_ns(&a));
+            let step = with_arith!(&n, |a| min_step_ns(a));
+            let base2: f64 = [true, false]
+                .map(|plus| {
+                    let form = Base2Form {
+                        k: 64 * limbs - 7,
+                        plus,
+                    };
+                    min_step_ns(Base2::new(&form.value(), form))
+                })
+                .iter()
+                .sum();
+            [mul, step, base2 / 2.0]
+        };
+        // Scaled to the costs at 16 limbs of the tables above, measured in the same conditions
+        // (the clock speed of a loaded machine varies).
+        let reference = measure(16);
+        let scale = [
+            super::MUL_NS[16] / reference[0],
+            super::STEP_NS[16] / reference[1],
+            super::BASE2_STEP_NS[16] / reference[2],
+        ];
+        let (mut muls, mut steps, mut base2) = (Vec::new(), Vec::new(), Vec::new());
+        for limbs in super::LARGE_LIMBS {
+            let [mul, step, b2] = measure(limbs as u32);
+            muls.push(format!("{:.0}", mul * scale[0]));
+            steps.push(format!("{:.0}", step * scale[1]));
+            base2.push(format!("{:.0}", b2 * scale[2]));
+        }
+        eprintln!("LARGE_MUL_NS: {}", muls.join(", "));
+        eprintln!("LARGE_STEP_NS: {}", steps.join(", "));
+        eprintln!("LARGE_BASE2_STEP_NS: {}", base2.join(", "));
     }
 
     #[test]

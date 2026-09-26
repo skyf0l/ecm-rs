@@ -505,7 +505,8 @@ fn printconfig() {
     assert!(out.contains("GMP "));
     assert!(out.contains("BMI2/ADX: "));
     assert!(out.contains("Montgomery"));
-    assert!(out.contains("above 1024 bits "), "{out}");
+    assert!(out.contains("1025 to 1216 bits "), "{out}");
+    assert!(out.contains("above 3264 bits "), "{out}");
     assert!(out.contains("Stage 2 memory (default): 256 MiB"), "{out}");
     assert!(out.contains("Special division (GMP-ECM -base2)"), "{out}");
     assert!(out.contains("Threads (default): "), "{out}");
