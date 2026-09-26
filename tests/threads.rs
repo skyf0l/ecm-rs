@@ -64,23 +64,34 @@ fn owned(event: &Event<'_>) -> Owned {
 fn record(
     factorizer: Factorizer,
     n: &Integer,
-    mut stop: impl FnMut(&Owned) -> bool,
+    stop: impl FnMut(&Owned) -> bool,
 ) -> (Factorization, Vec<Owned>) {
+    let (result, events, _) = record_timed(factorizer, n, stop);
+    (result, events)
+}
+
+/// [`record`], with the time from the interruption (the callback returning `Break`) to the
+/// return of the factorization.
+fn record_timed(
+    factorizer: Factorizer,
+    n: &Integer,
+    mut stop: impl FnMut(&Owned) -> bool,
+) -> (Factorization, Vec<Owned>, Option<Duration>) {
     let mut events = Vec::new();
-    let mut stopped = false;
+    let mut stopped = None;
     let result = factorizer
         .on_event(|event| {
-            assert!(!stopped, "event after the interruption");
+            assert!(stopped.is_none(), "event after the interruption");
             events.push(owned(event));
-            stopped = stop(events.last().unwrap());
-            if stopped {
+            if stop(events.last().unwrap()) {
+                stopped = Some(Instant::now());
                 ControlFlow::Break(())
             } else {
                 ControlFlow::Continue(())
             }
         })
         .factor_partial(n);
-    (result, events)
+    (result, events, stopped.map(|at| at.elapsed()))
 }
 
 fn product(factors: &HashMap<Integer, usize>) -> Integer {
@@ -248,13 +259,15 @@ fn callback_interruptions() {
     });
     for threads in THREADS {
         for stop_at in [1, 2, 7, 30, 60] {
-            let start = Instant::now();
-            let (result, events) = record(
+            let (result, events, latency) = record_timed(
                 Factorizer::new().threads(threads),
                 &n,
                 |e| matches!(e, Owned::Curve(_, _, _, i) if *i == stop_at),
             );
-            assert!(start.elapsed() < Duration::from_secs(2));
+            // The curves already running stop with the interruption flag: the return is
+            // prompt, however slow the machine is to run the curves before.
+            let latency = latency.unwrap();
+            assert!(latency < Duration::from_secs(1), "{latency:?}");
             assert_eq!(result.error, Some(Error::Interrupted));
             check_partial(&n, &result);
             assert_eq!(events, all[..events.len()]);

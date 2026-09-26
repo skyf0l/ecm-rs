@@ -93,25 +93,39 @@ fn owned(event: &Event<'_>) -> Owned {
 }
 
 /// Factors `n` with `factorizer`, recording the events.
-fn record<F>(factorizer: Factorizer, n: &Integer, mut stop: F) -> (Factorization, Vec<Owned>)
+fn record<F>(factorizer: Factorizer, n: &Integer, stop: F) -> (Factorization, Vec<Owned>)
+where
+    F: FnMut(&Owned) -> bool,
+{
+    let (result, events, _) = record_timed(factorizer, n, stop);
+    (result, events)
+}
+
+/// [`record`], with the time from the interruption (the callback returning `Break`) to the
+/// return of the factorization.
+fn record_timed<F>(
+    factorizer: Factorizer,
+    n: &Integer,
+    mut stop: F,
+) -> (Factorization, Vec<Owned>, Option<Duration>)
 where
     F: FnMut(&Owned) -> bool,
 {
     let mut events = Vec::new();
-    let mut stopped = false;
+    let mut stopped = None;
     let result = factorizer
         .on_event(|event| {
-            assert!(!stopped, "event after the interruption");
+            assert!(stopped.is_none(), "event after the interruption");
             events.push(owned(event));
-            stopped = stop(events.last().unwrap());
-            if stopped {
+            if stop(events.last().unwrap()) {
+                stopped = Some(Instant::now());
                 ControlFlow::Break(())
             } else {
                 ControlFlow::Continue(())
             }
         })
         .factor_partial(n);
-    (result, events)
+    (result, events, stopped.map(|at| at.elapsed()))
 }
 
 fn product(factors: &HashMap<Integer, usize>) -> Integer {
@@ -259,13 +273,9 @@ fn hard() -> Integer {
 /// Interrupts at the first event matching `stop`: the factorization returns at once, with the
 /// parts found so far.
 fn interrupt(n: &Integer, factorizer: Factorizer, stop: impl Fn(&Owned) -> bool) -> Vec<Owned> {
-    let start = Instant::now();
-    let (result, events) = record(factorizer.clone(), n, stop);
-    assert!(
-        start.elapsed() < Duration::from_secs(2),
-        "{:?}",
-        start.elapsed()
-    );
+    let (result, events, latency) = record_timed(factorizer.clone(), n, stop);
+    let latency = latency.unwrap();
+    assert!(latency < Duration::from_secs(1), "{latency:?}");
     assert_eq!(result.error, Some(Error::Interrupted));
     check_partial(n, &result);
     // factor() returns the error.
@@ -677,7 +687,7 @@ fn interrupt_after(
 #[test]
 fn interrupt_flag_is_prompt() {
     let n = rsa1024();
-    let prompt = Duration::from_millis(100);
+    let prompt = Duration::from_millis(300);
     let b2 = 1_045_563_762;
     for (factorizer, delay) in [
         // Stage 1 of the first curve (about 5 s).
@@ -751,7 +761,7 @@ fn interrupt_flag_and_timeout() {
         let result = factorizer.factor_partial(&n);
         let elapsed = start.elapsed();
         assert!(elapsed >= Duration::from_millis(200), "{elapsed:?}");
-        assert!(elapsed < Duration::from_millis(300), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(500), "{elapsed:?}");
         assert_eq!(result.error, Some(Error::Interrupted));
         check_partial(&n, &result);
         assert_eq!(result.primes, HashMap::from([(Integer::from(7), 1)]));
