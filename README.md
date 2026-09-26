@@ -1,12 +1,11 @@
 # ecm-rs
 
-[![CI](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/skyf0l/ecm-rs/actions/workflows/ci.yml)
-[![Crate.io](https://img.shields.io/crates/v/ecm.svg)](https://crates.io/crates/ecm)
-[![Codecov](https://codecov.io/gh/skyf0l/ecm-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/skyf0l/ecm-rs)
+[![crates.io](https://img.shields.io/crates/v/ecm.svg)](https://crates.io/crates/ecm)
+[![docs.rs](https://img.shields.io/docsrs/ecm)](https://docs.rs/ecm)
+[![MSRV](https://img.shields.io/crates/msrv/ecm)](https://crates.io/crates/ecm)
+[![License](https://img.shields.io/crates/l/ecm)](#license)
 
-Lenstra's Elliptic Curve Factorization Implementation with Big Integers.
-
-Based on [rug](https://crates.io/crates/rug), it can use [arbitrary-precision numbers (aka BigNum)](https://en.wikipedia.org/wiki/Arbitrary-precision_arithmetic).
+Fast integer factorization with Lenstra's elliptic curve method (ECM), in Rust, following [GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm) and built on [rug](https://crates.io/crates/rug) (GMP) for arbitrary-precision integers.
 
 ## Usage
 
@@ -249,7 +248,7 @@ authors.
 This library is free software: you can redistribute it and/or modify it under the terms of the
 GNU Lesser General Public License as published by the Free Software Foundation, either version 3
 of the License, or (at your option) any later version. See [COPYING.LESSER](COPYING.LESSER) and
-[COPYING](COPYING).
+[COPYING](./COPYING).
 
 Versions up to 1.0.2 were released under MIT OR Apache-2.0 and remain available under those
 terms.

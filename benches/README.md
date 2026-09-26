@@ -1,16 +1,16 @@
 # Benchmarks
 
-ECM run time is `cost per curve × curves until a factor is found`, and the second term is
+ECM run time is `cost per curve x curves until a factor is found`, and the second term is
 random. So these three measures are kept separate:
 
 | What | Where | Measure | CI |
 |---|---|---|---|
-| Cost: modular multiplication/squaring per limb count, stage 1 / stage 2 of one curve, one complete curve at the `success_rate` bounds, setup (stage 2 plan, stage 1 multiplier, P-1 stage 1) | `ops.rs` | Instruction counts (Valgrind), deterministic | ✅ |
-| Driver overhead: complete factorizations of small README numbers, over several seeds | `e2e.rs` | Instruction counts (Valgrind), deterministic | ✅ |
-| Effectiveness: expected curves to find a 15/20/25-digit factor | `examples/success_rate.rs` | Curves tried / factors found, deterministic | ✅ |
-| Expected cost to find a factor: expected curves × instructions per curve (`ops::curve::one_curve`) | CI report | Derived | ✅ |
-| Stage 1 / stage 2 of one curve at 256 and 1024 bits, `B1` up to 1M | `walltime.rs` | Wall-clock time (criterion) | ❌ too noisy on shared runners |
-| Same rows, side by side with GMP-ECM | `scripts/compare_gmp_ecm.sh` (`examples/per_curve.rs`) | Wall-clock time | ❌ |
+| Cost: modular multiplication/squaring per limb count, stage 1 / stage 2 of one curve, one complete curve at the `success_rate` bounds, setup (stage 2 plan, stage 1 multiplier, P-1 stage 1) | `ops.rs` | Instruction counts (Valgrind), deterministic | yes |
+| Driver overhead: complete factorizations of small README numbers, over several seeds | `e2e.rs` | Instruction counts (Valgrind), deterministic | yes |
+| Effectiveness: expected curves to find a 15/20/25-digit factor | `examples/success_rate.rs` | Curves tried / factors found, deterministic | yes |
+| Expected cost to find a factor: expected curves x instructions per curve (`ops::curve::one_curve`) | CI report | Derived | yes |
+| Stage 1 / stage 2 of one curve at 256 and 1024 bits, `B1` up to 1M | `walltime.rs` | Wall-clock time (criterion) | no, too noisy on shared runners |
+| Same rows, side by side with GMP-ECM | `scripts/compare_gmp_ecm.sh` (`examples/per_curve.rs`) | Wall-clock time | no |
 
 `ops.rs` groups:
 
@@ -82,7 +82,7 @@ PROFILE=bench-lto scripts/compare_gmp_ecm.sh path/to/ecm
   job fails if an instruction count grows by more than 2%.
 - On pull requests, one comment compares the PR with its base branch, worst changes first
   (updated on each push), and adds the expected cost to find a factor: expected curves
-  (`success_rate`) × instructions per curve (`one_curve`), for the PR and its base branch.
+  (`success_rate`) x instructions per curve (`one_curve`), for the PR and its base branch.
 - The benchmarks are built without debug info in CI (`CARGO_PROFILE_BENCH_DEBUG=false`): half
   the build time, same instruction counts.
 - On pushes to `main`, results are stored on the `gh-pages` branch by

@@ -2,7 +2,7 @@
 //! given size, and the expected number of curves to find it.
 //!
 //! This complements the instruction-count benchmarks: expected time to find a factor is
-//! roughly `cost per curve × expected curves`. A change can make curves cheaper but less
+//! roughly `cost per curve x expected curves`. A change can make curves cheaper but less
 //! effective (or the opposite), and only both numbers together tell if it is an improvement.
 //!
 //! Everything is deterministic (fixed numbers and `sigma` values), so results only change

@@ -17,5 +17,5 @@ if [ -f expected_cost.md ]; then
   cat expected_cost.md
   echo
 fi
-echo "<sub>[Full results]($RUN_URL) · Instruction counts are exact (Valgrind); estimated" \
+echo "<sub>[Full results]($RUN_URL) | Instruction counts are exact (Valgrind); estimated" \
   "cycles weight memory accesses with a simulated cache.</sub>"
