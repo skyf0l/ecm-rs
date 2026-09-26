@@ -32,6 +32,9 @@ enum Owned {
     Curve(Integer, Param, Integer, usize),
     Factor(Integer, Integer, Method),
     Prime(Integer, usize),
+    Siqs(Integer, u32, usize, usize, u64, usize),
+    SiqsRelations(Integer, usize, usize, usize, usize),
+    SiqsMatrix(Integer, usize, usize, usize),
 }
 
 fn owned(event: &Event<'_>) -> Owned {
@@ -88,6 +91,45 @@ fn owned(event: &Event<'_>) -> Owned {
             n, factor, method, ..
         } => Owned::Factor(n.clone(), factor.clone(), method),
         Event::Prime { p, exponent, .. } => Owned::Prime(p.clone(), exponent),
+        Event::Siqs {
+            n,
+            multiplier,
+            factor_base,
+            interval,
+            large_prime_bound,
+            needed,
+            ..
+        } => Owned::Siqs(
+            n.clone(),
+            multiplier,
+            factor_base,
+            interval,
+            large_prime_bound,
+            needed,
+        ),
+        Event::SiqsRelations {
+            n,
+            full,
+            combined,
+            needed,
+            polynomials,
+            elapsed,
+            ..
+        } => {
+            assert!(elapsed > Duration::ZERO);
+            Owned::SiqsRelations(n.clone(), full, combined, needed, polynomials)
+        }
+        Event::SiqsMatrix {
+            n,
+            rows,
+            columns,
+            dependencies,
+            duration,
+            ..
+        } => {
+            assert!(duration > Duration::ZERO);
+            Owned::SiqsMatrix(n.clone(), rows, columns, dependencies)
+        }
         _ => panic!("unknown event"),
     }
 }
@@ -181,6 +223,10 @@ fn check_events(n: &Integer, factors: &HashMap<Integer, usize>, events: &[Owned]
                 let power = Integer::from(1) << (k.unsigned_abs() as u32);
                 let form = if *k > 0 { power + 1u32 } else { power - 1u32 };
                 assert!(form.is_divisible(m));
+            }
+            Owned::Siqs(m, ..) | Owned::SiqsRelations(m, ..) | Owned::SiqsMatrix(m, ..) => {
+                assert!(n.is_divisible(m));
+                level = None;
             }
             Owned::TrialDivision(..) => {}
         }
@@ -901,4 +947,129 @@ fn base2() {
             "{algorithm}"
         );
     }
+}
+
+/// A product of two random primes of `digits / 2` digits (and the rest), of `digits` digits.
+fn balanced(digits: u32, seed: u32) -> Integer {
+    let mut rand = rug::rand::RandState::new();
+    rand.seed(&Integer::from(seed));
+    loop {
+        let low = Integer::from(10).pow(digits / 2 - 1);
+        let p = (Integer::from(low.random_below_ref(&mut rand)) * 9u32 + &low).next_prime();
+        let low = Integer::from(10).pow(digits - digits / 2 - 1);
+        let q = (Integer::from(low.random_below_ref(&mut rand)) * 9u32 + &low).next_prime();
+        let n = p * q;
+        if n.to_string().len() == digits as usize {
+            return n;
+        }
+    }
+}
+
+#[test]
+fn siqs_events() {
+    let n = balanced(48, 1);
+    let (result, events) = record(Factorizer::new(), &n, |_| false);
+    let factors = result.into_result().unwrap();
+    assert_eq!(product(&factors), n);
+    assert_eq!(factors.len(), 2);
+    // The first levels (factors of 10 digits, P-1 before), then SIQS.
+    let start = events
+        .iter()
+        .position(|e| matches!(e, Owned::Siqs(..)))
+        .expect("SIQS ran");
+    assert!(matches!(events[start - 1], Owned::Curve(..)));
+    let levels: Vec<_> = events[..start]
+        .iter()
+        .filter_map(|e| match e {
+            Owned::Level(_, digits, ..) => Some(*digits),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(levels, [Some(10)]);
+    let Owned::Siqs(m, multiplier, fb, interval, bound, needed) = &events[start] else {
+        unreachable!()
+    };
+    assert_eq!(*m, n);
+    assert!(*multiplier >= 1 && *fb > 100 && *interval >= 32768 && *bound > 1000);
+    assert!(*needed > *fb);
+    // Relations reported increasing, up to the needed ones, then the matrix and the factor.
+    let mut last = 0;
+    let mut i = start + 1;
+    while let Owned::SiqsRelations(m, full, combined, needed2, polynomials) = &events[i] {
+        assert_eq!((m, needed2), (&n, needed));
+        assert!(full + combined > last && *polynomials > 0);
+        last = full + combined;
+        i += 1;
+    }
+    assert!(last >= *needed && i > start + 10);
+    let Owned::SiqsMatrix(_, rows, columns, dependencies) = &events[i] else {
+        panic!("{:?}", events[i]);
+    };
+    assert!(columns > rows && *dependencies > 0);
+    let Owned::Factor(m, factor, Method::Siqs) = &events[i + 1] else {
+        panic!("{:?}", events[i + 1]);
+    };
+    assert_eq!(*m, n);
+    assert!(factors.contains_key(factor));
+    assert_eq!(events.len(), i + 4);
+
+    // Without SIQS: curves until the factor is found.
+    let n = int("1000000000000000000117") * int("10000000000000000000000013");
+    let (result, events) = record(Factorizer::new().siqs(false), &n, |_| false);
+    assert_eq!(product(&result.into_result().unwrap()), n);
+    assert!(!events.iter().any(|e| matches!(e, Owned::Siqs(..))));
+    let (result, events) = record(Factorizer::new(), &n, |_| false);
+    assert_eq!(product(&result.into_result().unwrap()), n);
+    assert!(events.iter().any(|e| matches!(e, Owned::Siqs(..))));
+}
+
+#[test]
+fn siqs_special_numbers() {
+    let large = Integer::from(10).pow(110).next_prime();
+    let three: Vec<Integer> = [15, 16, 17]
+        .iter()
+        .map(|&d| (Integer::from(10).pow(d) * 3u32).next_prime())
+        .collect();
+    let (a, b) = (balanced(44, 5), balanced(40, 6));
+    for n in [
+        // Small factors (trial division) and a composite for SIQS.
+        Integer::from(&a * 8u32) * 65_521u32,
+        // A perfect power of a composite for SIQS.
+        Integer::from(a.square_ref()),
+        Integer::from(&b * &b) * &b,
+        // The square of a prime times a prime (not a perfect power).
+        Integer::from(three[0].square_ref()) * &three[2],
+        // A factor found by the curves before SIQS, and a composite for SIQS.
+        Integer::from(&b * 1_000_000_000_039u64),
+        // Too large for SIQS: curves.
+        Integer::from(&large * 100_000_000_000_031u64),
+    ] {
+        for threads in [1, 3] {
+            let (result, events) = record(Factorizer::new().threads(threads), &n, |_| false);
+            let factors = result.into_result().unwrap_or_else(|e| panic!("{n}: {e}"));
+            assert_eq!(product(&factors), n);
+            for p in factors.keys() {
+                assert!(p.is_probably_prime(30) != rug::integer::IsPrime::No, "{p}");
+            }
+            if n.significant_bits() > 400 {
+                assert!(!events.iter().any(|e| matches!(e, Owned::Siqs(..))));
+            }
+        }
+    }
+    // With three primes of 20 digits, SIQS runs once: its parts split the cofactor.
+    let n: Integer = [19, 19, 19]
+        .iter()
+        .zip([1u32, 3, 7])
+        .map(|(&d, k)| (Integer::from(10).pow(d) * k).next_prime())
+        .product();
+    let (_, events) = record(Factorizer::new(), &n, |_| false);
+    let runs = events
+        .iter()
+        .filter(|e| matches!(e, Owned::Siqs(..)))
+        .count();
+    let splits = events
+        .iter()
+        .filter(|e| matches!(e, Owned::Factor(_, _, Method::Siqs)))
+        .count();
+    assert_eq!((runs, splits), (1, 2), "{events:?}");
 }

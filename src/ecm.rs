@@ -107,7 +107,7 @@ pub fn ecm_one_factor(
         Base2Mode::Auto,
         rgen,
         (&mut NoEvents, Stop::NEVER),
-        1,
+        (1, false),
     )
     .find_one(n, false)
 }
