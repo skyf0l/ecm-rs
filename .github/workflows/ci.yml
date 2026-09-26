@@ -89,29 +89,6 @@ jobs:
     - name: Test
       run: cargo nextest run --all-features
 
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-    - uses: actions/checkout@v7
-    - uses: dtolnay/rust-toolchain@nightly
-    - uses: swatinem/rust-cache@v2
-    - uses: taiki-e/install-action@cargo-nextest
-    - uses: taiki-e/install-action@cargo-llvm-cov
-
-    - name: Tests
-      run: cargo llvm-cov nextest --lcov --output-path lcov.info --all-features
-
-    - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v7
-      with:
-        files: lcov.info
-        flags: rust
-        fail_ci_if_error: true
-        token: ${{ secrets.CODECOV_TOKEN }}
-
   build:
     name: Build
     strategy:
