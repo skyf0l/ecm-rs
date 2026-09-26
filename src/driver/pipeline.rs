@@ -21,8 +21,9 @@ use rug::{Integer, rand::RandState};
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 /// How often the factorization thread checks the interruption flag of the
-/// [`crate::Factorizer`] while it waits for the workers, to stop them.
-const POLL: Duration = Duration::from_millis(1);
+/// [`crate::Factorizer`] while it waits for the workers, to stop them: short next to the
+/// latency of a stop inside a curve (a few milliseconds at 1024 bits), with few wake-ups.
+const POLL: Duration = Duration::from_millis(10);
 
 /// The parameter of a curve that panics (tests only).
 #[cfg(test)]
