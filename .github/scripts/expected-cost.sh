@@ -36,7 +36,7 @@ jq -n -r --slurpfile ir "$per_curve" --slurpfile pr "$success" --slurpfile base 
     else {value: (c.curves * ir), low: (c.low * ir), high: (c.high * ir), curves: c.curves, ir: ir}
     end;
   def cell: if . == null then "-"
-    else "\(.curves | one) × \(.ir | human) = **\(.value | human)**"
+    else "\(.curves | one) x \(.ir | human) = **\(.value | human)**"
       + " (\(.low | human)..\(if .high == infinite then "inf" else (.high | human) end))" end;
 
   ($ir[0] // []) as $ir
@@ -53,7 +53,7 @@ jq -n -r --slurpfile ir "$per_curve" --slurpfile pr "$success" --slurpfile base 
     if ($rows | length) == 0 then
       "_No results: needs the `one_curve` instruction counts and the curve success rate._"
     else
-      "Instructions to find a factor: expected curves (success rate) × instructions per curve"
+      "Instructions to find a factor: expected curves (success rate) x instructions per curve"
         + " (`one_curve`, one curve at the same bounds, on a number of the same size). 95%"
         + " intervals from the expected curves.\n",
       "| | Factor | Base | PR | Change |",

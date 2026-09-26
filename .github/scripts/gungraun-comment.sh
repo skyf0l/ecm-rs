@@ -18,7 +18,7 @@ find "${1:-target/gungraun}" -name summary.json -print0 |
       | if $v == 0 then "0%" elif $v > 0 then "+\($v)%" else "\($v)%" end;
     def change(m): (m.metrics.Both[0] | num) as $new | (m.metrics.Both[1] | num) as $old
       | {new: $new, old: $old, pct: (($new - $old) / $old * 100)};
-    def row: "| \(.name) | \(.ir.old | human) → \(.ir.new | human) | \(.ir.pct | pct) | \(.cycles.pct | pct) |";
+    def row: "| \(.name) | \(.ir.old | human) -> \(.ir.new | human) | \(.ir.pct | pct) | \(.cycles.pct | pct) |";
     def mark:
       if .ir.pct > $limit then "🔴"
       elif .ir.pct > $noise then "🟠"
@@ -45,7 +45,7 @@ find "${1:-target/gungraun}" -name summary.json -print0 |
         "_No baseline on the base branch: nothing to compare with._"
       else
         if ($worse + $better | length) > 0 then
-          "| | Benchmark | Instructions (base → PR) | Change | Est. cycles |",
+          "| | Benchmark | Instructions (base -> PR) | Change | Est. cycles |",
           "|---|---|---:|---:|---:|",
           (($worse + $better)[] | "| \(mark) " + row),
           ""
@@ -54,8 +54,8 @@ find "${1:-target/gungraun}" -name summary.json -print0 |
           "🆕 \($new | length) new: " + ($new | map("\(.name) (\(.ir | human))") | join(", ")) + "\n"
         else empty end,
         if ($same | length) > 0 then
-          "<details><summary>⚪ \($same | length) unchanged (within ±\($noise)%)</summary>\n",
-          "| Benchmark | Instructions (base → PR) | Change | Est. cycles |",
+          "<details><summary>⚪ \($same | length) unchanged (within +-\($noise)%)</summary>\n",
+          "| Benchmark | Instructions (base -> PR) | Change | Est. cycles |",
           "|---|---:|---:|---:|",
           ($same[] | row),
           "\n</details>"

@@ -184,6 +184,7 @@ fn usage_errors() {
         &["--base2", "5", "--nobase2", "15"],
         &["--threads", "-1", "15"],
         &["-t", "x", "15"],
+        &["-t", "1025", "15"],
     ] {
         let (code, out, err) = run(args);
         assert_eq!(code, 64, "{args:?}: {err}");
