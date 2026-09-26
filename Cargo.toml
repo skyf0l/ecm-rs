@@ -67,7 +67,7 @@ features = ["integer", "rand", "std"]
 [dev-dependencies]
 criterion = "0.8"
 # Must match the installed `gungraun-runner` version exactly.
-gungraun = "=0.19.4"
+gungraun = "=0.20.0"
 serde_json = "1.0.151"
 
 [lib]
