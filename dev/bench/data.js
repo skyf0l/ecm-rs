@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790505662456,
+  "lastUpdate": 1790505663690,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -3032,6 +3032,48 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/8c4c7c39b113da955cf54c453c58e84b977f0751"
         },
         "date": 1790504753045,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 27.247956403269754,
+            "unit": "curves",
+            "extra": "found 367/10000 curves (stage 1: 40, stage 2: 327, setup: 0)\n95% CI: 25..30 curves\nGMP-ECM model: 34 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 73.52941176470588,
+            "unit": "curves",
+            "extra": "found 136/10000 curves (stage 1: 12, stage 2: 124, setup: 0)\n95% CI: 62..87 curves\nGMP-ECM model: 86 curves"
+          },
+          {
+            "name": "expected curves, 25-digit factor (B1=50000, B2=12746592)",
+            "value": 238.0952380952381,
+            "unit": "curves",
+            "extra": "found 21/5000 curves (stage 1: 2, stage 2: 19, setup: 0)\n95% CI: 156..364 curves\nGMP-ECM model: 221 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "38b1b186d9408e8c18dc277f972cfa89324cacc9",
+          "message": "perf: one inversion in the setup of parametrization 2\n\nParametrization 2 inverts 16*Z*N^3*D once (x3 = N/D from the Jacobian multiple) instead of z, 2*(y - 3), 4*x3^3 and 4: the same a24, and on failure the gcd of the first of those the affine computation would have failed on. Parametrization 1 gets 2^-64 mod n by a Montgomery reduction instead of an inversion, Suyama's curves cube by multiplications instead of pow_mod, and stage 1 no longer inverts z = 1. New ops::setup::setup_curve rows (256, 1024 and 4096 bits).",
+          "timestamp": "2026-09-27T14:37:24+04:00",
+          "tree_id": "7a1eba9bfc7f42f76748cf7b58f4f025aa036f78",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/38b1b186d9408e8c18dc277f972cfa89324cacc9"
+        },
+        "date": 1790505663678,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
