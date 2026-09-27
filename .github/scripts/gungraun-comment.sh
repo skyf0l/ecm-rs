@@ -8,7 +8,8 @@ set -euo pipefail
 
 find "${1:-target/gungraun}" -name summary.json -print0 |
   xargs -0 jq -s -r --argjson limit "${2:-2}" --argjson noise "${3:-0.5}" --argjson big "${4:-10}" '
-    def num: .Int // .Float;
+    # Callgrind totals of a summary (schema 7, gungraun 0.20): {"Ir": {"values": {"new", "old"}}}.
+    def callgrind: first(.profiles[] | select(.tool == "Callgrind")) | .data.total.metrics;
     def human:
       if . >= 1e9 then "\(. / 1e9 * 100 | round / 100)G"
       elif . >= 1e6 then "\(. / 1e6 * 100 | round / 100)M"
@@ -16,7 +17,7 @@ find "${1:-target/gungraun}" -name summary.json -print0 |
       else tostring end;
     def pct: (. * 100 | round / 100) as $v
       | if $v == 0 then "0%" elif $v > 0 then "+\($v)%" else "\($v)%" end;
-    def change(m): (m.metrics.Both[0] | num) as $new | (m.metrics.Both[1] | num) as $old
+    def change(m): m.values.new as $new | m.values.old as $old
       | {new: $new, old: $old, pct: (($new - $old) / $old * 100)};
     def row: "| \(.name) | \(.ir.old | human) -> \(.ir.new | human) | \(.ir.pct | pct) | \(.cycles.pct | pct) |";
     def mark:
@@ -27,14 +28,14 @@ find "${1:-target/gungraun}" -name summary.json -print0 |
 
     # Benchmarks without a base value (added by the PR).
     ([ .[]
-      | .profiles[0].summaries.total.summary.Callgrind as $c
-      | select($c.Ir.metrics.Left)
-      | {name: "`\(.function_name)` \(.id)", ir: ($c.Ir.metrics.Left | num)} ]
+      | callgrind as $c
+      | select($c.Ir.values | has("new") and (has("old") | not))
+      | {name: "`\(.function_name)` \(.id)", ir: $c.Ir.values.new} ]
       | sort_by(.name)) as $new
 
     | [ .[]
-      | .profiles[0].summaries.total.summary.Callgrind as $c
-      | select($c.Ir.metrics.Both)
+      | callgrind as $c
+      | select($c.Ir.values | has("new") and has("old"))
       | {name: "`\(.function_name)` \(.id)", ir: change($c.Ir), cycles: change($c.EstimatedCycles)} ]
     | sort_by(-.ir.pct)
     | map(select(.ir.pct > $noise)) as $worse

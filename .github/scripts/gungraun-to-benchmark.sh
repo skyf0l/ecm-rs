@@ -10,6 +10,7 @@ find "${1:-target/gungraun}" -name summary.json -print0 |
     map({
       name: "\(.module_path)::\(.id)",
       unit: "instructions",
-      value: (.profiles[0].summaries.total.summary.Callgrind.Ir.metrics | (.Both[0] // .Left).Int)
+      # Callgrind instruction count (schema 7, gungraun 0.20): {"new": 123, "old": 456}.
+      value: first(.profiles[] | select(.tool == "Callgrind")).data.total.metrics.Ir.values.new
     })
     | sort_by(.name)'
