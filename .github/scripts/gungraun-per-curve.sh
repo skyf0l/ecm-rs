@@ -13,12 +13,8 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit
 fi
 jq -s '
-  def num: .Int // .Float;
-  map(.profiles[0].summaries.total.summary.Callgrind.Ir.metrics as $m
-    | select($m.Both or $m.Left)
-    | {
-        digits: (.id | ltrimstr("p") | tonumber),
-        pr: (($m.Both[0] // $m.Left) | num),
-        base: (if $m.Both then ($m.Both[1] | num) else null end)
-      })
+  # Callgrind instruction counts (schema 7, gungraun 0.20): {"new": 123, "old": 456}.
+  map(first(.profiles[] | select(.tool == "Callgrind")).data.total.metrics.Ir.values as $v
+    | select($v.new != null)
+    | {digits: (.id | ltrimstr("p") | tonumber), pr: $v.new, base: $v.old})
   | sort_by(.digits)' "${files[@]}"
