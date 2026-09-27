@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790456728998,
+  "lastUpdate": 1790476842982,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -1709,6 +1709,205 @@ window.BENCHMARK_DATA = {
           {
             "name": "ops::setup::setup_stage2_plan::bits_256_b2_1e9",
             "value": 6833438,
+            "unit": "instructions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "committer": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "distinct": true,
+          "id": "ed6710b57a6dd10b0f58105f757847438b82d394",
+          "message": "chore(deps): update rust crate gungraun to v0.20.0",
+          "timestamp": "2026-09-27T02:37:19Z",
+          "tree_id": "9d2f3ee4cfd4f9a99d26afd5596dd89de596a80c",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/ed6710b57a6dd10b0f58105f757847438b82d394"
+        },
+        "date": 1790476842263,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "e2e::e2e::factorize::digits_15",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_17",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_25",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::base2_fermat_1024",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_1",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_11",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_16",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_2",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_4",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_8",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::base2_fermat_1024",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_1",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_11",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_16",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_2",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_4",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_8",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::one_curve::p15",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::one_curve::p20",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::one_curve::p25",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::base2_fermat_1024",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_1024",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_128",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_256",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_512",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::square_bits_256",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::suyama_bits_256",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_pairs::bits_128_b2_1_9m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_pairs::bits_256_b2_12_7m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_poly::bits_1024_b2_12_7m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_poly::bits_512_b2_12_7m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_pm1_stage1::b1_40k",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_1m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage2_plan::bits_256_b2_1_9m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage2_plan::bits_256_b2_1e9",
+            "value": 0,
             "unit": "instructions"
           }
         ]
