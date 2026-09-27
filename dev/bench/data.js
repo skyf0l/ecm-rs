@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790476844213,
+  "lastUpdate": 1790503533735,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -1733,6 +1733,205 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/ed6710b57a6dd10b0f58105f757847438b82d394"
         },
         "date": 1790476842263,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "e2e::e2e::factorize::digits_15",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_17",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_25",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::base2_fermat_1024",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_1",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_11",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_16",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_2",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_4",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_8",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::base2_fermat_1024",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_1",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_11",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_16",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_2",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_4",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_8",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::one_curve::p15",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::one_curve::p20",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::one_curve::p25",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::base2_fermat_1024",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_1024",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_128",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_256",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_512",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::square_bits_256",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::suyama_bits_256",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_pairs::bits_128_b2_1_9m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_pairs::bits_256_b2_12_7m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_poly::bits_1024_b2_12_7m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_poly::bits_512_b2_12_7m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_pm1_stage1::b1_40k",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_1m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage2_plan::bits_256_b2_1_9m",
+            "value": 0,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage2_plan::bits_256_b2_1e9",
+            "value": 0,
+            "unit": "instructions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "eda1473a44f2e1ff459afcf15d75f6e1f1383eb7",
+          "message": "docs(bench): gungraun-runner 0.20.0, as the dev-dependency",
+          "timestamp": "2026-09-27T14:01:51+04:00",
+          "tree_id": "35f17671d8a68bf8bf1e1539ecfe04f871dcff8a",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/eda1473a44f2e1ff459afcf15d75f6e1f1383eb7"
+        },
+        "date": 1790503532657,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
