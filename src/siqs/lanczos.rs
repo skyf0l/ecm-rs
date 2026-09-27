@@ -312,6 +312,7 @@ fn kernel_128(rows: &[u128]) -> Vec<u128> {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_range_loop, reason = "matrix indices")]
 mod tests {
     use super::*;
 

@@ -208,7 +208,7 @@ impl FactorBase {
     }
 }
 
-/// Whether `n` is a probable prime (as [`crate::ecm`]'s test).
+/// Whether `n` is a probable prime (the test of the driver).
 pub(crate) fn is_prime(n: &Integer) -> bool {
     n.is_probably_prime(25) != IsPrime::No
 }
@@ -274,7 +274,7 @@ mod tests {
         for (i, &p) in fb.primes.iter().enumerate().skip(1) {
             let r = fb.sqrt[i];
             assert_eq!(mul_mod(r, r, p), kn.mod_u(p), "{p}");
-            assert_eq!(fb.divides_k[i], k % p == 0);
+            assert_eq!(fb.divides_k[i], k.is_multiple_of(p));
         }
         assert!(fb.primes.windows(2).all(|w| w[0] < w[1]));
         // A prime of the range dividing n.

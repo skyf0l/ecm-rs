@@ -166,6 +166,7 @@ impl Params {
         let t =
             ((digits - f64::from(lo.digits)) / f64::from(hi.digits - lo.digits)).clamp(0.0, 1.0);
         let lerp = |a: f64, b: f64| a + (b - a) * t;
+        #[cfg_attr(not(feature = "bench"), allow(unused_mut))]
         let mut params = Self {
             // Geometric interpolation of the factor base size.
             fb: ((lo.fb as f64).ln() * (1.0 - t) + (hi.fb as f64).ln() * t).exp() as usize,
@@ -304,6 +305,9 @@ pub(crate) struct Info {
     pub interval: usize,
     pub large_prime_bound: u64,
 }
+
+/// Rows, columns and dependencies of the matrix of the linear algebra.
+pub(crate) type MatrixSize = (usize, usize, usize);
 
 /// SplitMix64: a small generator for the choice of the `A` values.
 fn next_random(state: &mut u64) -> u64 {
@@ -612,10 +616,7 @@ impl Siqs {
     /// coprime factors whose product is `n`), `None` if no dependency split `n`, or `Err` if
     /// `stop` was requested. Also returns the size of the matrix and the number of
     /// dependencies.
-    pub(crate) fn finish(
-        &self,
-        stop: Stop<'_>,
-    ) -> Result<(Option<Vec<Integer>>, (usize, usize, usize)), ()> {
+    pub(crate) fn finish(&self, stop: Stop<'_>) -> Result<(Option<Vec<Integer>>, MatrixSize), ()> {
         let sh = &self.shared;
         let relations = self.relations();
         let columns: Vec<Vec<u32>> = relations
