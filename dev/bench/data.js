@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790504750462,
+  "lastUpdate": 1790504753062,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -2746,6 +2746,48 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/eda1473a44f2e1ff459afcf15d75f6e1f1383eb7"
         },
         "date": 1790503535182,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 27.247956403269754,
+            "unit": "curves",
+            "extra": "found 367/10000 curves (stage 1: 40, stage 2: 327, setup: 0)\n95% CI: 25..30 curves\nGMP-ECM model: 34 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 73.52941176470588,
+            "unit": "curves",
+            "extra": "found 136/10000 curves (stage 1: 12, stage 2: 124, setup: 0)\n95% CI: 62..87 curves\nGMP-ECM model: 86 curves"
+          },
+          {
+            "name": "expected curves, 25-digit factor (B1=50000, B2=12746592)",
+            "value": 238.0952380952381,
+            "unit": "curves",
+            "extra": "found 21/5000 curves (stage 1: 2, stage 2: 19, setup: 0)\n95% CI: 156..364 curves\nGMP-ECM model: 221 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "8c4c7c39b113da955cf54c453c58e84b977f0751",
+          "message": "ci: parse the gungraun 0.20 summaries\n\ngungraun 0.20 writes summary schema 7: the Callgrind totals moved from\n.profiles[0].summaries.total.summary.Callgrind.<metric>.metrics (Left/Both\nof {Int|Float}) to .data.total.metrics.<metric>.values of the Callgrind\nprofile, a {new, old} object of plain numbers. The old paths gave null, so\nevery PR comment said there was no baseline.",
+          "timestamp": "2026-09-27T14:20:04+04:00",
+          "tree_id": "8c48b279d6d6455870d434886d602aa855ab8943",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/8c4c7c39b113da955cf54c453c58e84b977f0751"
+        },
+        "date": 1790504753045,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
