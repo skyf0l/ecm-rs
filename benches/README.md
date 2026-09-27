@@ -31,7 +31,7 @@ Requires [Valgrind](https://valgrind.org/) and `gungraun-runner` with the same v
 `gungraun` dev-dependency:
 
 ```sh
-cargo install gungraun-runner --version 0.19.4 --locked
+cargo install gungraun-runner --version 0.20.0 --locked
 
 cargo bench --features bench --bench ops --bench e2e -- --parallel=auto
 # Only some benchmarks: FILE::GROUP::FUNCTION::ID wildcard
