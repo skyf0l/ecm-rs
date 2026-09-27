@@ -275,6 +275,11 @@ impl<H: EventHandler> Factorizer<H> {
     /// ([`Event::Curve`] events come in the order of the curves, once all the curves before
     /// them ran), but for their durations. Only the time taken differs, and what an
     /// interruption (by the callback, the flag or the timeout) leaves.
+    ///
+    /// The quadratic sieve ([`Factorizer::siqs`]) runs on the threads too: its batches of
+    /// polynomials are sieved in parallel and merged in the order of the search on one thread,
+    /// until the same number of relations (the batches after it are stopped): the same
+    /// relations, factors and events ([`Event::SiqsRelations`] after the same batches).
     #[must_use]
     pub const fn threads(mut self, threads: usize) -> Self {
         self.threads = threads;
