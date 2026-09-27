@@ -381,7 +381,7 @@ impl Ui {
                     self.siqs_tenth = tenth;
                     self.line(&format!(
                         "SIQS: {found}/{needed} relations ({full} full, {combined} from \
-                         partial ones), {polynomials} polynomials, {}",
+                         partial ones), {polynomials} polynomials, took {}",
                         human(elapsed)
                     ));
                 }
