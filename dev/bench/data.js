@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790504753062,
+  "lastUpdate": 1790505662456,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -2306,6 +2306,250 @@ window.BENCHMARK_DATA = {
           {
             "name": "ops::setup::setup_stage2_plan::bits_256_b2_1e9",
             "value": 6833199,
+            "unit": "instructions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "38b1b186d9408e8c18dc277f972cfa89324cacc9",
+          "message": "perf: one inversion in the setup of parametrization 2\n\nParametrization 2 inverts 16*Z*N^3*D once (x3 = N/D from the Jacobian multiple) instead of z, 2*(y - 3), 4*x3^3 and 4: the same a24, and on failure the gcd of the first of those the affine computation would have failed on. Parametrization 1 gets 2^-64 mod n by a Montgomery reduction instead of an inversion, Suyama's curves cube by multiplications instead of pow_mod, and stage 1 no longer inverts z = 1. New ops::setup::setup_curve rows (256, 1024 and 4096 bits).",
+          "timestamp": "2026-09-27T14:37:24+04:00",
+          "tree_id": "7a1eba9bfc7f42f76748cf7b58f4f025aa036f78",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/38b1b186d9408e8c18dc277f972cfa89324cacc9"
+        },
+        "date": 1790505661748,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "e2e::e2e::factorize::digits_15",
+            "value": 6948532,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_17",
+            "value": 6787173,
+            "unit": "instructions"
+          },
+          {
+            "name": "e2e::e2e::factorize::digits_25",
+            "value": 4453531,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::base2_fermat_1024",
+            "value": 23045188,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_1",
+            "value": 260526,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_11",
+            "value": 21195898,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_16",
+            "value": 41010220,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_2",
+            "value": 940571,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_4",
+            "value": 3020743,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_mul::limbs_8",
+            "value": 12541856,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::base2_fermat_1024",
+            "value": 16075186,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_1",
+            "value": 170526,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_11",
+            "value": 18049554,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_16",
+            "value": 33961186,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_2",
+            "value": 770568,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_4",
+            "value": 2410740,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::arith::arith_sqr::limbs_8",
+            "value": 10261855,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::one_curve::p15",
+            "value": 8099847,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::one_curve::p20",
+            "value": 83968336,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::one_curve::p25",
+            "value": 394221283,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::base2_fermat_1024",
+            "value": 313883777,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_1024",
+            "value": 547648112,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_128",
+            "value": 14974576,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_256",
+            "value": 45130693,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::bits_512",
+            "value": 174524423,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::square_bits_256",
+            "value": 41747817,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage1_b1_11k::suyama_bits_256",
+            "value": 49093954,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_pairs::bits_128_b2_1_9m",
+            "value": 13074619,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_pairs::bits_256_b2_12_7m",
+            "value": 220858183,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_poly::bits_1024_b2_12_7m",
+            "value": 1342281720,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::curve::stage2_poly::bits_512_b2_12_7m",
+            "value": 563671918,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_curve::batch2_bits_1024",
+            "value": 1073883,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_curve::batch2_bits_256",
+            "value": 103739,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_curve::batch2_bits_4096",
+            "value": 11072271,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_curve::square_bits_1024",
+            "value": 3491,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_curve::square_bits_256",
+            "value": 2710,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_curve::square_bits_4096",
+            "value": 4664,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_curve::suyama_bits_1024",
+            "value": 21742,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_curve::suyama_bits_256",
+            "value": 14025,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_curve::suyama_bits_4096",
+            "value": 78231,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_pm1_stage1::b1_40k",
+            "value": 25380648,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage1_multiplier::b1_1m",
+            "value": 149881363,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage2_plan::bits_256_b2_1_9m",
+            "value": 19901098,
+            "unit": "instructions"
+          },
+          {
+            "name": "ops::setup::setup_stage2_plan::bits_256_b2_1e9",
+            "value": 6832992,
             "unit": "instructions"
           }
         ]
