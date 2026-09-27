@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790521907355,
+  "lastUpdate": 1790521908813,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -3353,6 +3353,48 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/38b1b186d9408e8c18dc277f972cfa89324cacc9"
         },
         "date": 1790505663678,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 27.247956403269754,
+            "unit": "curves",
+            "extra": "found 367/10000 curves (stage 1: 40, stage 2: 327, setup: 0)\n95% CI: 25..30 curves\nGMP-ECM model: 34 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 73.52941176470588,
+            "unit": "curves",
+            "extra": "found 136/10000 curves (stage 1: 12, stage 2: 124, setup: 0)\n95% CI: 62..87 curves\nGMP-ECM model: 86 curves"
+          },
+          {
+            "name": "expected curves, 25-digit factor (B1=50000, B2=12746592)",
+            "value": 238.0952380952381,
+            "unit": "curves",
+            "extra": "found 21/5000 curves (stage 1: 2, stage 2: 19, setup: 0)\n95% CI: 156..364 curves\nGMP-ECM model: 221 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "05a25e1b1349a54bde3e727b9071be4044a4de21",
+          "message": "feat: Edwards curves with torsion Z/12 (--param 12)\n\nOpt-in Param::Edwards12: EECM-MPFQ's Edwards form of Montgomery's Z/12 family, from sigma*(-2, -4) on y^2 = x^3 - 12x (one inversion in the setup). Stage 1 runs on the Edwards curve in extended coordinates with a signed sliding window (3M + 4S per doubling, 7M per addition of a normalized precomputed point, table bounded to 256 KiB), then maps the point to the equivalent Montgomery curve (a24 = 1/(1 - d)) for stage 2. About 13% fewer instructions in stage 1 than parametrization 2 and 7 to 9% fewer expected curves: about 15% less expected cost to find a 15 to 25-digit factor. The default stays GMP-ECM's parametrization 2.",
+          "timestamp": "2026-09-27T19:07:01+04:00",
+          "tree_id": "3d73e300bb27d83c2bd4ce11f2b7e83a966f8d47",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/05a25e1b1349a54bde3e727b9071be4044a4de21"
+        },
+        "date": 1790521908797,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
