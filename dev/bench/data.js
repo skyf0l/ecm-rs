@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790570956252,
+  "lastUpdate": 1790570958150,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -3729,6 +3729,48 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/05a25e1b1349a54bde3e727b9071be4044a4de21"
         },
         "date": 1790521908797,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 27.247956403269754,
+            "unit": "curves",
+            "extra": "found 367/10000 curves (stage 1: 40, stage 2: 327, setup: 0)\n95% CI: 25..30 curves\nGMP-ECM model: 34 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 73.52941176470588,
+            "unit": "curves",
+            "extra": "found 136/10000 curves (stage 1: 12, stage 2: 124, setup: 0)\n95% CI: 62..87 curves\nGMP-ECM model: 86 curves"
+          },
+          {
+            "name": "expected curves, 25-digit factor (B1=50000, B2=12746592)",
+            "value": 238.0952380952381,
+            "unit": "curves",
+            "extra": "found 21/5000 curves (stage 1: 2, stage 2: 19, setup: 0)\n95% CI: 156..364 curves\nGMP-ECM model: 221 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "committer": {
+            "email": "59019720+skyf0l@users.noreply.github.com",
+            "name": "Skyf0l",
+            "username": "skyf0l"
+          },
+          "distinct": true,
+          "id": "d7f667bcfe6809af287c882862215bea727af029",
+          "message": "docs: Montgomery arithmetic on limb vectors above 1024 bits",
+          "timestamp": "2026-09-28T08:43:38+04:00",
+          "tree_id": "1d1d193cbaa85de841ac135904290b7f21c52176",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/d7f667bcfe6809af287c882862215bea727af029"
+        },
+        "date": 1790570958136,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
