@@ -9,6 +9,9 @@
 //! number with several seeds and measures the total. Results are checked: a wrong factorization
 //! makes the benchmark fail instead of reporting a fake speedup.
 //!
+//! `siqs` factors a 45-digit product of two primes of 22 and 23 digits: the first level of
+//! curves, then the quadratic sieve (deterministic, the seed only draws its polynomials).
+//!
 //! Run with `cargo bench --features bench --bench e2e` (requires Valgrind and `gungraun-runner`).
 
 use ecm::Factorizer;
@@ -50,6 +53,12 @@ fn factorize(input: (&str, u64)) -> Vec<HashMap<Integer, usize>> {
     black_box(factor_with_seeds(input.0, input.1))
 }
 
-library_benchmark_group!(name = e2e, benchmarks = [factorize]);
+#[library_benchmark]
+#[bench::digits_45(("634702613405249138026257788964956391886599881", 1))]
+fn siqs(input: (&str, u64)) -> Vec<HashMap<Integer, usize>> {
+    black_box(factor_with_seeds(input.0, input.1))
+}
+
+library_benchmark_group!(name = e2e, benchmarks = [factorize, siqs]);
 
 main!(library_benchmark_groups = e2e);

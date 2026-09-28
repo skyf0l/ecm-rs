@@ -94,6 +94,7 @@ pub struct Factorizer<H = NoEvents> {
     interrupt: Option<Arc<AtomicBool>>,
     timeout: Option<Duration>,
     threads: usize,
+    siqs: bool,
     handler: H,
 }
 
@@ -121,6 +122,7 @@ impl Factorizer {
             interrupt: None,
             timeout: None,
             threads: 1,
+            siqs: true,
             handler: NoEvents,
         }
     }
@@ -273,9 +275,34 @@ impl<H: EventHandler> Factorizer<H> {
     /// ([`Event::Curve`] events come in the order of the curves, once all the curves before
     /// them ran), but for their durations. Only the time taken differs, and what an
     /// interruption (by the callback, the flag or the timeout) leaves.
+    ///
+    /// The quadratic sieve ([`Factorizer::siqs`]) runs on the threads too: its batches of
+    /// polynomials are sieved in parallel and merged in the order of the search on one thread,
+    /// until the same number of relations (the batches after it are stopped): the same
+    /// relations, factors and events ([`Event::SiqsRelations`] after the same batches).
     #[must_use]
     pub const fn threads(mut self, threads: usize) -> Self {
         self.threads = threads;
+        self
+    }
+
+    /// Whether the composites of 40 to 100 digits are factored by the self-initializing
+    /// quadratic sieve (SIQS) once the curves searched their factors up to about 4/13 of their
+    /// digits (default: `true`; with [`Algorithm::Ecm`] and the bounds by factor size only).
+    ///
+    /// The curves find a factor in a time depending on its size, SIQS in a time depending on
+    /// the size of the number: the curves are much faster for the small factors, SIQS for the
+    /// numbers without one (a 60-digit product of two 30-digit primes: about a second instead
+    /// of minutes). With `false`, the curves run until a factor is found, as with fixed
+    /// bounds.
+    ///
+    /// SIQS is deterministic (its polynomials are drawn from [`Factorizer::seed`]) and runs on
+    /// [`Factorizer::threads`] too, with the same results: its polynomials are sieved in
+    /// batches, merged in a fixed order until enough relations. It is interrupted as the
+    /// curves are, within a few milliseconds.
+    #[must_use]
+    pub const fn siqs(mut self, siqs: bool) -> Self {
+        self.siqs = siqs;
         self
     }
 
@@ -303,6 +330,7 @@ impl<H: EventHandler> Factorizer<H> {
             interrupt: self.interrupt,
             timeout: self.timeout,
             threads: self.threads,
+            siqs: self.siqs,
             handler: f,
         }
     }
@@ -380,7 +408,7 @@ impl<H: EventHandler> Factorizer<H> {
             self.base2,
             rand,
             (&mut self.handler, stop),
-            threads,
+            (threads, self.siqs),
         )
     }
 
