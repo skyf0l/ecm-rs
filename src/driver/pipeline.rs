@@ -12,13 +12,17 @@
 //! result is the one of the sequential search.
 
 use super::{
-    Base2Form, Base2Mode, CurveOutcome, Engine, Error, Event, EventHandler, LEVELS, Method,
-    PM1_B1_RATIO, PlusMinus, PlusMinusRun, Progress, Stage2Plan, TOP_LEVEL_ROUNDS, ecm_prob,
+    Base2Form, Base2Mode, Batch, CurveOutcome, Engine, Error, Event, EventHandler, LEVELS, Method,
+    PM1_B1_RATIO, PlusMinus, PlusMinusRun, Progress, Siqs, Stage2Plan, TOP_LEVEL_ROUNDS, ecm_prob,
     pm1_b2, random_sigma, run_curve_timed, top_level,
 };
-use crate::{ecm::Param, parallel::Pool, stop::Stop};
+use crate::{ecm::Param, parallel::Pool, siqs, stop::Stop};
 use rug::{Integer, rand::RandState};
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 /// How often the factorization thread checks the interruption flag of the
 /// [`crate::Factorizer`] while it waits for the workers, to stop them: short next to the
@@ -35,6 +39,8 @@ pub(crate) enum Output {
     Curve(CurveOutcome, [Duration; 2]),
     /// A run of P-1 (or P+1), with the state after it.
     PlusMinus(Box<(PlusMinus, PlusMinusRun)>),
+    /// The relations of the polynomials of an `A` of SIQS (by its index), `None` if stopped.
+    Siqs(usize, Option<Box<Batch>>),
 }
 
 /// What the curves of a level share.
@@ -97,6 +103,9 @@ struct Steps<'r> {
     /// Fixed bounds and number of curves, if any.
     fixed: Option<(usize, usize, Option<usize>)>,
     top: usize,
+    /// The level where the steps end (excluded), and whether they reached it.
+    until: usize,
+    reached: bool,
     /// The progress of the sequential search (without P-1, see below).
     level: usize,
     rounds: usize,
@@ -151,19 +160,23 @@ impl<'r, H: EventHandler> Engine<'_, 'r, H> {
         self.threads > 1
     }
 
-    /// [`Engine::find`] with worker threads: with levels from `progress`, or with the fixed
-    /// bounds and number of curves `fixed` (curves only).
+    /// [`Engine::find`] with worker threads: with levels from `progress` up to the level
+    /// `until` (excluded: then `None`), or with the fixed bounds and number of curves `fixed`
+    /// (curves only).
     pub(super) fn find_parallel(
         &mut self,
         n: &Integer,
         progress: &mut Progress,
         base2: Option<Base2Form>,
         fixed: Option<(usize, usize, Option<usize>)>,
-    ) -> Result<(Integer, Method), Error> {
+        until: usize,
+    ) -> Result<Option<(Integer, Method)>, Error> {
         let top = top_level(n);
         let mut steps = Steps {
             fixed,
             top,
+            until,
+            reached: false,
             level: progress.level,
             rounds: progress.rounds,
             curves: if fixed.is_some() { 0 } else { progress.curves },
@@ -297,7 +310,7 @@ impl<'r, H: EventHandler> Engine<'_, 'r, H> {
                     let factor = match &output {
                         Some(Output::Curve(outcome, _)) => *outcome != CurveOutcome::Failed,
                         Some(Output::PlusMinus(run)) => run.1.found(n),
-                        None => false,
+                        Some(Output::Siqs(..)) | None => false,
                     };
                     if !factor {
                         self.events.interrupted = true;
@@ -349,7 +362,7 @@ impl<'r, H: EventHandler> Engine<'_, 'r, H> {
                         };
                         (progress.level, progress.rounds) = (entry.level, entry.rounds);
                         (progress.pm_level, progress.curves) = (entry.pm_level, entry.curves);
-                        break 'search Ok(found);
+                        break 'search Ok(Some(found));
                     }
                     (Step::PlusMinus { b1 }, Some(Output::PlusMinus(run))) => {
                         let (pm, run) = *run;
@@ -362,7 +375,7 @@ impl<'r, H: EventHandler> Engine<'_, 'r, H> {
                                 (progress.level, progress.rounds) = (entry.level, entry.rounds);
                                 (progress.pm_level, progress.curves) =
                                     (entry.pm_level, entry.curves);
-                                break 'search Ok(found);
+                                break 'search Ok(Some(found));
                             }
                             Err(error) => break 'search Err(error),
                         }
@@ -374,11 +387,16 @@ impl<'r, H: EventHandler> Engine<'_, 'r, H> {
             if !pool.busy() {
                 // Nothing runs: all the steps ran (or the search is interrupted).
                 debug_assert!(order.is_empty() || stopped);
-                break Err(if self.events.interrupted() {
-                    Error::Interrupted
-                } else {
-                    Error::ECMFailed
-                });
+                if self.events.interrupted() {
+                    break Err(Error::Interrupted);
+                }
+                if steps.reached {
+                    // All the steps before the level `until` ran: the progress there.
+                    (progress.level, progress.rounds) = (steps.level, steps.rounds);
+                    (progress.pm_level, progress.curves) = (steps.pm_level, 0);
+                    break Ok(None);
+                }
+                break Err(Error::ECMFailed);
             }
             let Some((worker, output)) = pool.recv(poll) else {
                 continue;
@@ -396,6 +414,7 @@ impl<'r, H: EventHandler> Engine<'_, 'r, H> {
                     chain = Some((!run.all(n)).then(|| pm.clone()));
                     run.found(n)
                 }
+                Output::Siqs(..) => unreachable!("no SIQS job"),
             };
             order[i].state = State::Done(Some(output));
             if factor && found.is_none_or(|found| i < found) {
@@ -423,6 +442,85 @@ impl<'r, H: EventHandler> Engine<'_, 'r, H> {
         result
     }
 
+    /// Sieves the polynomials of SIQS on the workers until `siqs` has enough relations: the
+    /// batches of polynomials (one `A` each) run in the order of the sequence of `A` values,
+    /// as soon as a worker is idle, and are merged in this order, until enough relations. The
+    /// batches after it are stopped, and their `A` values given back to `siqs`: the relations
+    /// (and the events) are the ones of a sieve on one thread.
+    pub(super) fn siqs_parallel(
+        &mut self,
+        n: &Integer,
+        siqs: &mut Siqs,
+        start: Option<Instant>,
+        reported: &mut usize,
+    ) -> Result<(), Error> {
+        let stop = self.events.stop;
+        let poll = stop.polls_flag().then_some(POLL);
+        let mut pool = self
+            .pool
+            .take()
+            .unwrap_or_else(|| Pool::new(self.threads, stop.deadline()));
+        // The A values submitted and not merged yet, and the batches done, by index.
+        let mut submitted = BTreeMap::new();
+        let mut done: BTreeMap<usize, Option<Box<Batch>>> = BTreeMap::new();
+        let ahead = 2 * self.threads;
+        let result = loop {
+            if stop.requested() {
+                self.events.interrupted = true;
+                break Err(Error::Interrupted);
+            }
+            // Merge the batches in order.
+            let mut outcome = None;
+            while let Some(entry) = submitted.first_entry() {
+                let index = *entry.key();
+                let Some(batch) = done.remove(&index) else {
+                    break;
+                };
+                entry.remove();
+                let Some(batch) = batch else {
+                    // Stopped: only when the search is interrupted.
+                    self.events.interrupted = true;
+                    outcome = Some(Err(Error::Interrupted));
+                    break;
+                };
+                if let Err(error) = self.siqs_merge(n, siqs, *batch, start, reported) {
+                    outcome = Some(Err(error));
+                    break;
+                }
+                if siqs.enough() {
+                    outcome = Some(Ok(()));
+                    break;
+                }
+            }
+            if let Some(outcome) = outcome {
+                break outcome;
+            }
+            // Start the next batches on the idle workers.
+            while submitted.len() < ahead {
+                let Some(worker) = pool.idle() else {
+                    break;
+                };
+                let a = siqs.next_a();
+                let (index, shared) = (a.index, Arc::clone(siqs.shared()));
+                submitted.insert(index, a.clone());
+                pool.submit(worker, move |stop: Stop<'_>| {
+                    Output::Siqs(index, siqs::sieve_a(&shared, &a, stop).map(Box::new))
+                });
+            }
+            if let Some((_, output)) = pool.recv(poll) {
+                let Output::Siqs(index, batch) = output else {
+                    unreachable!("only SIQS jobs");
+                };
+                done.insert(index, batch);
+            }
+        };
+        pool.stop_all();
+        self.pool = Some(pool);
+        // The A values not merged are the next ones.
+        siqs.give_back(submitted.into_values().collect());
+        result
+    }
+
     /// The next step of the sequential search, if any.
     fn next_step(
         &mut self,
@@ -432,6 +530,10 @@ impl<'r, H: EventHandler> Engine<'_, 'r, H> {
         base2: Option<Base2Form>,
     ) -> Option<Entry> {
         loop {
+            if steps.fixed.is_none() && steps.level >= steps.until {
+                steps.reached = true;
+                return None;
+            }
             let index = steps.level.min(steps.top);
             match &mut steps.phase {
                 Phase::PlusMinus => {
