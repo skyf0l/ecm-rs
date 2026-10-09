@@ -56,3 +56,30 @@ pub const BASE2_THRESHOLD: f64 = 1.4;
 
 /// GMP-ECM's `MOD_MINBASE2`: smallest `k` for the special reduction.
 pub const BASE2_MIN_EXPONENT: u32 = 16;
+
+/// Smallest number of limbs `k/64` from which the arithmetic modulo `2^k - 1` (`k` a multiple
+/// of 64) multiplies with GMP's wrap-around products (`mpn_mulmod_bnm1`, `mpn_sqrmod_bnm1`)
+/// instead of a full product and our fold.
+///
+/// Measured in instructions (Cachegrind, chains of 2000-5000 multiplications or squarings of
+/// cofactors of `2^k - 1`, GMP 6.3 tuned for Skylake), multiplications / squarings: 8% / 12%
+/// fewer at 8 to 17 limbs (GMP's own full product and addition, below its threshold of 15
+/// limbs or for an odd `k/64`), 21% / 14% at 16, 24% / 18% at 18, 35% / 34% at 32, 43% at 64,
+/// 45% at 128, 40-55% up to 2048 limbs (the gain depends on the powers of 2 dividing `k/64`:
+/// GMP splits `B^rn - 1` into `(B^(rn/2) - 1)(B^(rn/2) + 1)` while `rn` is even). Below 8
+/// limbs, the special reduction is rarely faster than Montgomery's.
+pub const BASE2_WRAP_LIMBS: usize = 8;
+
+/// Smallest number of limbs `k/64` from which the arithmetic modulo `2^k + 1` (`k` a multiple
+/// of 64) multiplies with GMP's `mpn_mul_fft` (modulo `2^k + 1` directly) instead of a full
+/// product and a fold.
+///
+/// Measured in instructions (Callgrind, GMP's products alone with GMP's best FFT size,
+/// `mpn_fft_best_k`, against `mpn_mul_n` and an addition): 1% slower at 256 limbs, 3% at 384,
+/// then faster: 14% at 448, 18% at 512, 32% at 1024, 45% at 2048 (GMP-ECM uses it from 512
+/// limbs, `2^32768 + 1`). In chains of 2000 operations modulo a cofactor of `2^32768 + 1`: 19%
+/// fewer instructions per multiplication, 12% per squaring. GMP's `mpn_mulmod_bknp1` (modulo `2^k + 1`
+/// for `k/64` a multiple of 3, 5, 7...) is slower up to 36 limbs and 2-25% faster above, but
+/// only helps numbers whose `k` is at least 1.5 times their size (a multiple of 3) or rare
+/// ones: unused.
+pub const BASE2_FFT_LIMBS: usize = 448;

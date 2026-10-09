@@ -651,6 +651,136 @@ pub(crate) mod mpn {
         /// `mpn_mulmod_bnm1` (internal, as `mpn_mulmod_bnm1`).
         #[link_name = "__gmpn_mulmod_bnm1_next_size"]
         fn mpn_mulmod_bnm1_next_size(n: gmp::size_t) -> gmp::size_t;
+
+        /// `mpn_sqrmod_bnm1(rp, rn, ap, an, tp)`: `{ap, an}^2 mod (B^rn - 1)` to the
+        /// `min(rn, 2*an)` limbs `rp`, for `rn/4 < an <= rn`, with the scratch space `tp` of
+        /// `2*rn + 3` limbs at most (`rn + 3`, plus `an` if `an > rn/2`, as `gmp-impl.h`'s
+        /// `mpn_sqrmod_bnm1_itch`): the squaring of `mpn_mulmod_bnm1`, with the same
+        /// representation of `0`.
+        ///
+        /// Internal to GMP like `mpn_mulmod_bnm1` (`__GMP_DECLSPEC` in `gmp-impl.h`), with this
+        /// signature since GMP 5.0; generic C code, so in every build.
+        #[link_name = "__gmpn_sqrmod_bnm1"]
+        fn mpn_sqrmod_bnm1(
+            rp: *mut gmp::limb_t,
+            rn: gmp::size_t,
+            ap: *const gmp::limb_t,
+            an: gmp::size_t,
+            tp: *mut gmp::limb_t,
+        );
+
+        /// `mpn_mul_fft(op, pl, n, nl, m, ml, k)`: `{n, nl} * {m, ml} mod (B^pl + 1)` by
+        /// Schoenhage-Strassen's FFT of `2^k` pieces, for `pl` a multiple of `2^k` (then
+        /// `mpn_fft_next_size(pl, k) = pl`, which it asserts) and `2*pl/2^k` well below `pl`
+        /// (`k >= 4`). Writes the `pl` limbs `op` and returns the limb `op[pl]` (`1` only for
+        /// the result `B^pl`): the result is below `B^pl + 1`. A squaring if `n == m` and
+        /// `nl == ml`. Its temporary space is allocated by GMP (`TMP_ALLOC`).
+        ///
+        /// Internal to GMP like `mpn_redc_1` (`__GMP_DECLSPEC` in `gmp-impl.h`), with this
+        /// signature since GMP 5 (GMP-ECM calls it for the Fermat numbers from `2^32768 +
+        /// 1`, `mpmod.c`); generic C code, so in every build.
+        #[link_name = "__gmpn_mul_fft"]
+        fn mpn_mul_fft(
+            op: *mut gmp::limb_t,
+            pl: gmp::size_t,
+            n: *const gmp::limb_t,
+            nl: gmp::size_t,
+            m: *const gmp::limb_t,
+            ml: gmp::size_t,
+            k: std::ffi::c_int,
+        ) -> gmp::limb_t;
+
+        /// `mpn_fft_best_k(n, sqr)`: the best `k` of `mpn_mul_fft` for `n` limbs, from GMP's
+        /// tuned tables (internal, as `mpn_mul_fft`).
+        #[link_name = "__gmpn_fft_best_k"]
+        fn mpn_fft_best_k(n: gmp::size_t, sqr: std::ffi::c_int) -> std::ffi::c_int;
+    }
+
+    /// `r = a^2 mod (2^(64*rn) - 1)`, `rn = r.len()`, for `rn >= a.len() >= 1`, with
+    /// [`mulmod_bnm1`]'s representation of `0`. `scratch` must have `2*rn + 4` limbs.
+    #[inline(always)]
+    pub fn sqrmod_bnm1(r: &mut [u64], a: &[u64], scratch: &mut [u64]) {
+        let rn = r.len();
+        assert!(ENABLED && rn >= a.len() && 4 * a.len() > rn && scratch.len() >= 2 * rn + 4);
+        // SAFETY: the limbs are 64 bits (ENABLED), the sizes are those mpn_sqrmod_bnm1 requires
+        // (checked above), the scratch space has at least the rn + 3 + an limbs it needs, and
+        // the result cannot overlap the operand or the scratch space (all borrowed).
+        unsafe {
+            mpn_sqrmod_bnm1(
+                r.as_mut_ptr().cast(),
+                rn as gmp::size_t,
+                a.as_ptr().cast(),
+                a.len() as gmp::size_t,
+                scratch.as_mut_ptr().cast(),
+            );
+        }
+        // Only min(rn, 2*an) limbs are written.
+        let written = rn.min(2 * a.len());
+        r[written..].fill(0);
+    }
+
+    /// [`mulmod_bnm1`] with operands of `rn` limbs and the scratch space of `2*rn + 4` limbs
+    /// given (no allocation).
+    #[inline(always)]
+    pub fn mulmod_bnm1_n(r: &mut [u64], a: &[u64], b: &[u64], scratch: &mut [u64]) {
+        let rn = r.len();
+        assert!(ENABLED && a.len() == rn && b.len() == rn && rn > 0 && scratch.len() >= 2 * rn + 4);
+        // SAFETY: as in `mulmod_bnm1` (an = bn = rn), with the 2rn + 4 limbs of scratch space.
+        unsafe {
+            mpn_mulmod_bnm1(
+                r.as_mut_ptr().cast(),
+                rn as gmp::size_t,
+                a.as_ptr().cast(),
+                rn as gmp::size_t,
+                b.as_ptr().cast(),
+                rn as gmp::size_t,
+                scratch.as_mut_ptr().cast(),
+            );
+        }
+    }
+
+    /// `r = a*b mod (2^(64*pl) + 1)` (`a^2` if `b` is `None`), `pl = r.len() - 1`, the limb
+    /// `r[pl]` set only for the result `2^(64*pl)`, by an FFT of `2^k` pieces: `pl` must be a
+    /// multiple of `2^k`, `k >= 4`.
+    pub fn mul_fft(r: &mut [u64], a: &[u64], b: Option<&[u64]>, k: u32) {
+        let pl = r.len() - 1;
+        let b = b.unwrap_or(a);
+        assert!(
+            ENABLED
+                && (4..=30).contains(&k)
+                && pl.is_multiple_of(1 << k)
+                && pl >> k >= 1
+                && !a.is_empty()
+                && !b.is_empty()
+        );
+        // SAFETY: the limbs are 64 bits (ENABLED), pl is a multiple of 2^k with k >= 4 (checked
+        // above: mpn_mul_fft asserts it, and 2*pl/2^k + O(1) < pl), the operands have their
+        // given lengths, and `r` cannot overlap them (borrowed mutably). A squaring passes the
+        // same pointer and length twice, which mpn_mul_fft detects.
+        unsafe {
+            r[pl] = mpn_mul_fft(
+                r.as_mut_ptr().cast(),
+                pl as gmp::size_t,
+                a.as_ptr().cast(),
+                a.len() as gmp::size_t,
+                b.as_ptr().cast(),
+                b.len() as gmp::size_t,
+                k as std::ffi::c_int,
+            ) as u64;
+        }
+    }
+
+    /// The `k` of [`mul_fft`] for `pl` limbs: GMP's best one (`mpn_fft_best_k`), lowered until
+    /// `2^k` divides `pl` (as `mpn_mulmod_bnm1` does), if still at least 4.
+    pub fn fft_k(pl: usize, sqr: bool) -> Option<u32> {
+        assert!(ENABLED && pl > 0);
+        // SAFETY: a pure function of its arguments (ENABLED: the library has it with this
+        // signature).
+        let best = unsafe { mpn_fft_best_k(pl as gmp::size_t, std::ffi::c_int::from(sqr)) };
+        let k = (4..=u32::try_from(best).ok()?.min(30))
+            .rev()
+            .find(|&k| pl.is_multiple_of(1 << k))?;
+        Some(k)
     }
 
     /// `r = a*b`, with `a.len() >= b.len() >= 1` and `r` of `a.len() + b.len()` limbs.

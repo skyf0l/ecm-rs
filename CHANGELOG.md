@@ -23,6 +23,11 @@
   GMP integers with a division per product: stage 1 takes 9 to 30% fewer instructions from
   1025 bits (no more jump from 1024 to 1025 bits), stage 2 10 to 20%, about as many as
   GMP-ECM's.
+- Special division with GMP's wrap-around products when `k` is a multiple of 64: modulo
+  `2^k - 1` from 512 bits (`mpn_mulmod_bnm1`, `mpn_sqrmod_bnm1`), modulo `2^k + 1` from 28672
+  bits (`mpn_mul_fft`, as GMP-ECM for the Fermat numbers), instead of a full product and a
+  fold: stage 1 takes 17% fewer instructions modulo `2^1024 - 1`, 33% modulo `2^2048 - 1`,
+  42-44% modulo `2^4096 - 1` and `2^8192 - 1`, 17% modulo `2^32768 + 1`.
 
 ## 2.0.0
 
