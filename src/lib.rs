@@ -20,6 +20,7 @@ mod poly;
 mod pp1;
 mod primes;
 mod rho;
+mod siqs;
 mod stage2;
 mod stage2_poly;
 mod stop;
@@ -44,5 +45,6 @@ pub mod bench {
     pub use crate::pm1::Pm1;
     pub use crate::pp1::Pp1;
     pub use crate::rho::{ecm_prob, pm1_prob, pp1_prob};
+    pub use crate::siqs::{Stats as SiqsStats, factor_stats as siqs_factor_stats};
     pub use crate::stage2::Stage2Plan;
 }
