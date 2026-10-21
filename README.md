@@ -155,7 +155,12 @@ The implementation started as a translation of sympy's, and now uses the techniq
   instead of a Montgomery reduction, when the measured costs say it is faster (from about 400
   bits with `k` close to their size, 770 bits with `k` up to 1.4 times). Stage 1 is 1.1 to 2.8
   times faster (2.4 times at 1024 bits, 2.6 at 2048 and 4096 bits: as fast as GMP-ECM's),
-  stage 2 up to 1.5 times (it stays modulo the number when that is cheaper).
+  stage 2 up to 1.5 times (it stays modulo the number when that is cheaper). When `k` is a
+  multiple of 64, GMP computes the products modulo `2^k +- 1` directly, without the full
+  product: from 512 bits for `2^k - 1` (`mpn_mulmod_bnm1`), from 28672 bits for `2^k + 1`
+  (`mpn_mul_fft`, as GMP-ECM for the Fermat numbers); stage 1 then takes another 17% fewer
+  instructions modulo `2^1024 - 1`, 33% modulo `2^2048 - 1`, 42% modulo `2^4096 - 1`, 17%
+  modulo `2^32768 + 1`.
   `Factorizer::base2` (`Base2Mode`) and `--base2 K`/`--nobase2` force it or turn it off.
 - GMP-ECM's curves with parametrization 2 (`-param 2`): small starting point, same torsion as
   Suyama's curves.

@@ -5,7 +5,12 @@
 //! their ratios matter, which vary much less from one machine to another. The polynomial
 //! costs mirror the operations of [`crate::poly`] one product at a time.
 
-use crate::{arith::mpn, base2::Base2Form, poly, stage2_poly::PolyPlan};
+use crate::{
+    arith::mpn,
+    base2::{Base2Form, Product},
+    poly,
+    stage2_poly::PolyPlan,
+};
 use std::collections::HashMap;
 
 /// Montgomery multiplication, by number of limbs (index 0 unused).
@@ -45,7 +50,9 @@ const LARGE_STEP_NS: [f64; 10] = [
     3852.0, 5142.0, 7091.0, 11699.0, 24377.0, 38778.0, 74236.0, 122712.0, 218019.0, 353342.0,
 ];
 
-/// [`LARGE_STEP_NS`] with the special reduction modulo `2^k +- 1`, for `k = 64*limbs - 7`.
+/// [`LARGE_STEP_NS`] with the special reduction modulo `2^k +- 1`, for `k = 64*limbs - 7`: a
+/// full product and a fold (the wrap-around products of the `k` multiple of 64 are
+/// [`product_ratio`] times cheaper).
 const LARGE_BASE2_STEP_NS: [f64; 10] = [
     1964.0, 2446.0, 3211.0, 4975.0, 9321.0, 14696.0, 27588.0, 43284.0, 79040.0, 122516.0,
 ];
@@ -69,14 +76,59 @@ fn large(ns: &[f64; 10], limbs: usize) -> f64 {
 /// faster by at least this factor.
 const BASE2_MARGIN: f64 = 0.9;
 
-/// Whether the arithmetic modulo `2^k +- 1` (`k` bits) is faster than the arithmetic modulo
-/// a number of `bits` bits: from the measured costs of the stage 1 steps with both, and
-/// always above [`crate::arith::MAX_LIMBS`] limbs without GMP's low-level functions (plain
-/// integers, whose division costs more than a product, while `k` is at most 1.4 times
-/// `bits`).
-pub(crate) fn base2_faster(bits: u32, k: u32) -> bool {
+/// Cost of a product modulo `2^k +- 1` computed by [`Product::Wrap`] or [`Product::Fft`],
+/// relative to a full product and a fold ([`Product::Fold`], `1`), by limbs of `2^k`: the
+/// averages of a multiplication and a squaring, in instructions (the measures of
+/// [`crate::config::BASE2_WRAP_LIMBS`] and [`crate::config::BASE2_FFT_LIMBS`]), interpolated
+/// on a log scale. The gain of the wrap-around products also depends on the powers of 2 that
+/// divide the number of limbs (GMP's recursion): the powers of 2 were measured.
+fn product_ratio(product: Product, limbs: usize) -> f64 {
+    const WRAP: [(f64, f64); 9] = [
+        (8.0, 0.90),
+        (16.0, 0.82),
+        (32.0, 0.66),
+        (64.0, 0.57),
+        (128.0, 0.55),
+        (256.0, 0.56),
+        (512.0, 0.62),
+        (1024.0, 0.58),
+        (2048.0, 0.46),
+    ];
+    const FFT: [(f64, f64); 4] = [(448.0, 0.86), (512.0, 0.84), (1024.0, 0.68), (2048.0, 0.56)];
+    let points: &[(f64, f64)] = match product {
+        Product::Fold => return 1.0,
+        Product::Wrap => &WRAP,
+        Product::Fft { .. } => &FFT,
+    };
+    let x = limbs as f64;
+    let last = points.len() - 1;
+    if x <= points[0].0 {
+        return points[0].1;
+    }
+    if x >= points[last].0 {
+        return points[last].1;
+    }
+    let i = points
+        .iter()
+        .rposition(|p| p.0 <= x)
+        .unwrap_or(0)
+        .min(last - 1);
+    let ((x0, y0), (x1, y1)) = (points[i], points[i + 1]);
+    y0 + (y1 - y0) * (x / x0).ln() / (x1 / x0).ln()
+}
+
+/// Share of the products in the cost of a stage 1 step modulo `2^k +- 1` above 16 limbs (the
+/// rest: additions, subtractions, multiplications by small constants).
+const BASE2_PRODUCT_SHARE: f64 = 0.85;
+
+/// Whether the arithmetic modulo `2^k +- 1` (the form) is faster than the arithmetic modulo
+/// a number of `bits` bits: from the measured costs of the stage 1 steps with both (with the
+/// wrap-around products of [`Product`] where they apply), and always above
+/// [`crate::arith::MAX_LIMBS`] limbs without GMP's low-level functions (plain integers, whose
+/// division costs more than a product, while `k` is at most 1.4 times `bits`).
+pub(crate) fn base2_faster(bits: u32, form: Base2Form) -> bool {
     let limbs = bits.div_ceil(64) as usize;
-    let base2 = k.div_ceil(64).max(1) as usize;
+    let base2 = form.k.div_ceil(64).max(1) as usize;
     let mont = if limbs < STEP_NS.len() {
         STEP_NS[limbs]
     } else if mpn::ENABLED {
@@ -89,6 +141,8 @@ pub(crate) fn base2_faster(bits: u32, k: u32) -> bool {
     } else {
         large(&LARGE_BASE2_STEP_NS, base2)
     };
+    let ratio = product_ratio(Product::of(form), base2);
+    let cost = cost * (1.0 - BASE2_PRODUCT_SHARE * (1.0 - ratio));
     cost < BASE2_MARGIN * mont
 }
 
@@ -161,12 +215,14 @@ impl Costs {
         let Some(form) = base2 else {
             return Self::new(bits);
         };
-        // A product (GMP's), then a reduction by additions and shifts.
+        // A product (GMP's), then a reduction by additions and shifts, or a wrap-around product
+        // (the accumulated products of the polynomials are full ones).
         let limbs = form.k.div_ceil(64) as usize;
         let product = Self::gmp((64 * limbs) as f64);
+        let wrapped = product * product_ratio(Product::of(form), limbs);
         Self {
             bits: form.k as usize + usize::from(form.plus),
-            mul: 1.2 * product + 25.0,
+            mul: 1.2 * wrapped + 25.0,
             macc: product + 10.0,
             redc: 20.0 + 2.0 * limbs as f64,
         }
@@ -439,9 +495,35 @@ mod tests {
         // The special reduction stays faster above 16 limbs, even with k at 1.4 times the
         // size of n (a product 1.4 times larger, but no Montgomery reduction).
         for bits in [1025, 1100, 1536, 2048, 3072, 4096, 8192, 16384, 40000] {
-            for k in [bits + 1, bits * 5 / 4, bits * 7 / 5] {
-                assert!(base2_faster(bits, k), "{bits} bits, k = {k}");
+            for k in [bits + 1, bits * 5 / 4, bits * 7 / 5, (bits + 64) & !63] {
+                for plus in [false, true] {
+                    let form = Base2Form { k, plus };
+                    assert!(base2_faster(bits, form), "{bits} bits, {form}");
+                }
             }
+        }
+    }
+
+    #[test]
+    fn wrap_around_costs() {
+        // The wrap-around products cost less than a full product and a fold, and a
+        // multiplication modulo 2^k +- 1 with them less than without (k one bit off).
+        for limbs in [1, 8, 12, 16, 17, 100, 448, 500, 1000, 5000] {
+            assert_eq!(product_ratio(Product::Fold, limbs), 1.0);
+            for product in [Product::Wrap, Product::Fft { mul: 4, sqr: 4 }] {
+                let ratio = product_ratio(product, limbs);
+                assert!(ratio > 0.4 && ratio < 1.0, "{product:?} {limbs}");
+            }
+        }
+        if !mpn::ENABLED {
+            return;
+        }
+        for (k, plus) in [(1024, false), (4096, false), (28672, true), (65536, true)] {
+            let bits = k as usize - 10;
+            let wrap = Costs::modulo(bits, Some(Base2Form { k, plus })).mul();
+            let fold = Costs::modulo(bits, Some(Base2Form { k: k - 1, plus })).mul();
+            assert!(wrap < 0.95 * fold, "{k} {plus}");
+            assert!(base2_faster(k - 10, Base2Form { k, plus }));
         }
     }
 
