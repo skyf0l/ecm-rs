@@ -20,6 +20,10 @@ random. So these three measures are kept separate:
   vectors of runtime length above 16 limbs, with GMP's `mpn_redc_1`, `mpn_redc_2` from 20
   limbs and the subquadratic `mpn_redc_n` from 52): shows inlining regressions and the 10/11,
   16/17, 19/20 and 51/52 limb switches.
+  `arith_base2`: 1000 multiplications or squarings with the special reduction modulo `2^4096 -
+  1` and `2^16384 - 1` (GMP's wrap-around products `mpn_mulmod_bnm1` and `mpn_sqrmod_bnm1`),
+  `2^16384 + 1` (a full product and a fold, below the FFT threshold) and `2^28672 + 1` (GMP's
+  `mpn_mul_fft`, at the threshold): shows the products modulo `2^k +- 1` and their switches.
 - `curve`: stage 1 (`B1 = 11000`) with the default curves (`-param 2`) at 128 to 2048 bits, and
   with `-param 1` and Suyama's at 256 bits, and the Edwards curves (`--param 12`) at 256 and
   1024 bits; stage 2 with the baby-step giant-step continuation (128 bits / `B2 = 1.9M`, 256
