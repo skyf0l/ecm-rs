@@ -6,6 +6,9 @@
 //! values out) is the one the arithmetic modulo `n` would give. A product `x = hi*2^k + lo` is
 //! reduced to `lo + hi` (`2^k = 1` modulo `2^k - 1`) or `lo - hi` (`2^k = -1` modulo `2^k + 1`),
 //! a shift and an addition: no Montgomery reduction, whose cost is that of a second product.
+//! When `k` is a multiple of 64, `M` is `B^rn +- 1` (`B = 2^64`) and GMP computes the product
+//! modulo `M` directly from 512 bits for `2^k - 1` (`mpn_mulmod_bnm1`) and 28672 bits for `2^k +
+//! 1` (`mpn_mul_fft`): see [`Product`].
 //!
 //! [`Base2Mode`] chooses when: [`Base2Form::detect`] recognizes the numbers that divide
 //! `2^k +- 1` for a `k` not much larger than their size, with GMP-ECM's rule.
@@ -16,7 +19,7 @@ use rug::{Integer, integer::Order};
 
 use crate::{
     arith::{Arith, PolyArith, adc, mac, mpn, mul_acc_limbs, reduce, sbb},
-    config::{BASE2_MIN_EXPONENT, BASE2_THRESHOLD},
+    config::{BASE2_FFT_LIMBS, BASE2_MIN_EXPONENT, BASE2_THRESHOLD, BASE2_WRAP_LIMBS},
     cost::base2_faster,
 };
 
@@ -118,7 +121,7 @@ impl Base2Form {
         let lo = f64::from(bits - 1);
         (form.k >= BASE2_MIN_EXPONENT
             && f64::from(form.k) <= BASE2_THRESHOLD * lo
-            && base2_faster(bits, form.k))
+            && base2_faster(bits, form))
         .then_some(form)
     }
 
@@ -158,12 +161,60 @@ impl fmt::Display for Base2Form {
     }
 }
 
+/// How [`Base2`] multiplies modulo `M = 2^k +- 1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Product {
+    /// The full product of the `k`-bit values (GMP's `mpn_mul_n` or `mpn_sqr`), then its
+    /// halves added or subtracted: any `k`.
+    Fold,
+    /// For `2^k - 1` with `k = 64*rn`, `rn` at least [`BASE2_WRAP_LIMBS`]: `M` is `B^rn - 1`
+    /// (`B = 2^64`), and GMP's `mpn_mulmod_bnm1` (`mpn_sqrmod_bnm1`) computes modulo `M`
+    /// directly, without the full product for an even `rn` from 15 limbs: it splits `B^rn - 1
+    /// = (B^(rn/2) - 1)(B^(rn/2) + 1)`, a product modulo each factor (recursively for the
+    /// first one), and the CRT. Below, or for an odd `rn`, its full product and addition still
+    /// beat our fold.
+    Wrap,
+    /// For `2^k + 1` with `k = 64*rn`, `rn` at least [`BASE2_FFT_LIMBS`]: `M` is `B^rn + 1`,
+    /// and GMP's `mpn_mul_fft` computes modulo `M` directly, by an FFT of `2^mul` pieces
+    /// (`2^sqr` for the squarings), as GMP-ECM does for the Fermat numbers from `2^32768 + 1`.
+    Fft { mul: u32, sqr: u32 },
+}
+
+impl Product {
+    /// How to multiply modulo `2^k +- 1`: see the variants (their gains were measured in
+    /// instructions, see [`BASE2_WRAP_LIMBS`] and [`BASE2_FFT_LIMBS`]). The wrap-around
+    /// products need `k` to be a multiple of 64: for another `k`, the smallest multiple of
+    /// `2^k +- 1` of the form `2^(64*m) +- 1` has `m = k/gcd(k, 64)` limbs (`k` limbs for an
+    /// odd `k`), far too large.
+    pub fn of(form: Base2Form) -> Self {
+        let k = form.k as usize;
+        if !mpn::ENABLED || !k.is_multiple_of(64) {
+            return Self::Fold;
+        }
+        let rn = k / 64;
+        if !form.plus {
+            if rn >= BASE2_WRAP_LIMBS {
+                return Self::Wrap;
+            }
+            return Self::Fold;
+        }
+        if rn >= BASE2_FFT_LIMBS {
+            if let (Some(mul), Some(sqr)) = (mpn::fft_k(rn, false), mpn::fft_k(rn, true)) {
+                return Self::Fft { mul, sqr };
+            }
+        }
+        Self::Fold
+    }
+}
+
 /// Arithmetic modulo `n` computed modulo `M = 2^k +- 1`, a multiple of `n`: residues are values
 /// in `[0, M]` for `2^k - 1`, in `[0, M)` for `2^k + 1`, on `limbs` limbs.
 ///
 /// A product (GMP's `mpn_mul_n` or `mpn_sqr`, on the limbs below `2^k`) is reduced by one
 /// addition or subtraction of its halves (see the module documentation), then at most one of
-/// `M`: about the cost of the product alone.
+/// `M`: about the cost of the product alone. For large `k` multiple of 64, GMP computes the
+/// product modulo `M` directly instead, in about 0.5 to 0.8 times the cost of the full
+/// product (see [`Product`]).
 #[derive(Debug)]
 pub struct Base2 {
     n: Integer,
@@ -174,6 +225,8 @@ pub struct Base2 {
     /// Limbs of the factors of a product: `ceil(k/64)`. One less than `limbs` for `2^k + 1`
     /// when `64` divides `k`: the top limb is then `0`, but for the residue `2^k = -1`.
     mul_limbs: usize,
+    /// How products are computed.
+    product: Product,
     /// The residue `0`, for negations.
     zero: Vec<u64>,
     /// Buffers: products, the chunks of the wide reductions, and the products of
@@ -184,21 +237,47 @@ pub struct Base2 {
 impl Base2 {
     /// Arithmetic modulo `n`, a divisor of `2^k +- 1` (the form).
     pub(crate) fn new(n: &Integer, form: Base2Form) -> Self {
+        Self::with_product(n, form, Product::of(form))
+    }
+
+    /// [`Base2::new`] with the given way to multiply (tests: every [`Product`] against the
+    /// others; [`Product::Fold`] for any form, the others for their forms only).
+    pub(crate) fn with_product(n: &Integer, form: Base2Form, product: Product) -> Self {
         debug_assert!(form.divides(n));
         let k = form.k as usize;
         let limbs = (k + usize::from(form.plus)).div_ceil(64);
+        let wrap = match product {
+            Product::Fold => 0,
+            Product::Wrap => {
+                assert!(mpn::ENABLED && !form.plus && k.is_multiple_of(64));
+                // mpn_mulmod_bnm1's and mpn_sqrmod_bnm1's scratch space.
+                2 * limbs + 4
+            }
+            Product::Fft { mul, sqr } => {
+                let rn = k / 64;
+                assert!(
+                    mpn::ENABLED
+                        && form.plus
+                        && k.is_multiple_of(64)
+                        && rn.is_multiple_of(1 << mul.max(sqr))
+                );
+                0
+            }
+        };
         Self {
             n: n.clone(),
             k,
             plus: form.plus,
             limbs,
             mul_limbs: k.div_ceil(64),
+            product,
             zero: vec![0; limbs],
             scratch: RefCell::new(Scratch {
                 // Room for a product and a few more (zero) limbs to read.
                 product: vec![0; 2 * limbs + 2],
                 chunk: vec![0; limbs],
                 wide: vec![0; 2 * limbs],
+                wrap: vec![0; wrap],
             }),
         }
     }
@@ -269,7 +348,7 @@ impl Base2 {
 
     /// `p = a*b` (`a^2` if `b` is `None`) on `mul_limbs` limbs, `p` of `2*mul_limbs` limbs.
     #[inline(always)]
-    fn product(&self, p: &mut [u64], a: &[u64], b: Option<&[u64]>) {
+    fn full_product(&self, p: &mut [u64], a: &[u64], b: Option<&[u64]>) {
         let ml = self.mul_limbs;
         let a = &a[..ml];
         if mpn::ENABLED {
@@ -363,6 +442,16 @@ impl Base2 {
     /// `r = a*b` (`a^2` if `b` is `None`).
     #[inline(always)]
     fn mul_or_sqr(&self, r: &mut [u64], a: &[u64], b: Option<&[u64]>) {
+        if self.product == Product::Wrap {
+            // M = 2^(64*limbs) - 1: the residues in [0, M] are any values on `limbs` limbs, and
+            // the result too (M for 0 but for a factor 0).
+            let s = &mut self.scratch.borrow_mut().wrap;
+            match b {
+                Some(b) => mpn::mulmod_bnm1_n(r, a, b, s),
+                None => mpn::sqrmod_bnm1(r, a, s),
+            }
+            return;
+        }
         let ml = self.mul_limbs;
         if ml < self.limbs {
             // 2^k + 1 with 64 | k: the residue 2^k is -1.
@@ -373,8 +462,13 @@ impl Base2 {
                 return self.sub_to(r, &self.zero, a);
             }
         }
+        if let Product::Fft { mul, sqr } = self.product {
+            // M = 2^(64*ml) + 1, the operands below 2^(64*ml): the result is in [0, 2^k].
+            let k = if b.is_some() { mul } else { sqr };
+            return mpn::mul_fft(r, &a[..ml], b.map(|b| &b[..ml]), k);
+        }
         let p = &mut self.scratch.borrow_mut().product;
-        self.product(&mut p[..2 * ml], a, b);
+        self.full_product(&mut p[..2 * ml], a, b);
         self.fold(r, p);
     }
 
@@ -416,6 +510,8 @@ struct Scratch {
     product: Vec<u64>,
     chunk: Vec<u64>,
     wide: Vec<u64>,
+    /// Scratch space of [`Product::Wrap`].
+    wrap: Vec<u64>,
 }
 
 /// `r += c` (`c` is 0 or 1; the carry out of `r` is lost).
@@ -1019,6 +1115,124 @@ mod tests {
                 a.to_integer(&crate::arith::pow(&a, &a.residue(&x), &e)),
                 expected
             );
+        }
+    }
+
+    /// The wrap-around products ([`Product::Wrap`], [`Product::Fft`]) against the full product
+    /// and fold ([`Product::Fold`]) and against the integers modulo `M` and `n`, on the extremes
+    /// of the representation and random values, around the thresholds of [`Product::of`] and
+    /// for FFT sizes below them (forced).
+    #[test]
+    fn wrap_around_products() {
+        if !mpn::ENABLED {
+            return;
+        }
+        let form = |k: usize, plus: bool| Base2Form { k: k as u32, plus };
+        // The thresholds.
+        let wrap = BASE2_WRAP_LIMBS;
+        assert_eq!(Product::of(form(64 * (wrap - 1), false)), Product::Fold);
+        assert_eq!(Product::of(form(64 * wrap, false)), Product::Wrap);
+        assert_eq!(Product::of(form(64 * wrap + 1, false)), Product::Fold);
+        assert_eq!(Product::of(form(64 * wrap, true)), Product::Fold);
+        let fft = BASE2_FFT_LIMBS;
+        assert_eq!(Product::of(form(64 * (fft - 16), true)), Product::Fold);
+        assert_eq!(Product::of(form(64 * fft + 1, true)), Product::Fold);
+        assert!(matches!(
+            Product::of(form(64 * fft, true)),
+            Product::Fft { .. }
+        ));
+        assert_eq!(Product::of(form(64 * fft, false)), Product::Wrap);
+        let mut cases = Vec::new();
+        for rn in [
+            wrap,
+            wrap + 1,
+            14,
+            15,
+            16,
+            17,
+            18,
+            20,
+            24,
+            32,
+            33,
+            64,
+            96,
+            256,
+        ] {
+            cases.push((form(64 * rn, false), Product::Wrap));
+        }
+        for (rn, k) in [(16, 4), (32, 5), (64, 4), (64, 6), (256, 6)] {
+            cases.push((form(64 * rn, true), Product::Fft { mul: k, sqr: k }));
+        }
+        for rn in [fft, 512] {
+            let form = form(64 * rn, true);
+            cases.push((form, Product::of(form)));
+        }
+        let mut rand = RandState::new();
+        for (form, product) in cases {
+            let m = form.value();
+            // M itself, and its cofactor without its factors below 2^16 (up to 4096 bits).
+            let large = form.k > 64 * 64;
+            let cofactor = if large {
+                m.clone()
+            } else {
+                cofactor(form.signed())
+            };
+            for n in [&m, &cofactor] {
+                let fold = Base2::with_product(n, form, Product::Fold);
+                let fast = Base2::with_product(n, form, product);
+                assert_eq!(fast.product, product);
+                let mut values = edge_values(form, &mut rand);
+                if large {
+                    values.truncate(8);
+                    values.extend((0..3).map(|_| Integer::from(m.random_below_ref(&mut rand))));
+                }
+                let elem = |x: &Integer| {
+                    let mut e = fold.zero();
+                    x.write_digits(&mut e, Order::Lsf);
+                    e
+                };
+                let value = |r: &[u64]| {
+                    assert_in_range(r, &m, form);
+                    Integer::from_digits(r, Order::Lsf) % &m
+                };
+                let (mut r, mut t) = (fold.zero(), fold.zero());
+                for x in &values {
+                    let ex = elem(x);
+                    fast.sqr(&mut r, &ex);
+                    fold.sqr(&mut t, &ex);
+                    let square = Integer::from(x * x);
+                    assert_eq!(value(&r), value(&t), "{x}^2 ({form})");
+                    assert_eq!(value(&r), Integer::from(&square % &m), "{x}^2 ({form})");
+                    assert_eq!(fast.to_integer(&r), square % n);
+                    for y in &values {
+                        let ey = elem(y);
+                        fast.mul(&mut r, &ex, &ey);
+                        fold.mul(&mut t, &ex, &ey);
+                        let product = Integer::from(x * y);
+                        assert_eq!(value(&r), value(&t), "{x}*{y} ({form})");
+                        assert_eq!(value(&r), Integer::from(&product % &m), "{x}*{y} ({form})");
+                        assert_eq!(fast.to_integer(&r), product % n);
+                    }
+                }
+                // A chain of products (as the ladder's), against the integers modulo n.
+                let x = Integer::from(n.random_below_ref(&mut rand));
+                let (mut e, mut v) = (fast.residue(&x), x);
+                for i in 0..50u32 {
+                    if i % 2 == 0 {
+                        fast.sqr(&mut r, &e);
+                        v.square_mut();
+                    } else {
+                        let y = fast.residue(&Integer::from(i + 7));
+                        fast.mul(&mut r, &e, &y);
+                        v *= i + 7;
+                    }
+                    v %= n;
+                    std::mem::swap(&mut e, &mut r);
+                    assert_in_range(&e, &m, form);
+                }
+                assert_eq!(fast.to_integer(&e), v, "{form}");
+            }
         }
     }
 

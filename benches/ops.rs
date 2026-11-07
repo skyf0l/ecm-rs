@@ -4,7 +4,8 @@
 //! (building curves, stage 2 plans, stage 1 multipliers, ...) is not measured.
 //!
 //! - `arith`: batches of modular multiplications and squarings, per number of limbs (and with
-//!   the special reduction modulo `2^1024 + 1`).
+//!   the special reduction modulo `2^1024 + 1`, and modulo `2^k +- 1` from 4096 to 28672 bits:
+//!   `arith_base2`).
 //! - `curve`: stage 1 and stage 2 of one curve, and one complete curve at the bounds of the
 //!   `success_rate` example (instructions per curve; the CI report multiplies them by the
 //!   expected number of curves).
@@ -88,7 +89,42 @@ fn arith_sqr(batch: ArithBatch) -> Integer {
     black_box(black_box(&batch).run(ARITH_OPS, true))
 }
 
-library_benchmark_group!(name = arith, benchmarks = [arith_mul, arith_sqr]);
+/// Operations per `arith_base2` benchmark: fewer than [`ARITH_OPS`], each costs up to 0.4M
+/// instructions.
+const BASE2_OPS: usize = 1000;
+
+/// Modular arithmetic modulo `2^k + 1` (`k > 0`) or `2^-k - 1` (`k < 0`) itself, with the
+/// special reduction, and whether to square.
+fn base2_input(k: i64, square: bool) -> (ArithBatch, bool) {
+    let power = Integer::from(1) << k.unsigned_abs() as u32;
+    let n = if k > 0 { power + 1u32 } else { power - 1u32 };
+    (
+        ArithBatch::new(&n, &residues(&n, ARITH_VALUES, SEED)),
+        square,
+    )
+}
+
+// The products modulo 2^k +- 1 above 1024 bits: GMP's wrap-around products modulo 2^4096 - 1
+// and 2^16384 - 1, the fold of a full product modulo 2^16384 + 1 (below the FFT threshold) and
+// GMP's FFT modulo 2^28672 + 1 (at the threshold).
+#[library_benchmark]
+#[bench::minus_4096_mul(base2_input(-4096, false))]
+#[bench::minus_4096_sqr(base2_input(-4096, true))]
+#[bench::minus_16384_mul(base2_input(-16384, false))]
+#[bench::minus_16384_sqr(base2_input(-16384, true))]
+#[bench::plus_16384_mul(base2_input(16384, false))]
+#[bench::plus_16384_sqr(base2_input(16384, true))]
+#[bench::plus_28672_mul(base2_input(28672, false))]
+#[bench::plus_28672_sqr(base2_input(28672, true))]
+fn arith_base2(input: (ArithBatch, bool)) -> Integer {
+    let (batch, square) = black_box(&input);
+    black_box(batch.run(BASE2_OPS, *square))
+}
+
+library_benchmark_group!(
+    name = arith,
+    benchmarks = [arith_mul, arith_sqr, arith_base2]
+);
 
 /// Starting point of the curve of `param` given by `SIGMA` on a `bits`-bit modulus, and the
 /// stage 1 multiplier for `b1`.
