@@ -159,6 +159,9 @@ fn factorizer(cli: &Cli) -> Result<Factorizer, String> {
     } else if cli.nobase2 {
         f = f.base2(Base2Mode::Off);
     }
+    if cli.nosiqs {
+        f = f.siqs(false);
+    }
     if let Some(timeout) = cli.timeout {
         f = f.timeout(timeout);
     }
@@ -637,5 +640,9 @@ fn print_config() {
         "Threads (default): {} (available parallelism; --threads N): curves of the levels and \
          P-1 run in parallel, same results",
         available_threads()
+    );
+    println!(
+        "SIQS: composites of 40 to 100 digits, after the curves of the levels up to 4/13 of \
+         their digits (block Lanczos, single large prime; --nosiqs disables it)"
     );
 }
