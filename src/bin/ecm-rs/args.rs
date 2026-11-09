@@ -28,7 +28,9 @@ Factors integers with Lenstra's elliptic curve method (ECM), a port of GMP-ECM's
 
 By default, each number is factored completely: trial division, then P-1 and curves with the \
 bounds for factors of 10, 15, 20, ... digits in turn, so that the factors are found from the \
-smallest to the largest. With --b1, curves with fixed bounds are run instead, as GMP-ECM does.
+smallest to the largest. The composites of 40 to 100 digits go to the self-initializing \
+quadratic sieve (SIQS) once the curves searched their factors up to 4/13 of their digits \
+(--nosiqs: curves only). With --b1, curves with fixed bounds are run instead, as GMP-ECM does.
 
 The numbers are the arguments, or the lines of the standard input (with no argument, or \"-\"). \
 They can be expressions: integers, + - * / (exact division), ^ (right associative), \
@@ -184,6 +186,11 @@ pub struct Cli {
     /// Never computes modulo 2^k+-1 (GMP-ECM's -nobase2).
     #[arg(long)]
     pub nobase2: bool,
+
+    /// Never runs the quadratic sieve (SIQS): the composites of 40 to 100 digits are searched
+    /// by curves only, until a factor is found.
+    #[arg(long, conflicts_with_all = ["b1", "pm1", "pp1"])]
+    pub nosiqs: bool,
 
     /// Only tests whether each number is prime: prints "N: prime" or "N: composite".
     #[arg(long, conflicts_with_all = ["one", "pm1", "pp1", "b1"])]

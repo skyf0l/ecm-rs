@@ -560,3 +560,34 @@ fn base2() {
         "{err}"
     );
 }
+
+#[test]
+fn siqs() {
+    // A 45-digit product of two primes of 22 and 23 digits: SIQS after the first level, the
+    // same output with any number of threads.
+    let n = "634702613405249138026257788964956391886599881";
+    let (code, out, err) = run(&["-v", n]);
+    assert_eq!(code, 14);
+    let factors: Vec<&str> = out
+        .trim_end()
+        .split(" = ")
+        .nth(1)
+        .unwrap()
+        .split(" * ")
+        .collect();
+    assert_eq!(factors.len(), 2, "{out}");
+    assert!(err.contains("SIQS on C45: multiplier"), "{err}");
+    assert!(err.contains("SIQS linear algebra: "), "{err}");
+    assert!(err.contains("Factor found by SIQS: "), "{err}");
+    for threads in ["1", "3"] {
+        let (code2, out2, err2) = run(&["-v", "-t", threads, n]);
+        assert_eq!((code2, &out2), (code, &out));
+        assert_eq!(without_times(&err2), without_times(&err));
+    }
+    // Curves only.
+    let (code, out2, err) = run(&["-v", "--nosiqs", "-t", "4", n]);
+    assert_eq!((code, &out2), (14, &out));
+    assert!(!err.contains("SIQS on"), "{err}");
+    let (code, _, err) = run(&["--nosiqs", "--b1", "11000", n]);
+    assert_eq!(code, 64, "{err}");
+}

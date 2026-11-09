@@ -24,6 +24,9 @@ enum Owned {
     Curve(Integer, Param, Integer, usize),
     Factor(Integer, Integer, Method),
     Prime(Integer, usize),
+    Siqs(Integer, u32, usize, usize, u64, usize),
+    SiqsRelations(Integer, usize, usize, usize, usize),
+    SiqsMatrix(Integer, usize, usize, usize),
     Other,
 }
 
@@ -56,6 +59,37 @@ fn owned(event: &Event<'_>) -> Owned {
             n, factor, method, ..
         } => Owned::Factor(n.clone(), factor.clone(), method),
         Event::Prime { p, exponent, .. } => Owned::Prime(p.clone(), exponent),
+        Event::Siqs {
+            n,
+            multiplier,
+            factor_base,
+            interval,
+            large_prime_bound,
+            needed,
+            ..
+        } => Owned::Siqs(
+            n.clone(),
+            multiplier,
+            factor_base,
+            interval,
+            large_prime_bound,
+            needed,
+        ),
+        Event::SiqsRelations {
+            n,
+            full,
+            combined,
+            needed,
+            polynomials,
+            ..
+        } => Owned::SiqsRelations(n.clone(), full, combined, needed, polynomials),
+        Event::SiqsMatrix {
+            n,
+            rows,
+            columns,
+            dependencies,
+            ..
+        } => Owned::SiqsMatrix(n.clone(), rows, columns, dependencies),
         _ => Owned::Other,
     }
 }
@@ -135,7 +169,9 @@ fn same_results_and_events() {
     let mut many_curves = 0;
     for (i, n) in numbers(12).iter().enumerate() {
         for seed in 0..3 {
-            let factorizer = Factorizer::new().seed(seed + 10 * i as u64);
+            // Curves only: SIQS would factor the larger numbers after a few curves (see
+            // `siqs_same_results_and_events`).
+            let factorizer = Factorizer::new().seed(seed + 10 * i as u64).siqs(false);
             let (single, events) = record(factorizer.clone(), n, |_| false);
             let single = single.into_result().unwrap();
             assert_eq!(product(&single), *n);
@@ -253,14 +289,15 @@ fn hard() -> Integer {
 fn callback_interruptions() {
     // Interrupted at a curve (with the curves after it running): no deadlock, no event after,
     // the events of one thread up to there.
+    // Curves only (SIQS would factor it after a few curves).
     let n = hard() * 12u32;
-    let (_, all) = record(Factorizer::new(), &n, |e| {
+    let (_, all) = record(Factorizer::new().siqs(false), &n, |e| {
         matches!(e, Owned::Curve(_, _, _, 60))
     });
     for threads in THREADS {
         for stop_at in [1, 2, 7, 30, 60] {
             let (result, events, latency) = record_timed(
-                Factorizer::new().threads(threads),
+                Factorizer::new().siqs(false).threads(threads),
                 &n,
                 |e| matches!(e, Owned::Curve(_, _, _, i) if *i == stop_at),
             );
@@ -341,5 +378,106 @@ fn interrupt_flag_and_timeout() {
         assert!(elapsed < Duration::from_millis(500), "{elapsed:?}");
         assert_eq!(result.error, Some(Error::Interrupted));
         assert_eq!(result.primes, HashMap::from([(Integer::from(7), 1)]));
+    }
+}
+
+/// A product of two random primes of `digits / 2` digits (and the rest), of `digits` digits.
+fn balanced(digits: u32, seed: u32) -> Integer {
+    let mut rand = RandState::new();
+    rand.seed(&Integer::from(seed));
+    loop {
+        let low = Integer::from(10).pow(digits / 2 - 1);
+        let p = (Integer::from(low.random_below_ref(&mut rand)) * 9u32 + &low).next_prime();
+        let low = Integer::from(10).pow(digits - digits / 2 - 1);
+        let q = (Integer::from(low.random_below_ref(&mut rand)) * 9u32 + &low).next_prime();
+        let n = p * q;
+        if n.to_string().len() == digits as usize {
+            return n;
+        }
+    }
+}
+
+#[test]
+fn siqs_same_results_and_events() {
+    // The relations, the matrix and the factor of SIQS do not depend on the threads.
+    for (digits, seed) in [(40, 1), (46, 2), (50, 3)] {
+        let n = balanced(digits, seed);
+        let factorizer = Factorizer::new().seed(u64::from(seed));
+        let (single, events) = record(factorizer.clone(), &n, |_| false);
+        let single = single.into_result().unwrap();
+        assert_eq!(product(&single), n);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Owned::Factor(_, _, Method::Siqs))),
+            "{n}"
+        );
+        for threads in THREADS {
+            let (result, parallel) = record(factorizer.clone().threads(threads), &n, |_| false);
+            assert_eq!(result.into_result().unwrap(), single, "{n} {threads}");
+            assert_eq!(parallel, events, "{n} threads {threads}");
+        }
+    }
+}
+
+#[test]
+fn siqs_interruptions() {
+    // 70 digits: SIQS runs for seconds.
+    let n = balanced(70, 7);
+    let (_, all) = record(Factorizer::new(), &n, |e| {
+        matches!(e, Owned::SiqsRelations(..))
+    });
+    for threads in [1, 2, 4] {
+        // By the callback, at the first report of relations: prompt, no event after, the
+        // events of one thread up to there.
+        let (result, events, latency) = record_timed(Factorizer::new().threads(threads), &n, |e| {
+            matches!(e, Owned::SiqsRelations(..))
+        });
+        let latency = latency.unwrap();
+        assert!(
+            latency < Duration::from_millis(300),
+            "{threads}: {latency:?}"
+        );
+        assert_eq!(result.error, Some(Error::Interrupted));
+        assert_eq!(result.unfactored, [(n.clone(), 1)]);
+        assert_eq!(events, all);
+
+        // By the flag, during the sieve.
+        let flag = Arc::new(AtomicBool::new(false));
+        let setter = {
+            let flag = Arc::clone(&flag);
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(1500));
+                flag.store(true, Ordering::Relaxed);
+                Instant::now()
+            })
+        };
+        let result = Factorizer::new()
+            .threads(threads)
+            .interrupt_flag(flag)
+            .factor_partial(&n);
+        let latency = setter.join().unwrap().elapsed();
+        assert!(
+            latency < Duration::from_millis(300),
+            "{threads}: {latency:?}"
+        );
+        assert_eq!(result.error, Some(Error::Interrupted));
+        assert_eq!(result.unfactored, [(n.clone(), 1)]);
+
+        // By the timeout, with a small factor found before.
+        let m = Integer::from(&n * 101u32);
+        let start = Instant::now();
+        let result = Factorizer::new()
+            .threads(threads)
+            .timeout(Duration::from_millis(1200))
+            .factor_partial(&m);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "{threads}: {elapsed:?}"
+        );
+        assert_eq!(result.error, Some(Error::Interrupted));
+        assert_eq!(result.primes, HashMap::from([(Integer::from(101), 1)]));
+        assert_eq!(result.unfactored, [(n.clone(), 1)]);
     }
 }

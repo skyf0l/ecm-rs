@@ -10,10 +10,10 @@ use std::{collections::HashMap, fmt, ops::ControlFlow, time::Duration};
 ///
 /// Order of the events of [`crate::Factorizer::factor`]: [`Event::TrialDivision`] first, with
 /// the [`Event::Prime`] events of its factors, then for each composite part, the searches
-/// ([`Event::Pm1`] or [`Event::Pp1`], [`Event::Level`] followed by its [`Event::Curve`] events),
-/// until a
-/// [`Event::Factor`] splits it, followed by the [`Event::Prime`] (and [`Event::Factor`] for a
-/// perfect power) events of the parts. The [`Event::Prime`] events together are the complete
+/// ([`Event::Pm1`] or [`Event::Pp1`], [`Event::Level`] followed by its [`Event::Curve`] events,
+/// then for the parts in the range of SIQS [`Event::Siqs`], [`Event::SiqsRelations`] and
+/// [`Event::SiqsMatrix`]), until a [`Event::Factor`] splits it, followed by the
+/// [`Event::Prime`] (and [`Event::Factor`] for a perfect power) events of the parts. The [`Event::Prime`] events together are the complete
 /// factorization: the product of `p^exponent` over them is the number.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
@@ -102,6 +102,55 @@ pub enum Event<'a> {
         /// Duration of stage 2 (zero if it did not run).
         stage2: Duration,
     },
+    /// The self-initializing quadratic sieve (SIQS, see [`crate::Factorizer::siqs`]) starts on
+    /// `n`, after the curves of the levels up to about 4/13 of its digits.
+    #[non_exhaustive]
+    Siqs {
+        /// The composite number searched.
+        n: &'a Integer,
+        /// Knuth-Schroeppel multiplier `k`: the sieve works on `k n`.
+        multiplier: u32,
+        /// Number of primes in the factor base.
+        factor_base: usize,
+        /// Length of the sieve interval of each polynomial.
+        interval: usize,
+        /// Largest prime allowed besides the factor base in a partial relation.
+        large_prime_bound: u64,
+        /// Relations needed (the columns of the matrix, and a margin).
+        needed: usize,
+    },
+    /// Relations collected by SIQS on `n` so far: reported each time about 1% more are
+    /// found, and when there are enough.
+    #[non_exhaustive]
+    SiqsRelations {
+        /// The composite number searched.
+        n: &'a Integer,
+        /// Relations with all their factors in the factor base.
+        full: usize,
+        /// Relations from pairs of partial relations with the same large prime.
+        combined: usize,
+        /// Relations needed (`full + combined` must reach it).
+        needed: usize,
+        /// Polynomials sieved.
+        polynomials: usize,
+        /// Time spent sieving `n` so far.
+        elapsed: Duration,
+    },
+    /// The linear algebra of SIQS on `n` ran: followed by an [`Event::Factor`] if a dependency
+    /// split `n`, or by more [`Event::SiqsRelations`] otherwise.
+    #[non_exhaustive]
+    SiqsMatrix {
+        /// The composite number searched.
+        n: &'a Integer,
+        /// Rows of the matrix, once its singletons are removed.
+        rows: usize,
+        /// Columns (relations) of the matrix, once its singletons are removed.
+        columns: usize,
+        /// Dependencies found (up to 64).
+        dependencies: usize,
+        /// Duration of the linear algebra and the square roots.
+        duration: Duration,
+    },
     /// `n` was split: `factor` is a proper factor of `n` (maybe composite).
     #[non_exhaustive]
     Factor {
@@ -145,6 +194,9 @@ pub enum Method {
     EcmStage1,
     /// Stage 2 of a curve.
     EcmStage2,
+    /// The self-initializing quadratic sieve: a dependency between its relations (or a prime
+    /// of its factor base dividing the number).
+    Siqs,
 }
 
 impl fmt::Display for Method {
@@ -159,6 +211,7 @@ impl fmt::Display for Method {
             Self::EcmSetup => "ECM curve setup",
             Self::EcmStage1 => "ECM stage 1",
             Self::EcmStage2 => "ECM stage 2",
+            Self::Siqs => "SIQS",
         })
     }
 }
