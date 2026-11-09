@@ -625,6 +625,15 @@ fn print_config() {
         config::BASE2_MIN_EXPONENT,
         config::BASE2_THRESHOLD
     );
+    if config::MPN_ENABLED {
+        println!(
+            "Special division products: modulo 2^k-1 by GMP's wrap-around product for k a \
+             multiple of 64 from {} bits, modulo 2^k+1 by GMP's FFT for k a multiple of 64 from \
+             {} bits, else a full product and a fold",
+            64 * config::BASE2_WRAP_LIMBS,
+            64 * config::BASE2_FFT_LIMBS
+        );
+    }
     println!(
         "Default parametrization: {} (GMP-ECM -param)",
         Param::default()

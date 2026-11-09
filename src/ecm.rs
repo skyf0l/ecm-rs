@@ -1756,6 +1756,36 @@ mod tests {
         }
     }
 
+    /// Stage 1 with the wrap-around products modulo `2^k +- 1` (`k` a multiple of 64, see
+    /// [`crate::base2::Product`]) gives the point of the generic arithmetic (`MontLarge`), on
+    /// the default curves and the Edwards curves.
+    #[test]
+    fn base2_wrap_around_stage1_matches_generic() {
+        use crate::config::{BASE2_FFT_LIMBS, BASE2_WRAP_LIMBS};
+        let fft = 64 * BASE2_FFT_LIMBS as i64;
+        let wrap = 64 * BASE2_WRAP_LIMBS as i64;
+        for (k, b1) in [
+            (-wrap, 3000),
+            (-1024, 3000),
+            (-1152, 3000),
+            (-2048, 1000),
+            (-4096, 200),
+            (fft, 50),
+        ] {
+            let (n, form) = crate::base2::cofactor_of(k);
+            let kk = stage1_multiplier(b1);
+            for param in [Param::Batch2, Param::Edwards12] {
+                let p = curve(&n, param, &Integer::from(12345)).unwrap();
+                let q = stage1_until(&p, &kk, Some(form), Stop::NEVER);
+                assert_eq!(
+                    q,
+                    stage1_until(&p, &kk, None, Stop::NEVER),
+                    "{form} {param:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn base2_finds_the_same_factors() {
         // Known factors: 2^67 - 1 = 193707721 * 761838257287, 2^101 - 1 = 7432339208719 *
