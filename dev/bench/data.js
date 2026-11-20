@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795198436986,
+  "lastUpdate": 1795198438057,
   "repoUrl": "https://github.com/skyf0l/ecm-rs",
   "entries": {
     "Instruction counts": [
@@ -8617,6 +8617,48 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/skyf0l/ecm-rs/commit/f81e2811878c234bffd0b047e008b31727c3fcc4"
         },
         "date": 1795163446155,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "expected curves, 15-digit factor (B1=2000, B2=147396)",
+            "value": 27.247956403269754,
+            "unit": "curves",
+            "extra": "found 367/10000 curves (stage 1: 40, stage 2: 327, setup: 0)\n95% CI: 25..30 curves\nGMP-ECM model: 34 curves"
+          },
+          {
+            "name": "expected curves, 20-digit factor (B1=11000, B2=1873422)",
+            "value": 73.52941176470588,
+            "unit": "curves",
+            "extra": "found 136/10000 curves (stage 1: 12, stage 2: 124, setup: 0)\n95% CI: 62..87 curves\nGMP-ECM model: 86 curves"
+          },
+          {
+            "name": "expected curves, 25-digit factor (B1=50000, B2=12746592)",
+            "value": 238.0952380952381,
+            "unit": "curves",
+            "extra": "found 21/5000 curves (stage 1: 2, stage 2: 19, setup: 0)\n95% CI: 156..364 curves\nGMP-ECM model: 221 curves"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "committer": {
+            "email": "29139614+renovate[bot]@users.noreply.github.com",
+            "name": "renovate[bot]",
+            "username": "renovate[bot]"
+          },
+          "distinct": true,
+          "id": "96b64d579bd0ec48a12307d5f8eeccea0c63235c",
+          "message": "chore(deps): update rust crate ctrlc to v3.5.3",
+          "timestamp": "2026-11-20T18:09:15Z",
+          "tree_id": "2ac2445ab40104ce56ec3faa52cc063d7d7a45fe",
+          "url": "https://github.com/skyf0l/ecm-rs/commit/96b64d579bd0ec48a12307d5f8eeccea0c63235c"
+        },
+        "date": 1795198438045,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
