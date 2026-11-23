@@ -5,7 +5,7 @@
 [![MSRV](https://img.shields.io/crates/msrv/ecm)](https://crates.io/crates/ecm)
 [![License](https://img.shields.io/crates/l/ecm)](#license)
 
-Fast integer factorization with Lenstra's elliptic curve method (ECM), in Rust, following [GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm) and built on [rug](https://crates.io/crates/rug) (GMP) for arbitrary-precision integers.
+Fast integer factorization with Lenstra's elliptic curve method (ECM), in Rust, following [GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm) and built on [rug](https://crates.io/crates/rug) (GMP) for arbitrary-precision integers, with a self-initializing quadratic sieve (SIQS) for the composites of 40 to 100 digits without small factors.
 
 ## Usage
 
@@ -95,6 +95,10 @@ Found prime factor of 20 digits: 13507140964289979319
 Prime cofactor 1159282937712710938601499347662537052411 has 40 digits
 15658598057181786459081452046251445462002559800474409088109 = 13507140964289979319 * 1159282937712710938601499347662537052411
 ```
+
+The composites of 40 to 100 digits go to the quadratic sieve once the curves searched their
+factors up to 4/13 of their digits (`--nosiqs`: curves only); `-v` prints its relations and its
+linear algebra, the progress bar counts its relations.
 
 The curves run on all the available threads by default (`-t N` to choose): the output is the
 same with any number of threads (but the times of `-v`).
@@ -187,6 +191,21 @@ The implementation started as a translation of sympy's, and now uses the techniq
   of the next level alongside them, in the order of a search on one thread, whose results they
   give: the factor found is the one of the first curve (or P-1 run) in this order that finds
   one, once all the ones before it ran. The first level runs on the calling thread.
+- Self-initializing quadratic sieve (SIQS), for the composites of 40 to 100 digits: the curves
+  find a factor in a time depending on its size, the sieve in a time depending on the size of
+  the number, so `ecm` runs the levels of curves up to 4/13 of the digits of a composite
+  (YAFU's default pretest ratio: the levels of 10 and 15 digits for 60 digits, 20 for 80, 30
+  for 100), then SIQS. Knuth-Schroeppel multiplier, polynomials `(A x + B)^2 - kn` with
+  self-initialization (Gray code over the `B` values, up to 2048 per `A`), sieve by blocks of
+  32 KiB with the small prime variation and a bucket sieve for the primes above the block
+  size, trial division of the candidates by 16 primes at a time (AVX2 when available), single
+  large prime variation, block Lanczos (Montgomery's, dense Gaussian elimination for small
+  matrices) and the square roots of all the dependencies (its parts split the cofactors too).
+  Designed after Contini's thesis and msieve's and YAFU's descriptions, implemented from
+  scratch. `Factorizer::siqs(false)` and `--nosiqs` turn it off. On several threads, the
+  batches of polynomials (one `A` each, drawn from the seed) run in parallel and are merged in
+  the order of the sequence until enough relations: the relations, the factors and the events
+  are the same as on one thread.
 - `Factorizer` has all the options (seed, fixed bounds, curves, `sigma`, parametrization,
   P-1 or P+1 only, stage 2 memory, special division, threads), and reports events (levels,
   curves with their `sigma` and stage durations, P-1 and P+1 runs, factors and primes) to a
@@ -241,6 +260,23 @@ threads; the second hardware thread of a core adds little (the arithmetic satura
 | curves/s, `B1` = 11000     | 155    | 302    | 581    | 758    | 818    |
 | curves/s, `B1` = 50000     | 29.8   | 58.9   | 106    | 126    | 134    |
 | curves/s, `B1` = 250000    | 6.1    | 12.0   | 22.9   | 26.1   | 28.8   |
+
+Balanced semiprimes (two primes of half the size, no small factor: the worst case for the
+curves), same machine, time to factor completely with `ecm-rs` (median of 3 runs on a loaded
+machine, 1 thread pinned to a core or 4 threads to 4 cores), with SIQS (the default: the curves
+of the first levels, then SIQS) and with the curves only (`--nosiqs`, 1 run: the time is
+random, the expected times of the 35 and 40-digit factors are from the rows above).
+
+| Digits | SIQS, 1 thread | SIQS, 4 threads | Curves only, 1 thread | Curves only, 4 threads |
+| ------ | -------------- | --------------- | --------------------- | ---------------------- |
+| 50     | 0.21s          | 0.11s           | 3.0s                  |                        |
+| 60     | 2.6s           | 0.75s           | 43s                   | 9.8s                   |
+| 70     | 28s            | 12s             | ~15 min (expected)    |                        |
+| 80     | 205s (to 300s) | 59s             | hours (expected)      |                        |
+| 90     |                | 10 min          |                       |                        |
+
+Each 10 more digits multiply the time of SIQS by about 10 (single large prime variation only):
+a 100-digit number takes about 1.5 hours on 4 threads, several on one.
 
 ## Credits
 

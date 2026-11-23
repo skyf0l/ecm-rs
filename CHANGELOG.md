@@ -9,6 +9,31 @@
   curve with signed sliding windows, stage 2 on the equivalent Montgomery curve. About 15% less
   expected time to find a 15 to 25-digit factor than the default curves (7 to 9% fewer curves,
   13% fewer instructions in stage 1). Opt-in: the default stays GMP-ECM's parametrization 2.
+- The self-initializing quadratic sieve (SIQS): `ecm` and `Factorizer::factor` factor the
+  composites of 40 to 100 digits with it once the curves searched their factors up to 4/13 of
+  their digits (YAFU's pretest ratio). Knuth-Schroeppel multiplier, self-initialization of the
+  polynomials, block and bucket sieve with the small prime variation, single large prime
+  variation, block Lanczos and square roots. A balanced 60-digit semiprime is factored in
+  about 2.6 s on one thread (curves only: 43 s for a lucky one), 80 digits in about 3.5 minutes (1 minute on 4 threads)
+  (hours with the curves).
+- `Factorizer::siqs` (default `true`) and `ecm-rs --nosiqs` turn it off.
+- `Event::Siqs` (the sieve starts, with its multiplier, factor base and relations needed),
+  `Event::SiqsRelations` (relations collected, about every 1%), `Event::SiqsMatrix` (the linear
+  algebra) and `Method::Siqs`: `Event` and `Method` are `#[non_exhaustive]`, a callback with
+  a `_` arm is unaffected.
+- On several threads (`Factorizer::threads`), the polynomials of SIQS are sieved in parallel,
+  by batches merged in a fixed order: the same relations, factors and events (but their
+  durations) as on one thread.
+- `ecm-rs`: the progress bar counts the relations of SIQS; `-v` prints its setup, its
+  progress by tenths (`-vv`: every event) and its linear algebra; `--printconfig` its range.
+- The `siqs` example (feature `bench`) times SIQS by size, and `e2e::siqs` counts the
+  instructions of a 45-digit factorization.
+
+### Changed
+
+- A composite of 40 to 100 digits without a factor below 4/13 of its digits is now factored by
+  SIQS instead of more levels of curves: the events after the first levels differ (use
+  `Factorizer::siqs(false)` for the previous search).
 
 ### Performance
 

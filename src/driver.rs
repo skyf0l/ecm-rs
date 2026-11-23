@@ -25,6 +25,12 @@
 //! 100-digit numbers, the expected time to find factors of 15 to 30 digits changes by less than
 //! 0.1% (and grows by 0.3-4% with 10 times the `B1` of the curves).
 //!
+//! The composites of [`SIQS_MIN_DIGITS`] to [`SIQS_MAX_DIGITS`] digits go to the
+//! self-initializing quadratic sieve (see [`crate::siqs`]) once the levels reach
+//! [`SIQS_PRETEST`] of their digits: the curves find the factors much smaller than the square
+//! root faster, SIQS finds the others (in a time depending only on the size of the number).
+//! The parts found by SIQS are kept: they split the cofactors at once.
+//!
 //! The searches report [`Event`]s to the handler of the [`crate::Factorizer`], which may
 //! interrupt them.
 
@@ -41,6 +47,7 @@ use crate::{
     pm1::Pm1,
     pp1::Pp1,
     rho::ecm_prob,
+    siqs::{self, Batch, Siqs},
     stage2::Stage2Plan,
     stop::Stop,
 };
@@ -126,6 +133,15 @@ const LEVELS: [Level; 12] = [
         b2: 15_892_628_251_516,
     },
 ];
+
+/// Smallest and largest composites (in decimal digits) factored by SIQS after the curves of the
+/// first levels, when it is on (see [`crate::Factorizer::siqs`]).
+pub(crate) const SIQS_MIN_DIGITS: u32 = 40;
+pub(crate) const SIQS_MAX_DIGITS: u32 = 100;
+
+/// SIQS starts on a composite once the levels of factors up to this fraction of its digits ran
+/// (YAFU's default "pretest ratio").
+pub(crate) const SIQS_PRETEST: f64 = 4.0 / 13.0;
 
 /// Stage 1 bound of P-1 at a level (and of P+1, when it runs alone), relative to the `B1` of the
 /// curves.
@@ -356,6 +372,10 @@ pub(crate) struct Engine<'a, 'r, H> {
     /// at the first level that runs curves in parallel.
     threads: usize,
     pool: Option<Pool<pipeline::Output>>,
+    /// Whether SIQS runs on the composites of its range, and the parts it found (they split
+    /// the cofactors of the numbers it factored).
+    siqs: bool,
+    siqs_parts: Vec<Integer>,
 }
 
 impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
@@ -369,7 +389,7 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
         base2: Base2Mode,
         rand: &'a mut RandState<'r>,
         (handler, stop): (&'a mut H, Stop<'a>),
-        threads: usize,
+        (threads, siqs): (usize, bool),
     ) -> Self {
         Self {
             mode,
@@ -389,6 +409,8 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             plans: HashMap::new(),
             threads,
             pool: None,
+            siqs,
+            siqs_parts: Vec::new(),
         }
     }
 
@@ -565,6 +587,9 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
 
     /// A proper factor of the composite `n`, resuming the search from `progress`.
     fn find(&mut self, n: &Integer, progress: &mut Progress) -> Result<(Integer, Method), Error> {
+        if let Some(part) = self.siqs_split(n) {
+            return Ok((part, Method::Siqs));
+        }
         let base2 = self.base2.form(n).map_err(Error::InvalidOption)?;
         if let Some(form) = base2 {
             self.events.emit(Event::Base2 {
@@ -573,11 +598,18 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             })?;
         }
         match self.mode {
-            Mode::Levels if self.parallel() && self.algorithm == Algorithm::Ecm => {
-                // The first level takes less time than starting threads.
-                match self.find_by_levels(n, progress, base2, 1)? {
+            Mode::Levels if self.algorithm == Algorithm::Ecm => {
+                let until = self.siqs_level(n);
+                if let Some(found) = self.levels(n, progress, base2, until)? {
+                    return Ok(found);
+                }
+                // The levels before SIQS ran.
+                match self.siqs(n)? {
                     Some(found) => Ok(found),
-                    None => self.find_parallel(n, progress, base2, None),
+                    // SIQS does not apply: the next levels.
+                    None => self
+                        .levels(n, progress, base2, usize::MAX)
+                        .map(|found| found.expect("no last level")),
                 }
             }
             Mode::Levels => self
@@ -586,11 +618,138 @@ impl<'a, 'r, H: EventHandler> Engine<'a, 'r, H> {
             Mode::Fixed { b1, b2, .. } if self.algorithm != Algorithm::Ecm => {
                 self.pm_fixed(n, b1, b2, base2)
             }
-            Mode::Fixed { b1, b2, curves } if self.parallel() => {
-                self.find_parallel(n, progress, base2, Some((b1, b2, curves)))
-            }
+            Mode::Fixed { b1, b2, curves } if self.parallel() => self
+                .find_parallel(n, progress, base2, Some((b1, b2, curves)), usize::MAX)
+                .and_then(|found| found.ok_or(Error::ECMFailed)),
             Mode::Fixed { b1, b2, curves } => self.curves(n, (b1, b2), None, curves, &mut 0, base2),
         }
+    }
+
+    /// The curves (and P-1) of the levels on `n` from `progress` up to the level `until`
+    /// (excluded), on the threads from the second level: `None` when it is reached.
+    fn levels(
+        &mut self,
+        n: &Integer,
+        progress: &mut Progress,
+        base2: Option<Base2Form>,
+        until: usize,
+    ) -> Result<Option<(Integer, Method)>, Error> {
+        if !self.parallel() {
+            return self.find_by_levels(n, progress, base2, until);
+        }
+        // The first level takes less time than starting threads.
+        if let Some(found) = self.find_by_levels(n, progress, base2, until.min(1))? {
+            return Ok(Some(found));
+        }
+        if progress.level >= until {
+            return Ok(None);
+        }
+        self.find_parallel(n, progress, base2, None, until)
+    }
+
+    /// The level at which SIQS replaces the curves on `n` (see [`SIQS_PRETEST`]), `usize::MAX`
+    /// if it does not.
+    fn siqs_level(&self, n: &Integer) -> usize {
+        let size = siqs::digits(n);
+        if !self.siqs || !(SIQS_MIN_DIGITS..=SIQS_MAX_DIGITS).contains(&size) {
+            return usize::MAX;
+        }
+        let pretest = f64::from(size) * SIQS_PRETEST;
+        LEVELS
+            .iter()
+            .take_while(|level| f64::from(level.digits) <= pretest)
+            .count()
+            .max(1)
+    }
+
+    /// A proper factor of `n` among the parts found by SIQS (on a multiple of `n`), if any.
+    fn siqs_split(&self, n: &Integer) -> Option<Integer> {
+        self.siqs_parts.iter().find_map(|part| {
+            let g = Integer::from(part.gcd_ref(n));
+            (g != 1 && g != *n).then_some(g)
+        })
+    }
+
+    /// Factors `n` with SIQS (see [`crate::siqs`]): the smallest part found (the others are
+    /// kept for the cofactor), or `None` if SIQS does not apply to `n`.
+    fn siqs(&mut self, n: &Integer) -> Result<Option<(Integer, Method)>, Error> {
+        let seed = u64::from(self.rand.bits(32)) << 32 | u64::from(self.rand.bits(32));
+        let mut siqs = match Siqs::new(n, seed) {
+            Ok(siqs) => siqs,
+            Err(siqs::Setup::Factor(factor)) => return Ok(Some((factor, Method::Siqs))),
+            Err(siqs::Setup::Unsupported) => return Ok(None),
+        };
+        let info = siqs.info();
+        self.events.emit(Event::Siqs {
+            n,
+            multiplier: info.multiplier,
+            factor_base: info.factor_base,
+            interval: info.interval,
+            large_prime_bound: info.large_prime_bound,
+            needed: siqs.progress().2,
+        })?;
+        let start = H::ENABLED.then(Instant::now);
+        let mut reported = 0;
+        loop {
+            if self.parallel() {
+                self.siqs_parallel(n, &mut siqs, start, &mut reported)?;
+            } else {
+                while !siqs.enough() {
+                    self.events.check()?;
+                    let a = siqs.next_a();
+                    let Some(batch) = siqs::sieve_a(siqs.shared(), &a, self.events.stop) else {
+                        self.events.interrupted = true;
+                        return Err(Error::Interrupted);
+                    };
+                    self.siqs_merge(n, &mut siqs, batch, start, &mut reported)?;
+                }
+            }
+            let begin = H::ENABLED.then(Instant::now);
+            let Ok((parts, (rows, columns, dependencies))) = siqs.finish(self.events.stop) else {
+                self.events.interrupted = true;
+                return Err(Error::Interrupted);
+            };
+            self.events.emit(Event::SiqsMatrix {
+                n,
+                rows,
+                columns,
+                dependencies,
+                duration: since(begin),
+            })?;
+            if let Some(parts) = parts {
+                let smallest = parts[0].clone();
+                self.siqs_parts.extend(parts);
+                return Ok(Some((smallest, Method::Siqs)));
+            }
+            // Only trivial dependencies (rare): more relations.
+            siqs.more();
+        }
+    }
+
+    /// Adds the relations of a batch to `siqs`, reporting them each time about 1% more are
+    /// found (`reported`: the relations last reported), and when there are enough.
+    fn siqs_merge(
+        &mut self,
+        n: &Integer,
+        siqs: &mut Siqs,
+        batch: Batch,
+        start: Option<Instant>,
+        reported: &mut usize,
+    ) -> Result<(), Error> {
+        siqs.merge(batch);
+        let (full, combined, needed, polynomials) = siqs.progress();
+        if full + combined >= *reported + needed.div_ceil(100) || siqs.enough() {
+            *reported = full + combined;
+            self.events.emit(Event::SiqsRelations {
+                n,
+                full,
+                combined,
+                needed,
+                polynomials,
+                elapsed: since(start),
+            })?;
+        }
+        Ok(())
     }
 
     /// Searches `n` level by level, from `progress` on (with the special reduction modulo
@@ -989,7 +1148,7 @@ mod tests {
             Base2Mode::Auto,
             &mut rand,
             (&mut handler, Stop::NEVER),
-            1,
+            (1, true),
         );
         let found = (0..3).find_map(|level| {
             let found = engine.pm_level(&n, level, &mut progress, None).unwrap();

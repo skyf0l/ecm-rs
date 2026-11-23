@@ -6,7 +6,8 @@ random. So these three measures are kept separate:
 | What | Where | Measure | CI |
 |---|---|---|---|
 | Cost: modular multiplication/squaring per limb count, stage 1 / stage 2 of one curve, one complete curve at the `success_rate` bounds, setup (stage 2 plan, stage 1 multiplier, P-1 stage 1, one curve) | `ops.rs` | Instruction counts (Valgrind), deterministic | yes |
-| Driver overhead: complete factorizations of small README numbers, over several seeds | `e2e.rs` | Instruction counts (Valgrind), deterministic | yes |
+| Driver overhead: complete factorizations of small README numbers, over several seeds; the quadratic sieve on a 45-digit semiprime (`e2e::siqs`) | `e2e.rs` | Instruction counts (Valgrind), deterministic | yes |
+| Quadratic sieve by size: balanced semiprimes of 40 to 100 digits, with its statistics (relations, polynomials, matrix) | `examples/siqs.rs` | Wall-clock time | no |
 | Effectiveness: expected curves to find a 15/20/25-digit factor | `examples/success_rate.rs` | Curves tried / factors found, deterministic | yes |
 | Expected cost to find a factor: expected curves x instructions per curve (`ops::curve::one_curve`) | CI report | Derived | yes |
 | Stage 1 / stage 2 of one curve at 256 and 1024 bits, `B1` up to 1M | `walltime.rs` | Wall-clock time (criterion) | no, too noisy on shared runners |
@@ -56,6 +57,21 @@ git checkout -    && cargo bench --features bench --bench ops --bench e2e -- --b
 ```sh
 cargo run --release --features bench --example success_rate -- --sizes 15,20,25 --json out.json
 cargo run --release --features bench --example success_rate -- --compare out.json
+```
+
+## Quadratic sieve
+
+`e2e::siqs::digits_45` counts the instructions of a complete factorization of a 45-digit
+product of two primes: trial division, the first level of curves, then SIQS (sieve, block
+Lanczos or Gaussian elimination, square roots). `examples/siqs.rs` times SIQS alone on one
+thread on balanced semiprimes, and prints its statistics; its parameters can be overridden with
+`SIQS_TUNE=fb,blocks,lp_mult,fudge[,small,q_ratio]` (0 keeps the default) to tune the table of
+`src/siqs/mod.rs`:
+
+```sh
+cargo run --release --features bench --example siqs -- --sizes 50,60,70 --count 3
+SIQS_TUNE=6000,2,0,13 taskset -c 4 target/release/examples/siqs --sizes 60
+target/release/examples/siqs --sizes 80 --numbers   # the numbers, for ecm-rs
 ```
 
 ## Wall-clock time
